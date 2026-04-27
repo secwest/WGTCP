@@ -1,0 +1,15 @@
+# Build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.d
+*.cmd
+.*.cmd
+modules.order
+Module.symvers
+.tmp_versions/
+
+# Tools binary
+tools/wg
+!tools/wg-quick/wg
