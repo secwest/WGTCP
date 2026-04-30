@@ -4,8 +4,8 @@
 > `perf-test/results/v<VERSION>/REPORT.md`.
 
 **Version under test**: `<VERSION>`
-**Image source**: `wireguardtcp-fast-ubuntu24-tls/<VERSION>` (x64),
-                 `wireguardtcp-fast-ubuntu24-arm64-tls/<VERSION>` (arm64)
+**Image source**: `wireguardtcp-ubuntu24-tls/<VERSION>` (x64),
+                 `wireguardtcp-ubuntu24-arm64-tls/<VERSION>` (arm64)
 **Kernel**: `<uname -r>`
 **Module signing-cert fingerprint (SHA256)**: `<...>`
 **Campaign date**: `<YYYY-MM-DD .. YYYY-MM-DD>`

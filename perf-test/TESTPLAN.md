@@ -45,7 +45,7 @@ or refute. Reporting must include success/failure of each.
 | Axis | Values | n |
 |---|---|---|
 | **Workload** | short-transfer, long-transfer, web-mix, ssh-interactive | 4 |
-| **Tunnel** | wireguard-udp (stock), wireguard-tcp-fast | 2 |
+| **Tunnel** | wireguard-udp (stock), wireguard-tcp-base | 2 |
 | **Architecture** | x86_64 (D2s_v5), arm64 (D2ps_v6) | 2 |
 | **Region pair** | LAN (intra-canadacentral, peered VNets), MED (cc↔westus3), HIGH (cc↔australiaeast), MAX (cc↔southafricanorth or qatarcentral, whichever has greater RTT) | 4 |
 | **Loss** (applied at server egress, both directions) | 0%, 0.5%, 1%, 2%, 3%, 5%, 10%, 20% | 8 |
@@ -63,8 +63,8 @@ sequentially on the same pair.
 
 - **VM size**: x64 = `Standard_D2s_v5` (2 vCPU, 8 GB, AccelNet on);
   arm64 = `Standard_D2ps_v6` (2 vCPU, 8 GB, AccelNet on).
-- **Image**: gallery image `wireguardtcp-fast-ubuntu24-tls/<ver>` (x64) or
-  `wireguardtcp-fast-ubuntu24-arm64-tls/<ver>` (arm64). Trusted Launch + SB on.
+- **Image**: gallery image `wireguardtcp-ubuntu24-tls/<ver>` (x64) or
+  `wireguardtcp-ubuntu24-arm64-tls/<ver>` (arm64). Trusted Launch + SB on.
 - **Kernel**: `6.8.12-wgtcp-wgtcp` (custom). UDP path uses the same module
   with `transport=udp`; TCP path uses `transport=tcp`. We are **not** using
   Canonical's stock wireguard; this isolates WG-implementation differences.
@@ -231,7 +231,7 @@ Each cell emits **one JSON file** to `results/<version>/cells/`:
   "axes": {
     "region_pair": "canadacentral-canadacentral",
     "arch": "x86_64",
-    "tunnel": "wireguard-tcp-fast",
+    "tunnel": "wireguard-tcp-base",
     "workload": "long-transfer",
     "loss_pct": 3.0,
     "run_index": 2
