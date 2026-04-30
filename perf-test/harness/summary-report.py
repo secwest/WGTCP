@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""TCP-base vs UDP-tunnel scenario summary.
+"""TCP-base vs UDP-tunnel scenario summary, per workload × per tier.
 
-Each long-transfer cell carries iperf3 TCP + UDP probes through whichever
-tunnel was selected. So the proper transport comparison for the same
-inner-traffic class is:
+Per-workload metrics available (from current harness):
+  long-transfer  : goodput_tcp_mbps, goodput_udp_mbps, retrans_count, cpu_pct_mean
+                   (no RTT; iperf3 doesn't ping during transfer)
+  ssh-interactive: rtt_{min,mean,max,mdev}_ms, observed_loss_pct, cpu_pct_mean
+  short-transfer : ttfb_p50/p95/p99_ms, req_per_sec, cpu_pct_mean
+  web-mix        : req_per_sec  (h2load summary; CPU/latency not parsed yet)
 
-  inner-TCP traffic: tcp_tunnel.goodput_tcp_mbps  vs  udp_tunnel.goodput_tcp_mbps
-  inner-UDP traffic: tcp_tunnel.goodput_udp_mbps  vs  udp_tunnel.goodput_udp_mbps
-
-CPU and RTT are tunnel-level metrics (not iperf-protocol-specific).
-
-Renames tunnel label wireguard-tcp-fast -> wireguard-tcp-base on output.
+Comparison is TCP-tunnel vs UDP-tunnel for the same inner-traffic class.
 """
 import json, sys, statistics
 from pathlib import Path
@@ -30,7 +28,7 @@ for cj in cells_dir.rglob('cell.json'):
     key = (pair, tun, ax.get('workload','?'), ax.get('loss_pct','?'))
     groups[key].append(doc.get('metrics', {}))
 
-def mean(vals):
+def m(vals):
     vals = [v for v in vals if v is not None]
     return statistics.fmean(vals) if vals else None
 
@@ -38,14 +36,15 @@ data = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
 for (pair, tun, wl, loss), runs in groups.items():
     if not runs: continue
     agg = {}
-    for k in ('cpu_pct_mean', 'goodput_tcp_mbps', 'goodput_udp_mbps',
-              'rtt_mean_ms', 'rtt_max_ms', 'observed_loss_pct',
-              'req_per_sec', 'ttfb_p50_ms', 'ttfb_p95_ms', 'retrans_count'):
-        agg[k] = mean([r.get(k) for r in runs])
+    for k in ('cpu_pct_mean','goodput_tcp_mbps','goodput_udp_mbps',
+              'rtt_mean_ms','rtt_max_ms','rtt_mdev_ms','observed_loss_pct',
+              'req_per_sec','ttfb_p50_ms','ttfb_p95_ms','retrans_count'):
+        agg[k] = m([r.get(k) for r in runs])
     agg['n'] = len(runs)
     data[pair][wl][loss][tun] = agg
 
-PAIR_ORDER = ['LAN-x64','LAN-arm','MED-x64','MED-arm','HIGH-x64','HIGH-arm','MAX-x64','MAX-arm']
+TIERS  = ['LAN','MED','HIGH','MAX']
+ARCHES = ['x64','arm']
 
 def pct(a, b):
     if a is None or b is None or b == 0: return ''
@@ -55,108 +54,147 @@ def fmt(v, nd=1):
     if v is None: return '—'
     return f"{v:.{nd}f}" if isinstance(v, float) else str(v)
 
+def loss_sort(x):
+    try: return float(x)
+    except: return -1
+
 L = []
-L.append("# Baseline 1.0.0 — TCP-base tunnel vs UDP tunnel scenario summary")
+L.append("# Baseline 1.0.0 — TCP-base tunnel vs UDP tunnel, per workload × tier")
 L.append("")
-L.append("- **Image**: `wireguardtcp-ubuntu24-tls/1.0.0` (x64) and `wireguardtcp-ubuntu24-arm64-tls/1.0.0` (arm64)")
-L.append("- **Topology**: point-to-point, 8 isolated 2-VM pairs, one /24 each, ports 51820/UDP + 51821/TCP")
-L.append("- **Tunnel labels** (in matrix.csv): `wireguard-tcp-base` = baseline-image TCP transport (`Transport=tcp`); `wireguard-udp` = stock UDP control")
-L.append("- **Each long-transfer cell** runs `iperf3 -t 60 -P 4` then `iperf3 -u -b 1G -l 1200 -t 60` over the **same** selected tunnel, so both inner-TCP and inner-UDP throughput are recorded for each tunnel choice")
-L.append("- **CPU**: `100 - mpstat %idle`, mean over the cell. Tunnel-level (not protocol-specific).")
-L.append("- **Δ%** is `(tcp_tunnel - udp_tunnel) / udp_tunnel × 100` for the SAME inner-traffic class.")
-L.append("- VM size: x64 = D2s_v5 (2 vCPU), arm = D2ps_v6 (2 vCPU)")
+L.append("Image: `wireguardtcp-ubuntu24-tls/1.0.0` (x64) · `wireguardtcp-ubuntu24-arm64-tls/1.0.0` (arm64). Topology: p2p, 8 isolated pairs, ports 51820/UDP + 51821/TCP. VM sizes: D2s_v5 (x64) / D2ps_v6 (arm).")
 L.append("")
-L.append("---")
+L.append("Tunnel labels: `wireguard-tcp-base` = baseline TCP transport; `wireguard-udp` = UDP control. Δ% is `(tcp_tun - udp_tun) / udp_tun × 100`.")
+L.append("")
+L.append("Tiers: **LAN** = same-region (canadacentral ↔ canadacentral, ~0.4 ms RTT). **MED** = cross-continent (canadacentral ↔ westus2, ~56 ms RTT). **HIGH** = trans-Atlantic (canadacentral ↔ westeurope, ~195 ms RTT). **MAX** = trans-Pacific via SE Asia (canadacentral ↔ southeastasia, ~227 ms RTT).")
+L.append("")
+L.append("Loss values 0/0.5/1/2/3/5/10/20% are injected on the carrier link with `tc netem`. Each cell = mean over 3 runs.")
 L.append("")
 
-# Headline at loss=0
-L.append("## Headline — long-transfer at loss=0%")
-L.append("")
-L.append("Inner-TCP throughput (TCP-fairness goodput) per tunnel:")
-L.append("")
-L.append("| pair | TCP-tun TCP Mbps | UDP-tun TCP Mbps | Δ% | TCP-tun CPU% | UDP-tun CPU% | Δ% |")
-L.append("|------|-----------------:|-----------------:|---:|-------------:|-------------:|---:|")
-for pair in PAIR_ORDER:
-    cell = data.get(pair,{}).get('long-transfer',{}).get(0.0,{})
-    t = cell.get('wireguard-tcp-base',{}); u = cell.get('wireguard-udp',{})
-    L.append(f"| {pair} | {fmt(t.get('goodput_tcp_mbps'))} | {fmt(u.get('goodput_tcp_mbps'))} | {pct(t.get('goodput_tcp_mbps'),u.get('goodput_tcp_mbps'))} | "
-             f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} | {pct(t.get('cpu_pct_mean'),u.get('cpu_pct_mean'))} |")
-L.append("")
-L.append("Inner-UDP throughput (saturation goodput) per tunnel:")
-L.append("")
-L.append("| pair | TCP-tun UDP Mbps | UDP-tun UDP Mbps | Δ% |")
-L.append("|------|-----------------:|-----------------:|---:|")
-for pair in PAIR_ORDER:
-    cell = data.get(pair,{}).get('long-transfer',{}).get(0.0,{})
-    t = cell.get('wireguard-tcp-base',{}); u = cell.get('wireguard-udp',{})
-    L.append(f"| {pair} | {fmt(t.get('goodput_udp_mbps'))} | {fmt(u.get('goodput_udp_mbps'))} | {pct(t.get('goodput_udp_mbps'),u.get('goodput_udp_mbps'))} |")
-L.append("")
-
-# Loss sweep per pair
+# ============================================================
+# 1. LONG-TRANSFER
+# ============================================================
 L.append("---")
 L.append("")
-L.append("## Loss sweep — long-transfer (per pair)")
+L.append("## 1. long-transfer  (60 s iperf3 TCP -P 4, then 60 s iperf3 UDP -b 1G)")
 L.append("")
-L.append("Rows = loss%. Two metrics per row: inner-TCP (top) and inner-UDP (bottom) iperf throughput. CPU is tunnel-level.")
+L.append("Throughput goodput in Mbps; CPU = `100 - mpstat %idle`. **RTT not captured** for long-transfer (iperf3 runs back-to-back without ping; see ssh-interactive § 3 for RTT-vs-loss).")
 L.append("")
-for pair in PAIR_ORDER:
-    if pair not in data or 'long-transfer' not in data[pair]: continue
-    losses = sorted(data[pair]['long-transfer'].keys(), key=lambda x: float(x) if x != '?' else -1)
-    if not losses: continue
-    L.append(f"### {pair}")
+for tier in TIERS:
+    L.append(f"### 1.{TIERS.index(tier)+1} {tier}")
     L.append("")
-    L.append("| loss% | inner | TCP-tun Mbps | UDP-tun Mbps | Δ% | TCP-tun CPU% | UDP-tun CPU% | Δ% |")
-    L.append("|------:|:-----:|-------------:|-------------:|---:|-------------:|-------------:|---:|")
-    for loss in losses:
-        cell = data[pair]['long-transfer'][loss]
-        t = cell.get('wireguard-tcp-base',{}); u = cell.get('wireguard-udp',{})
-        # inner-TCP row
-        L.append(f"| {loss} | TCP | {fmt(t.get('goodput_tcp_mbps'))} | {fmt(u.get('goodput_tcp_mbps'))} | "
-                 f"{pct(t.get('goodput_tcp_mbps'),u.get('goodput_tcp_mbps'))} | "
-                 f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} | "
-                 f"{pct(t.get('cpu_pct_mean'),u.get('cpu_pct_mean'))} |")
-        # inner-UDP row
-        L.append(f"|       | UDP | {fmt(t.get('goodput_udp_mbps'))} | {fmt(u.get('goodput_udp_mbps'))} | "
-                 f"{pct(t.get('goodput_udp_mbps'),u.get('goodput_udp_mbps'))} | "
-                 f"·          | ·          |    |")
+    L.append("| arch | loss% | inner-TCP TCP-tun Mbps | inner-TCP UDP-tun Mbps | ΔTCP% | inner-UDP TCP-tun Mbps | inner-UDP UDP-tun Mbps | ΔUDP% | TCP-tun CPU% | UDP-tun CPU% | ΔCPU% |")
+    L.append("|:----:|------:|-----------------------:|-----------------------:|------:|-----------------------:|-----------------------:|------:|-------------:|-------------:|------:|")
+    for arch in ARCHES:
+        pair = f"{tier}-{arch}"
+        wl_data = data.get(pair,{}).get('long-transfer',{})
+        if not wl_data: continue
+        for loss in sorted(wl_data.keys(), key=loss_sort):
+            t = wl_data[loss].get('wireguard-tcp-base',{})
+            u = wl_data[loss].get('wireguard-udp',{})
+            L.append(f"| {arch} | {loss} | "
+                     f"{fmt(t.get('goodput_tcp_mbps'))} | {fmt(u.get('goodput_tcp_mbps'))} | {pct(t.get('goodput_tcp_mbps'),u.get('goodput_tcp_mbps'))} | "
+                     f"{fmt(t.get('goodput_udp_mbps'))} | {fmt(u.get('goodput_udp_mbps'))} | {pct(t.get('goodput_udp_mbps'),u.get('goodput_udp_mbps'))} | "
+                     f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} | {pct(t.get('cpu_pct_mean'),u.get('cpu_pct_mean'))} |")
     L.append("")
 
-# Short-transfer (TTFB / req-rate) — these capture RTT
+# ============================================================
+# 2. SHORT-TRANSFER
+# ============================================================
 L.append("---")
 L.append("")
-L.append("## Short-transfer — TTFB p50, request rate, RTT (loss=0%)")
+L.append("## 2. short-transfer  (200 sequential HTTPS requests, fresh TLS each)")
 L.append("")
-L.append("Short-transfer cells run 200 sequential HTTPS requests; ping runs in parallel for RTT.")
+L.append("Application latency = TTFB (time-to-first-byte). Throughput = req/s sustained.")
 L.append("")
-L.append("| pair | TCP-tun TTFB ms | UDP-tun TTFB ms | Δ% | TCP-tun req/s | UDP-tun req/s | Δ% | TCP-tun rtt ms | UDP-tun rtt ms | Δ% | TCP-tun CPU% | UDP-tun CPU% |")
-L.append("|------|----------------:|----------------:|---:|--------------:|--------------:|---:|---------------:|---------------:|---:|-------------:|-------------:|")
-for pair in PAIR_ORDER:
-    cell = data.get(pair,{}).get('short-transfer',{}).get(0.0,{})
-    t = cell.get('wireguard-tcp-base',{}); u = cell.get('wireguard-udp',{})
-    L.append(f"| {pair} | {fmt(t.get('ttfb_p50_ms'))} | {fmt(u.get('ttfb_p50_ms'))} | {pct(t.get('ttfb_p50_ms'),u.get('ttfb_p50_ms'))} | "
-             f"{fmt(t.get('req_per_sec'),2)} | {fmt(u.get('req_per_sec'),2)} | {pct(t.get('req_per_sec'),u.get('req_per_sec'))} | "
-             f"{fmt(t.get('rtt_mean_ms'))} | {fmt(u.get('rtt_mean_ms'))} | {pct(t.get('rtt_mean_ms'),u.get('rtt_mean_ms'))} | "
-             f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} |")
+for tier in TIERS:
+    L.append(f"### 2.{TIERS.index(tier)+1} {tier}")
+    L.append("")
+    L.append("| arch | loss% | TCP-tun TTFB ms | UDP-tun TTFB ms | ΔTTFB% | TCP-tun req/s | UDP-tun req/s | Δreq% | TCP-tun CPU% | UDP-tun CPU% | ΔCPU% |")
+    L.append("|:----:|------:|----------------:|----------------:|-------:|--------------:|--------------:|------:|-------------:|-------------:|------:|")
+    for arch in ARCHES:
+        pair = f"{tier}-{arch}"
+        wl_data = data.get(pair,{}).get('short-transfer',{})
+        if not wl_data: continue
+        for loss in sorted(wl_data.keys(), key=loss_sort):
+            t = wl_data[loss].get('wireguard-tcp-base',{})
+            u = wl_data[loss].get('wireguard-udp',{})
+            L.append(f"| {arch} | {loss} | "
+                     f"{fmt(t.get('ttfb_p50_ms'))} | {fmt(u.get('ttfb_p50_ms'))} | {pct(t.get('ttfb_p50_ms'),u.get('ttfb_p50_ms'))} | "
+                     f"{fmt(t.get('req_per_sec'),2)} | {fmt(u.get('req_per_sec'),2)} | {pct(t.get('req_per_sec'),u.get('req_per_sec'))} | "
+                     f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} | {pct(t.get('cpu_pct_mean'),u.get('cpu_pct_mean'))} |")
+    L.append("")
+
+# ============================================================
+# 3. SSH-INTERACTIVE
+# ============================================================
+L.append("---")
 L.append("")
+L.append("## 3. ssh-interactive  (1000 × 50 ms ICMP ping; ssh keystroke-echo via ControlMaster)")
+L.append("")
+L.append("Latency = `rtt_mean_ms` (ICMP). Loss = `observed_loss_pct` (ping summary, post-`tc netem`).")
+L.append("")
+for tier in TIERS:
+    L.append(f"### 3.{TIERS.index(tier)+1} {tier}")
+    L.append("")
+    L.append("| arch | loss% | TCP-tun rtt ms | UDP-tun rtt ms | Δrtt% | TCP-tun rtt max ms | UDP-tun rtt max ms | TCP-tun loss% | UDP-tun loss% | TCP-tun CPU% | UDP-tun CPU% | ΔCPU% |")
+    L.append("|:----:|------:|---------------:|---------------:|------:|-------------------:|-------------------:|--------------:|--------------:|-------------:|-------------:|------:|")
+    for arch in ARCHES:
+        pair = f"{tier}-{arch}"
+        wl_data = data.get(pair,{}).get('ssh-interactive',{})
+        if not wl_data: continue
+        for loss in sorted(wl_data.keys(), key=loss_sort):
+            t = wl_data[loss].get('wireguard-tcp-base',{})
+            u = wl_data[loss].get('wireguard-udp',{})
+            L.append(f"| {arch} | {loss} | "
+                     f"{fmt(t.get('rtt_mean_ms'),2)} | {fmt(u.get('rtt_mean_ms'),2)} | {pct(t.get('rtt_mean_ms'),u.get('rtt_mean_ms'))} | "
+                     f"{fmt(t.get('rtt_max_ms'),1)} | {fmt(u.get('rtt_max_ms'),1)} | "
+                     f"{fmt(t.get('observed_loss_pct'),2)} | {fmt(u.get('observed_loss_pct'),2)} | "
+                     f"{fmt(t.get('cpu_pct_mean'))} | {fmt(u.get('cpu_pct_mean'))} | {pct(t.get('cpu_pct_mean'),u.get('cpu_pct_mean'))} |")
+    L.append("")
+
+# ============================================================
+# 4. WEB-MIX
+# ============================================================
+L.append("---")
+L.append("")
+L.append("## 4. web-mix  (h2load: 5000 requests, 50 conn × 10 streams, HTTP/2 over TLS)")
+L.append("")
+L.append("Throughput = aggregate req/s. *(CPU and latency parsing for h2load not yet wired into parse-cell.py; columns omitted.)*")
+L.append("")
+for tier in TIERS:
+    L.append(f"### 4.{TIERS.index(tier)+1} {tier}")
+    L.append("")
+    L.append("| arch | loss% | TCP-tun req/s | UDP-tun req/s | Δreq% |")
+    L.append("|:----:|------:|--------------:|--------------:|------:|")
+    for arch in ARCHES:
+        pair = f"{tier}-{arch}"
+        wl_data = data.get(pair,{}).get('web-mix',{})
+        if not wl_data: continue
+        for loss in sorted(wl_data.keys(), key=loss_sort):
+            t = wl_data[loss].get('wireguard-tcp-base',{})
+            u = wl_data[loss].get('wireguard-udp',{})
+            L.append(f"| {arch} | {loss} | "
+                     f"{fmt(t.get('req_per_sec'),2)} | {fmt(u.get('req_per_sec'),2)} | {pct(t.get('req_per_sec'),u.get('req_per_sec'))} |")
+    L.append("")
 
 # Coverage
 L.append("---")
 L.append("")
 L.append("## Coverage")
 L.append("")
-L.append("Total cells gathered per pair (full matrix per pair = 2 tunnels × 4 workloads × 8 losses × 3 runs = 192).")
-L.append("")
-L.append("| pair | cells captured |")
-L.append("|------|---------------:|")
 totals = defaultdict(int)
-for (pair, tun, wl, loss), runs in groups.items():
+for (pair, _, _, _), runs in groups.items():
     totals[pair] += len(runs)
-for pair in PAIR_ORDER:
-    L.append(f"| {pair} | {totals[pair]} / 192 |")
+L.append("| pair | cells / 192 |")
+L.append("|------|-------:|")
+for tier in TIERS:
+    for arch in ARCHES:
+        p = f"{tier}-{arch}"
+        L.append(f"| {p} | {totals.get(p,0)} |")
 L.append("")
-L.append("---")
+L.append(f"Total cells: {sum(totals.values())} / 1536 ({sum(totals.values())*100//1536}%).")
 L.append("")
-L.append("Source data: `results/baseline-1.0.0-p2p/cells/<pair>/<tunnel>_<workload>_loss<L>_run<N>/cell.json`. Aggregated by `summary-report.py`.")
+L.append("Source: `results/baseline-1.0.0-p2p/cells/<pair>/<tunnel>_<workload>_loss<L>_run<N>/cell.json` · generator: `harness/summary-report.py`.")
 
 OUT_MD.write_text('\n'.join(L), encoding='utf-8')
-print(f"wrote {OUT_MD} ({len(L)} lines, {sum(len(g) for g in groups.values())} cells, {sum(totals.values())} aggregated)")
+print(f"wrote {OUT_MD} ({len(L)} lines)")
