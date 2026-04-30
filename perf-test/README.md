@@ -9,6 +9,19 @@ geographies, architectures, and packet-loss conditions.
 tunnel, per workload × per link-distance tier, with throughput / latency /
 CPU and TCP-vs-UDP percentage deltas.
 
+While a campaign is in flight, run `harness/refresh-report.ps1` in a side
+terminal to keep `REPORT.md` and `matrix.csv` updated as cells finish:
+
+```powershell
+.\harness\refresh-report.ps1 `
+    -ResultsDir <campaign>\results\baseline-1.0.0-p2p `
+    -RepoRoot   <local-clone-of-this-repo> `
+    -IntervalSeconds 600
+```
+
+It re-runs `aggregate.py` + `summary-report.py` on a timer and commits +
+pushes any diffs.
+
 ---
 
 ## Files
