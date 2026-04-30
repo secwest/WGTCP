@@ -1,9 +1,13 @@
-# WireguardTCP-FAST Performance Test Campaign
+# WireguardTCP Baseline Performance Test Campaign
 
 This directory contains the **design**, **test harness**, and **orchestration**
-for the comprehensive performance benchmark of WireguardTCP-FAST against stock
-WireGuard (UDP), across multiple geographies, architectures, and packet-loss
-conditions.
+for the comprehensive performance benchmark of WireguardTCP-baseline (TCP
+transport in the kernel module) against stock WireGuard (UDP), across multiple
+geographies, architectures, and packet-loss conditions.
+
+**Latest results: see [`REPORT.md`](REPORT.md)** — TCP-base tunnel vs UDP
+tunnel, per workload × per link-distance tier, with throughput / latency /
+CPU and TCP-vs-UDP percentage deltas.
 
 ---
 
