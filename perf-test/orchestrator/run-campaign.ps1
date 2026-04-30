@@ -20,7 +20,7 @@ param(
     [int] $RunsPerCell     = 3,
     [double[]] $LossLevels = @(0, 0.5, 1, 2, 3, 5, 10, 20),
     [string[]] $Workloads  = @('short-transfer','long-transfer','web-mix','ssh-interactive'),
-    [string[]] $Tunnels    = @('wireguard-udp','wireguard-tcp-fast'),
+    [string[]] $Tunnels    = @('wireguard-udp','wireguard-tcp-base'),
     [switch] $IncludeBaseline,
     [int] $MaxParallelPairs = 8
 )

@@ -43,8 +43,8 @@ themselves run on Linux.
 - `wireguardtcp_gallery` Shared Image Gallery in `RG-WIREGUARDTCP-FAST`
   containing image versions for both architectures, replicated to all
   four target regions:
-  - `wireguardtcp-fast-ubuntu24-tls` (x64) ≥ v1.0.2
-  - `wireguardtcp-fast-ubuntu24-arm64-tls` ≥ v1.0.0
+  - `wireguardtcp-ubuntu24-tls` (x64) ≥ v1.0.2
+  - `wireguardtcp-ubuntu24-arm64-tls` ≥ v1.0.0
 - See [`azure-images/RUNBOOK.md`](../azure-images/RUNBOOK.md) for how to
   build these from scratch.
 
@@ -158,7 +158,7 @@ matrix.
 The gallery image versions must exist in every campaign region:
 
 ```pwsh
-foreach ($img in @("wireguardtcp-fast-ubuntu24-tls","wireguardtcp-fast-ubuntu24-arm64-tls")) {
+foreach ($img in @("wireguardtcp-ubuntu24-tls","wireguardtcp-ubuntu24-arm64-tls")) {
     $ver = if ($img -match "arm64") { "1.0.0" } else { "1.0.2" }
     az sig image-version update -r wireguardtcp_gallery -g RG-WIREGUARDTCP-FAST -i $img -e $ver `
         --target-regions "Canada Central" "West US 3" "Australia East" "South Africa North" `
@@ -170,7 +170,7 @@ Replication is ~30–60 minutes per region per definition. Verify:
 
 ```pwsh
 az sig image-version show -r wireguardtcp_gallery -g RG-WIREGUARDTCP-FAST `
-    -i wireguardtcp-fast-ubuntu24-tls -e 1.0.2 `
+    -i wireguardtcp-ubuntu24-tls -e 1.0.2 `
     --query "publishingProfile.targetRegions[].name" -o tsv
 ```
 

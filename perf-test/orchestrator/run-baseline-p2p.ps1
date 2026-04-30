@@ -331,7 +331,7 @@ if (-not $SkipRun) {
             $opts = @("-i",$key,"-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ConnectTimeout=20","-o","ServerAliveInterval=30")
             $log = Join-Path $localOut "run.log"
             "[$pairId] start $(Get-Date -Format o)" | Out-File $log -Encoding utf8
-            foreach ($tun in @("wireguard-udp","wireguard-tcp-fast")) {
+            foreach ($tun in @("wireguard-udp","wireguard-tcp-base")) {
                 foreach ($wl in $workloads) {
                     foreach ($l in $loss) {
                         for ($r = 1; $r -le $runs; $r++) {

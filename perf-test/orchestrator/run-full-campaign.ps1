@@ -61,8 +61,8 @@ $null = New-Item -ItemType Directory -Force -Path $ResultsDir
 $subId   = "87243d30-26d0-4f86-bd4e-198f8befe9fa"
 $gallery = "wireguardtcp_gallery"
 $galleryRg = "RG-WIREGUARDTCP-FAST"
-$imgX64 = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-fast-ubuntu24-tls/versions/$ImageVersionX64"
-$imgArm = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-fast-ubuntu24-arm64-tls/versions/$ImageVersionArm"
+$imgX64 = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-tls/versions/$ImageVersionX64"
+$imgArm = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-arm64-tls/versions/$ImageVersionArm"
 
 # ---- Pair table: drives every per-pair allocation ---------------------
 # Index N -> hub iface wg-udpN/wg-tcpN, hub ports 51820+2N / 51821+2N,
@@ -371,7 +371,7 @@ if (-not $SkipRun) {
             $opts = @("-i",$key,"-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ConnectTimeout=20","-o","ServerAliveInterval=30")
             $log = Join-Path $localOut "run.log"
             "[$pairId] start $(Get-Date -Format o)" | Out-File $log -Encoding utf8
-            foreach ($tun in @("wireguard-udp","wireguard-tcp-fast")) {
+            foreach ($tun in @("wireguard-udp","wireguard-tcp-base")) {
                 foreach ($wl in $workloads) {
                     foreach ($l in $loss) {
                         for ($r = 1; $r -le $runs; $r++) {

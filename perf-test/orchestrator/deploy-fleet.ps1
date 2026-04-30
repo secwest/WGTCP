@@ -12,8 +12,8 @@
 .PARAMETER ImageVersion      Gallery image version to deploy (e.g. 1.0.0).
 .PARAMETER Gallery           Gallery name (e.g. wireguardtcp_gallery).
 .PARAMETER GalleryRG         RG that contains the Gallery.
-.PARAMETER ImageDefX64       e.g. wireguardtcp-fast-ubuntu24-tls
-.PARAMETER ImageDefArm       e.g. wireguardtcp-fast-ubuntu24-arm64-tls
+.PARAMETER ImageDefX64       e.g. wireguardtcp-ubuntu24-tls
+.PARAMETER ImageDefArm       e.g. wireguardtcp-ubuntu24-arm64-tls
 .PARAMETER HubRegion         Region for hub (default canadacentral).
 .PARAMETER SpokeRegions      Regions for spokes (default westus3,australiaeast,southafricanorth).
 .PARAMETER VmSizeX64         (default Standard_D2s_v5)
@@ -27,8 +27,8 @@ param(
     [Parameter(Mandatory)] [string] $ImageVersion,
     [string] $Gallery        = 'wireguardtcp_gallery',
     [string] $GalleryRG      = 'rg-wireguardtcp-fast',
-    [string] $ImageDefX64    = 'wireguardtcp-fast-ubuntu24-tls',
-    [string] $ImageDefArm    = 'wireguardtcp-fast-ubuntu24-arm64-tls',
+    [string] $ImageDefX64    = 'wireguardtcp-ubuntu24-tls',
+    [string] $ImageDefArm    = 'wireguardtcp-ubuntu24-arm64-tls',
     [string] $HubRegion      = 'canadacentral',
     [string[]] $SpokeRegions = @('westus3','australiaeast','southafricanorth'),
     [string] $VmSizeX64      = 'Standard_D2s_v5',
