@@ -150,6 +150,23 @@ L.append("| 5 | ssh-interactive        | 1000-ping + ssh keystroke echo  | ssh t
 L.append("")
 L.append("§ 1 and § 2 are extracted from the same `long-transfer` cell (the cell runs both iperf3 probes back-to-back through the chosen tunnel; we read the TCP probe for § 1 and the UDP probe for § 2).")
 L.append("")
+L.append("## How to read these numbers")
+L.append("")
+L.append("Every cell is an **end-to-end application measurement**: a real client process (iperf3, curl, h2load, ping + ssh) runs on VM-A and talks to a real server on VM-B via the chosen WireGuard tunnel's inner IP. The numbers are what the **client process itself reported** — Mbps the iperf3 client received, TTFB curl observed, req/s h2load achieved, RTT the ping process measured. Same TLS stack, same nginx, same host, same loss — only the WG transport differs between the two columns.")
+L.append("")
+L.append("So a row like \"§ 3 LAN-x64 loss=10%, TCP-WG = 154 req/s, UDP-WG = 6 req/s\" means: a process doing serial HTTPS GETs from one same-region 2 vCPU VM to another, with 10% packet loss injected on the carrier link, would actually push **~154 reqs/sec when WG runs over TCP and ~6 reqs/sec when WG runs over UDP**.")
+L.append("")
+L.append("### Caveats for interpretation")
+L.append("")
+L.append("- **VM size = 2 vCPU** (D2s_v5 x64, D2ps_v6 arm). CPU-bound workloads (especially bulk-TCP at LAN) are partly capped by VM capacity; bigger boxes would push more Mbps. Bulk-UDP is iperf-rate-capped at 1 Gbps and not VM-bound.")
+L.append("- **Loss model** is uniform random `tc netem` on the carrier `eth0` at one peer. Real-WAN loss is typically burstier and correlated; magnitudes here are representative but not predictive of any specific path.")
+L.append("- **§ 3 short-HTTPS does not reuse TLS connections** — each of the 200 GETs is a fresh TLS 1.3 handshake. This is a TLS-heavy worst-case (think naive REST clients, dumb health checks). Browsers with keep-alive would see higher absolute req/s on both tunnels and a smaller (but still positive) Δ%.")
+L.append("- **§ 4 web-mix latency** is not extracted yet — `h2load` summary parsing for p50/p95 is a TODO in `parse-cell.py`. Only req/s is shown.")
+L.append("- **§ 5 ssh-interactive RTT is ICMP**, not ssh keystroke-echo RTT. The keystroke `.tsv` log is captured per cell but not aggregated.")
+L.append("- **iperf3 uses `-P 4`** for bulk-TCP — 4 parallel streams. Single-stream TCP throughput would be lower, especially at long RTT where window-scaling is the limit. h2load uses `-c 50 -m 10` (50 connections × 10 streams).")
+L.append("- **MTU**: WG default 1420 inside; UDP iperf uses `-l 1200` to fit comfortably.")
+L.append("- **Each cell = mean of N=3 runs**. Stdev is in `matrix.csv` (`*_stdev` columns) but omitted from the markdown for compactness.")
+L.append("")
 
 # 1. bulk-TCP
 emit_section(L,
