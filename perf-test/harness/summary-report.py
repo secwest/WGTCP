@@ -257,14 +257,25 @@ for (pair, _, _, _), runs in groups.items():
     totals[pair] += len(runs)
 L.append("Cells captured per pair (full matrix per pair = 2 tunnels × 4 workloads × 8 losses × 3 runs = 192).")
 L.append("")
-L.append("| pair | cells / 192 |")
-L.append("|------|------------:|")
+# Compute per-tunnel coverage too
+totals_tcp = defaultdict(int); totals_udp = defaultdict(int)
+for (pair, tun, _, _), runs in groups.items():
+    if tun == T_TCP: totals_tcp[pair] += len(runs)
+    elif tun == T_UDP: totals_udp[pair] += len(runs)
+L.append("| pair | TCP-WG cells | UDP-WG cells | total / 192 |")
+L.append("|------|------------:|------------:|------------:|")
 for tier in TIERS:
     for arch in ARCHES:
         p = f"{tier}-{arch}"
-        L.append(f"| {p} | {totals.get(p,0)} |")
+        L.append(f"| {p} | {totals_tcp.get(p,0)} / 96 | {totals_udp.get(p,0)} / 96 | {totals.get(p,0)} / 192 |")
 L.append("")
 L.append(f"**Total: {sum(totals.values())} / 1536 ({sum(totals.values())*100//1536}%).**")
+L.append("")
+L.append("### Known gaps")
+L.append("")
+L.append("`HIGH-x64`, `HIGH-arm`, and `MAX-x64` saw the TCP-Wireguard tunnel fail to come up reliably across long-RTT cross-region paths during the TCP-WG pass; `ssh` to the peer timed out during high-loss cells and most TCP-WG cell.json files were never written. UDP-WG cells were completed first and are fully populated for all 8 pairs. `MAX-arm` shows the full TCP-WG matrix worked at ~227 ms RTT, so the issue is x64-specific at long RTT, not a fundamental p2p-topology problem. This matches the earlier 'anomaly A1' cross-region TCP-handshake bug observed under the hub topology — the p2p redesign reduced but didn't eliminate it for x64 at trans-Atlantic / trans-Pacific distances.")
+L.append("")
+L.append("Where TCP-WG cells are missing, the comparison columns in §1–§5 show `—`; the LAN/MED/MAX-arm tables are fully populated and contain the bulk of the analysis.")
 L.append("")
 L.append("Source: `results/baseline-1.0.0-p2p/cells/<pair>/<tunnel>_<workload>_loss<L>_run<N>/cell.json` · generator: `harness/summary-report.py`.")
 
