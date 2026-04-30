@@ -1,0 +1,145 @@
+{
+  "ResourceGroup": "rg-wgtcpbase-perf",
+  "ImageX64": "1.0.0",
+  "ImageArm": "1.0.0",
+  "Hubs": [
+    {
+      "Arch": "x64",
+      "Region": "canadacentral",
+      "Name": "cc-x64-A",
+      "Size": "Standard_D2s_v5",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "PubIp": "20.220.59.225",
+      "PrivIp": "10.50.0.4",
+      "WgPub": ""
+    }
+  ],
+  "Spokes": [
+    {
+      "PairId": "LAN-x64",
+      "Tier": "LAN",
+      "Arch": "x64",
+      "Region": "canadacentral",
+      "Name": "cc-x64-B",
+      "Size": "Standard_D2s_v5",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Index": 0,
+      "Hub": {
+        "Arch": "x64",
+        "Region": "canadacentral",
+        "Name": "cc-x64-A",
+        "Size": "Standard_D2s_v5",
+        "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+        "PubIp": "20.220.59.225",
+        "PrivIp": "10.50.0.4",
+        "WgPub": ""
+      },
+      "PubIp": "20.104.83.118",
+      "PrivIp": "10.50.0.5",
+      "WgPub": ""
+    },
+    {
+      "PairId": "MED-x64",
+      "Tier": "MED",
+      "Arch": "x64",
+      "Region": "westus2",
+      "Name": "westus2-x64",
+      "Size": "Standard_D2s_v5",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Index": 1,
+      "Hub": {
+        "Arch": "x64",
+        "Region": "canadacentral",
+        "Name": "cc-x64-A",
+        "Size": "Standard_D2s_v5",
+        "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+        "PubIp": "20.220.59.225",
+        "PrivIp": "10.50.0.4",
+        "WgPub": ""
+      },
+      "PubIp": "20.230.191.198",
+      "PrivIp": "10.50.0.4",
+      "WgPub": ""
+    },
+    {
+      "PairId": "HIGH-x64",
+      "Tier": "HIGH",
+      "Arch": "x64",
+      "Region": "australiaeast",
+      "Name": "australiaeast-x64",
+      "Size": "Standard_D2s_v5",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Index": 2,
+      "Hub": {
+        "Arch": "x64",
+        "Region": "canadacentral",
+        "Name": "cc-x64-A",
+        "Size": "Standard_D2s_v5",
+        "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+        "PubIp": "20.220.59.225",
+        "PrivIp": "10.50.0.4",
+        "WgPub": ""
+      },
+      "PubIp": "20.58.160.82",
+      "PrivIp": "10.50.0.4",
+      "WgPub": ""
+    },
+    {
+      "PairId": "MAX-x64",
+      "Tier": "MAX",
+      "Arch": "x64",
+      "Region": "southafricanorth",
+      "Name": "southafricanorth-x64",
+      "Size": "Standard_D2s_v5",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Index": 3,
+      "Hub": {
+        "Arch": "x64",
+        "Region": "canadacentral",
+        "Name": "cc-x64-A",
+        "Size": "Standard_D2s_v5",
+        "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+        "PubIp": "20.220.59.225",
+        "PrivIp": "10.50.0.4",
+        "WgPub": ""
+      },
+      "PubIp": "102.37.10.193",
+      "PrivIp": "10.50.0.4",
+      "WgPub": ""
+    }
+  ],
+  "Pairs": [
+    {
+      "Id": "LAN-x64",
+      "Tier": "LAN",
+      "Arch": "x64",
+      "HubArch": "x64",
+      "SpokeRegion": "canadacentral",
+      "Index": 0
+    },
+    {
+      "Id": "MED-x64",
+      "Tier": "MED",
+      "Arch": "x64",
+      "HubArch": "x64",
+      "SpokeRegion": "westus2",
+      "Index": 1
+    },
+    {
+      "Id": "HIGH-x64",
+      "Tier": "HIGH",
+      "Arch": "x64",
+      "HubArch": "x64",
+      "SpokeRegion": "australiaeast",
+      "Index": 2
+    },
+    {
+      "Id": "MAX-x64",
+      "Tier": "MAX",
+      "Arch": "x64",
+      "HubArch": "x64",
+      "SpokeRegion": "southafricanorth",
+      "Index": 3
+    }
+  ]
+}
