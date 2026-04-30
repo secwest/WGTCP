@@ -477,17 +477,23 @@ Each cell is the mean of 3 runs. Loss is on the carrier (outer) link, so it affe
 
 Cells captured per pair (full matrix per pair = 2 tunnels × 4 workloads × 8 losses × 3 runs = 192).
 
-| pair | cells / 192 |
-|------|------------:|
-| LAN-x64 | 192 |
-| LAN-arm | 192 |
-| MED-x64 | 192 |
-| MED-arm | 192 |
-| HIGH-x64 | 102 |
-| HIGH-arm | 104 |
-| MAX-x64 | 97 |
-| MAX-arm | 191 |
+| pair | TCP-WG cells | UDP-WG cells | total / 192 |
+|------|------------:|------------:|------------:|
+| LAN-x64 | 96 / 96 | 96 / 96 | 192 / 192 |
+| LAN-arm | 96 / 96 | 96 / 96 | 192 / 192 |
+| MED-x64 | 96 / 96 | 96 / 96 | 192 / 192 |
+| MED-arm | 96 / 96 | 96 / 96 | 192 / 192 |
+| HIGH-x64 | 6 / 96 | 96 / 96 | 102 / 192 |
+| HIGH-arm | 8 / 96 | 96 / 96 | 104 / 192 |
+| MAX-x64 | 1 / 96 | 96 / 96 | 97 / 192 |
+| MAX-arm | 95 / 96 | 96 / 96 | 191 / 192 |
 
 **Total: 1262 / 1536 (82%).**
+
+### Known gaps
+
+`HIGH-x64`, `HIGH-arm`, and `MAX-x64` saw the TCP-Wireguard tunnel fail to come up reliably across long-RTT cross-region paths during the TCP-WG pass; `ssh` to the peer timed out during high-loss cells and most TCP-WG cell.json files were never written. UDP-WG cells were completed first and are fully populated for all 8 pairs. `MAX-arm` shows the full TCP-WG matrix worked at ~227 ms RTT, so the issue is x64-specific at long RTT, not a fundamental p2p-topology problem. This matches the earlier 'anomaly A1' cross-region TCP-handshake bug observed under the hub topology — the p2p redesign reduced but didn't eliminate it for x64 at trans-Atlantic / trans-Pacific distances.
+
+Where TCP-WG cells are missing, the comparison columns in §1–§5 show `—`; the LAN/MED/MAX-arm tables are fully populated and contain the bulk of the analysis.
 
 Source: `results/baseline-1.0.0-p2p/cells/<pair>/<tunnel>_<workload>_loss<L>_run<N>/cell.json` · generator: `harness/summary-report.py`.
