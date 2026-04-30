@@ -8,6 +8,28 @@ Tiers: **LAN** = same-region (canadacentral ↔ canadacentral, ~0.4 ms RTT). **M
 
 Loss values 0/0.5/1/2/3/5/10/20% are injected on the carrier link with `tc netem`. Each cell = mean over 3 runs.
 
+### Reading the long-transfer columns
+
+Each long-transfer cell runs **two iperf3 probes back-to-back** through the chosen tunnel:
+
+1. `iperf3 -c PEER -t 60 -P 4`        → records `goodput_tcp_mbps` (a TCP application probe)
+2. `iperf3 -c PEER -u -b 1G -l 1200`  → records `goodput_udp_mbps` (a UDP application probe, rate-capped at 1 Gbps)
+
+So every cell carries **both** numbers. The four throughput columns in § 1 are not duplicates — they are 2 inner protocols × 2 tunnel choices:
+
+| column | inner traffic | tunnel | answers |
+|---|---|---|---|
+| `inner-TCP TCP-tun Mbps` | TCP app | WG-over-TCP   | TCP application throughput when carrier is TCP |
+| `inner-TCP UDP-tun Mbps` | TCP app | WG-over-UDP   | TCP application throughput when carrier is UDP |
+| `inner-UDP TCP-tun Mbps` | UDP app | WG-over-TCP   | UDP application throughput when carrier is TCP |
+| `inner-UDP UDP-tun Mbps` | UDP app | WG-over-UDP   | UDP application throughput when carrier is UDP |
+
+**Why TCP and UDP probe numbers differ inside the same cell:** TCP self-throttles via congestion control and tries to saturate the link fairly (so on LAN it reaches ~2.7 Gbps). UDP is rate-capped at `-b 1G`, so it tops out at ~1 Gbps regardless of headroom. They're two different probes, not one probe reported twice.
+
+**ΔTCP%** asks: *does inner TCP traffic care which tunnel carries it?* On LAN at 0% loss, no (≤10% diff). At 10% loss, **yes, dramatically** (+9000% on x64) — TCP-meltdown on the UDP carrier vs steady on the TCP carrier.
+
+**ΔUDP%** asks: *does inner UDP traffic care which tunnel carries it?* Less so — UDP has no ACK-collapse mode, just raw packet loss. At 20% loss UDP-tunnel drops to ~780 Mbps inner-UDP while TCP-tunnel holds ~954 Mbps (carrier-level retransmits).
+
 ---
 
 ## 1. long-transfer  (60 s iperf3 TCP -P 4, then 60 s iperf3 UDP -b 1G)
