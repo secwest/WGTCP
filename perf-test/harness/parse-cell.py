@@ -47,22 +47,38 @@ def parse_iperf3(path):
     return bps / 1e6, retrans, mean_rtt
 
 def parse_curl_tsv(path):
-    """short-transfer output. Returns ttfb stats, req/s."""
+    """short-transfer output. Returns ttfb stats, req/s.
+
+    Only counts SUCCESSFUL HTTPS GETs (http_code 2xx) for TTFB stats.
+    Failed curls (http_code 000 = TLS/connect failure, or anything non-2xx)
+    have ttfb=0 in the raw TSV, which would corrupt the percentiles.
+    Requires at least 10 successful samples before reporting stats — under
+    that we treat the cell as "no useful data" rather than emit garbage.
+    req_per_sec is computed from successful requests only and the wallclock
+    time elapsed across ALL attempts (so heavy failure rates correctly
+    reduce req/s, but TTFB reflects only what actually arrived).
+    """
     p2 = Path(path)
     if not p2.exists(): return {}
     rows = [l.strip().split('\t') for l in p2.read_text().splitlines()[1:]]
-    ttfbs   = [float(r[1]) for r in rows if len(r) > 1]
-    totals  = [float(r[3]) for r in rows if len(r) > 3]
-    if not ttfbs: return {}
-    ttfbs.sort()
-    n = len(ttfbs)
-    rps = n / (sum(totals) / 1000.0) if totals else None
-    return {
-      'ttfb_p50_ms': ttfbs[n//2],
-      'ttfb_p95_ms': ttfbs[int(n*0.95)],
-      'ttfb_p99_ms': ttfbs[int(n*0.99)],
-      'req_per_sec': rps,
+    rows = [r for r in rows if len(r) >= 5]
+    if not rows: return {}
+    ok_rows  = [r for r in rows if r[4].startswith('2')]
+    ttfbs    = sorted(float(r[1]) for r in ok_rows if r[1])
+    totals_all = [float(r[3]) for r in rows if r[3]]
+    n_ok = len(ttfbs)
+    out = {
+      'http_success_pct': 100.0 * n_ok / len(rows) if rows else None,
+      'n_curl_attempts':  len(rows),
+      'n_curl_ok':        n_ok,
     }
+    if totals_all:
+        out['req_per_sec'] = n_ok / (sum(totals_all) / 1000.0)
+    if n_ok >= 10:
+        out['ttfb_p50_ms'] = ttfbs[n_ok // 2]
+        out['ttfb_p95_ms'] = ttfbs[int(n_ok * 0.95)]
+        out['ttfb_p99_ms'] = ttfbs[min(int(n_ok * 0.99), n_ok - 1)]
+    return out
 
 def parse_h2load(path):
     p2 = Path(path)
