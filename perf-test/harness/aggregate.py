@@ -21,6 +21,8 @@ cells = list(Path(args.results_dir).rglob('cell.json'))
 if not cells:
     sys.exit("no cell.json found under " + args.results_dir)
 
+cells_root = Path(args.results_dir) / 'cells'
+
 # Group runs by (axes minus run_index)
 groups = defaultdict(list)
 for c in cells:
@@ -28,7 +30,13 @@ for c in cells:
     except Exception as e:
         print(f"skipping {c}: {e}", file=sys.stderr); continue
     ax = doc.get('axes', {})
-    key = (ax.get('region_pair', '?'),
+    # region_pair (e.g. 'LAN-x64', 'HIGH-arm') is not in axes; recover it
+    # from the cells/<pair>/... path component.
+    pair = ax.get('region_pair')
+    if not pair:
+        try: pair = c.relative_to(cells_root).parts[0]
+        except Exception: pair = '?'
+    key = (pair,
            ax.get('arch', '?'),
            ax.get('tunnel', '?'),
            ax.get('workload', '?'),
