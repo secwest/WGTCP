@@ -31,7 +31,7 @@ So a row like "§ 3 LAN-x64 loss=10%, TCP-WG = 154 req/s, UDP-WG = 6 req/s" mean
 - **VM size = 2 vCPU** (D2s_v5 x64, D2ps_v6 arm). CPU-bound workloads (especially bulk-TCP at LAN) are partly capped by VM capacity; bigger boxes would push more Mbps. Bulk-UDP is iperf-rate-capped at 1 Gbps and not VM-bound.
 - **Loss model** is uniform random `tc netem` on the carrier `eth0` at one peer. Real-WAN loss is typically burstier and correlated; magnitudes here are representative but not predictive of any specific path.
 - **§ 3 short-HTTPS does not reuse TLS connections** — each of the 200 GETs is a fresh TLS 1.3 handshake. This is a TLS-heavy worst-case (think naive REST clients, dumb health checks). Browsers with keep-alive would see higher absolute req/s on both tunnels and a smaller (but still positive) Δ%.
-- **§ 4 web-mix latency** is not extracted yet — `h2load` summary parsing for p50/p95 is a TODO in `parse-cell.py`. Only req/s is shown.
+- **§ 4 web-mix endpoint returns 4xx**: the current test endpoint serves 4xx for all 5000 requests. Throughput numbers reflect 4xx-serving speed; latency / TTFB / connect are still valid as TLS+HTTP/2 RTT measurements through the tunnel. Fix the endpoint serving and re-run web-mix to get real-content throughput.
 - **§ 5 ssh-interactive RTT is ICMP**, not ssh keystroke-echo RTT. The keystroke `.tsv` log is captured per cell but not aggregated.
 - **iperf3 uses `-P 4`** for bulk-TCP — 4 parallel streams. Single-stream TCP throughput would be lower, especially at long RTT where window-scaling is the limit. h2load uses `-c 50 -m 10` (50 connections × 10 streams).
 - **MTU**: WG default 1420 inside; UDP iperf uses `-l 1200` to fit comfortably.
@@ -311,91 +311,91 @@ So a row like "§ 3 LAN-x64 loss=10%, TCP-WG = 154 req/s, UDP-WG = 6 req/s" mean
 
 ## 4. Web mix (HTTP/2 + h2load)
 
-`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. *(h2load latency parsing not yet wired into parse-cell.py; CPU is captured but no per-request latency.)*
+`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. **Latency** = mean time per HTTP/2 request. *(Caveat: the test endpoint currently returns 4xx for all 5000 requests, so the throughput numbers reflect how fast nginx serves the 4xx response, not real content. The latency / TTFB / connect timings are still meaningful as TLS-handshake + HTTP/2 RTT measurements through the tunnel — TTFB and connect mean are in matrix.csv but omitted here for compactness.)*
 
 ### LAN — same-region, ~0.4 ms RTT  (canadacentral ↔ canadacentral)
 
-| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
-|:----:|------:|---:|---:|---:|---:|---:|---:|
-| x64 | 0.0 | 56774.09 | 55100.47 | +3.0% | — | — |  |
-| x64 | 0.5 | 53089.27 | 18982.39 | +179.7% | — | — |  |
-| x64 | 1.0 | 57029.97 | 13767.31 | +314.2% | — | 9.5 |  |
-| x64 | 2.0 | 55914.45 | 4499.93 | +1142.6% | — | 13.9 |  |
-| x64 | 3.0 | 52551.60 | 8049.08 | +552.9% | — | 8.5 |  |
-| x64 | 5.0 | 53090.22 | 6093.45 | +771.3% | — | 8.1 |  |
-| x64 | 10.0 | 54509.62 | 2588.13 | +2006.1% | — | 8.1 |  |
-| x64 | 20.0 | 56082.41 | 1298.83 | +4217.9% | — | 3.1 |  |
-| arm | 0.0 | 59726.83 | 59871.76 | -0.2% | — | — |  |
-| arm | 0.5 | 61456.33 | 14333.19 | +328.8% | — | 6.0 |  |
-| arm | 1.0 | 62904.05 | 16147.34 | +289.6% | — | — |  |
-| arm | 2.0 | 60636.60 | 6613.26 | +816.9% | — | 6.2 |  |
-| arm | 3.0 | 65349.98 | 3923.68 | +1565.5% | — | 4.9 |  |
-| arm | 5.0 | 62008.69 | 6177.33 | +903.8% | — | 6.8 |  |
-| arm | 10.0 | 62712.20 | 2702.05 | +2220.9% | — | 5.1 |  |
-| arm | 20.0 | 63811.50 | 1284.95 | +4866.1% | — | 2.4 |  |
+| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG req mean ms | UDP-WG req mean ms | Δreq mean ms% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
+|:----:|------:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| x64 | 0.0 | 56774.09 | 55100.47 | +3.0% | 4.79 | 4.86 | -1.4% | — | — |  |
+| x64 | 0.5 | 53089.27 | 18982.39 | +179.7% | 5.16 | 4.89 | +5.6% | — | — |  |
+| x64 | 1.0 | 57029.97 | 13767.31 | +314.2% | 4.73 | 6.95 | -31.9% | — | 9.5 |  |
+| x64 | 2.0 | 55914.45 | 4499.93 | +1142.6% | 4.88 | 7.43 | -34.3% | — | 13.9 |  |
+| x64 | 3.0 | 52551.60 | 8049.08 | +552.9% | 5.89 | 8.86 | -33.5% | — | 8.5 |  |
+| x64 | 5.0 | 53090.22 | 6093.45 | +771.3% | 5.89 | 8.63 | -31.7% | — | 8.1 |  |
+| x64 | 10.0 | 54509.62 | 2588.13 | +2006.1% | 5.29 | 18.36 | -71.2% | — | 8.1 |  |
+| x64 | 20.0 | 56082.41 | 1298.83 | +4217.9% | 5.15 | 45.75 | -88.7% | — | 3.1 |  |
+| arm | 0.0 | 59726.83 | 59871.76 | -0.2% | 4.29 | 4.24 | +1.1% | — | — |  |
+| arm | 0.5 | 61456.33 | 14333.19 | +328.8% | 3.94 | 4.62 | -14.7% | — | 6.0 |  |
+| arm | 1.0 | 62904.05 | 16147.34 | +289.6% | 3.72 | 5.58 | -33.3% | — | — |  |
+| arm | 2.0 | 60636.60 | 6613.26 | +816.9% | 4.19 | 6.37 | -34.1% | — | 6.2 |  |
+| arm | 3.0 | 65349.98 | 3923.68 | +1565.5% | 3.45 | 7.53 | -54.2% | — | 4.9 |  |
+| arm | 5.0 | 62008.69 | 6177.33 | +903.8% | 3.93 | 9.83 | -60.0% | — | 6.8 |  |
+| arm | 10.0 | 62712.20 | 2702.05 | +2220.9% | 3.66 | 17.43 | -79.0% | — | 5.1 |  |
+| arm | 20.0 | 63811.50 | 1284.95 | +4866.1% | 3.74 | 52.84 | -92.9% | — | 2.4 |  |
 
 ### MED — cross-continent, ~56 ms RTT  (canadacentral ↔ westus2)
 
-| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
-|:----:|------:|---:|---:|---:|---:|---:|---:|
-| x64 | 0.0 | 6317.51 | 6697.39 | -5.7% | — | — |  |
-| x64 | 0.5 | 6322.22 | 5404.42 | +17.0% | — | 10.0 |  |
-| x64 | 1.0 | 6950.51 | 3339.87 | +108.1% | — | 16.8 |  |
-| x64 | 2.0 | 6645.27 | 3872.48 | +71.6% | — | 11.0 |  |
-| x64 | 3.0 | 6860.41 | 2551.19 | +168.9% | — | 6.9 |  |
-| x64 | 5.0 | 6612.50 | 2754.42 | +140.1% | — | 9.5 |  |
-| x64 | 10.0 | 6775.20 | 2153.33 | +214.6% | — | 4.6 |  |
-| x64 | 20.0 | 6635.84 | 1008.69 | +557.9% | — | 4.3 |  |
-| arm | 0.0 | 0.00 | 0.00 |  | 0.8 | 0.6 | +26.0% |
-| arm | 0.5 | 0.00 | 0.00 |  | 0.8 | 0.7 | +14.7% |
-| arm | 1.0 | 0.00 | 0.00 |  | 0.7 | 0.6 | +15.4% |
-| arm | 2.0 | 0.00 | 0.00 |  | 0.8 | 0.7 | +6.3% |
-| arm | 3.0 | 0.00 | 0.00 |  | 0.8 | 0.7 | +11.7% |
-| arm | 5.0 | 0.00 | 0.00 |  | 0.8 | 0.7 | +16.9% |
-| arm | 10.0 | 0.00 | 0.00 |  | 0.8 | 0.6 | +25.6% |
-| arm | 20.0 | 0.00 | 0.00 |  | 0.7 | 0.7 | +11.6% |
+| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG req mean ms | UDP-WG req mean ms | Δreq mean ms% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
+|:----:|------:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| x64 | 0.0 | 6317.51 | 6697.39 | -5.7% | 58.07 | 56.75 | +2.3% | — | — |  |
+| x64 | 0.5 | 6322.22 | 5404.42 | +17.0% | 57.54 | 57.54 | -0.0% | — | 10.0 |  |
+| x64 | 1.0 | 6950.51 | 3339.87 | +108.1% | 56.51 | 60.73 | -7.0% | — | 16.8 |  |
+| x64 | 2.0 | 6645.27 | 3872.48 | +71.6% | 56.74 | 61.90 | -8.3% | — | 11.0 |  |
+| x64 | 3.0 | 6860.41 | 2551.19 | +168.9% | 56.73 | 64.95 | -12.7% | — | 6.9 |  |
+| x64 | 5.0 | 6612.50 | 2754.42 | +140.1% | 56.90 | 69.84 | -18.5% | — | 9.5 |  |
+| x64 | 10.0 | 6775.20 | 2153.33 | +214.6% | 56.68 | 84.78 | -33.1% | — | 4.6 |  |
+| x64 | 20.0 | 6635.84 | 1008.69 | +557.9% | 61.22 | 141.98 | -56.9% | — | 4.3 |  |
+| arm | 0.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.6 | +26.0% |
+| arm | 0.5 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.7 | +14.7% |
+| arm | 1.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.7 | 0.6 | +15.4% |
+| arm | 2.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.7 | +6.3% |
+| arm | 3.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.7 | +11.7% |
+| arm | 5.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.7 | +16.9% |
+| arm | 10.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.8 | 0.6 | +25.6% |
+| arm | 20.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.7 | 0.7 | +11.6% |
 
 ### HIGH — trans-Atlantic, ~195 ms RTT  (canadacentral ↔ westeurope)
 
-| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
-|:----:|------:|---:|---:|---:|---:|---:|---:|
-| x64 | 0.0 | — | 1690.08 |  | — | 5.8 |  |
-| x64 | 0.5 | — | 1650.12 |  | — | 3.4 |  |
-| x64 | 1.0 | — | 1577.13 |  | — | 5.3 |  |
-| x64 | 2.0 | — | 1350.03 |  | — | 3.9 |  |
-| x64 | 3.0 | — | 1219.92 |  | — | 4.3 |  |
-| x64 | 5.0 | — | 1152.73 |  | — | 3.8 |  |
-| x64 | 10.0 | — | 930.60 |  | — | 2.4 |  |
-| x64 | 20.0 | — | 480.68 |  | — | 2.3 |  |
-| arm | 0.0 | — | 2076.40 |  | — | 3.4 |  |
-| arm | 0.5 | — | 1639.19 |  | — | 3.4 |  |
-| arm | 1.0 | — | 1547.71 |  | — | 4.4 |  |
-| arm | 2.0 | — | 1457.13 |  | — | 3.1 |  |
-| arm | 3.0 | — | 1167.94 |  | — | 2.7 |  |
-| arm | 5.0 | — | 1161.13 |  | — | 2.3 |  |
-| arm | 10.0 | — | 910.33 |  | — | 2.4 |  |
-| arm | 20.0 | — | 616.50 |  | — | 2.3 |  |
+| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG req mean ms | UDP-WG req mean ms | Δreq mean ms% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
+|:----:|------:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| x64 | 0.0 | — | 1690.08 |  | — | 223.03 |  | — | 5.8 |  |
+| x64 | 0.5 | — | 1650.12 |  | — | 211.85 |  | — | 3.4 |  |
+| x64 | 1.0 | — | 1577.13 |  | — | 212.99 |  | — | 5.3 |  |
+| x64 | 2.0 | — | 1350.03 |  | — | 227.85 |  | — | 3.9 |  |
+| x64 | 3.0 | — | 1219.92 |  | — | 230.59 |  | — | 4.3 |  |
+| x64 | 5.0 | — | 1152.73 |  | — | 239.33 |  | — | 3.8 |  |
+| x64 | 10.0 | — | 930.60 |  | — | 280.55 |  | — | 2.4 |  |
+| x64 | 20.0 | — | 480.68 |  | — | 399.60 |  | — | 2.3 |  |
+| arm | 0.0 | — | 2076.40 |  | — | 197.00 |  | — | 3.4 |  |
+| arm | 0.5 | — | 1639.19 |  | — | 199.92 |  | — | 3.4 |  |
+| arm | 1.0 | — | 1547.71 |  | — | 204.85 |  | — | 4.4 |  |
+| arm | 2.0 | — | 1457.13 |  | — | 208.32 |  | — | 3.1 |  |
+| arm | 3.0 | — | 1167.94 |  | — | 217.64 |  | — | 2.7 |  |
+| arm | 5.0 | — | 1161.13 |  | — | 236.54 |  | — | 2.3 |  |
+| arm | 10.0 | — | 910.33 |  | — | 273.68 |  | — | 2.4 |  |
+| arm | 20.0 | — | 616.50 |  | — | 356.59 |  | — | 2.3 |  |
 
 ### MAX — trans-Pacific, ~227 ms RTT  (canadacentral ↔ southeastasia)
 
-| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
-|:----:|------:|---:|---:|---:|---:|---:|---:|
-| x64 | 0.0 | — | 1738.41 |  | — | 4.0 |  |
-| x64 | 0.5 | — | 1358.80 |  | — | 5.1 |  |
-| x64 | 1.0 | — | 1263.37 |  | — | 4.7 |  |
-| x64 | 2.0 | — | 1147.53 |  | — | 4.4 |  |
-| x64 | 3.0 | — | 1158.62 |  | — | 2.5 |  |
-| x64 | 5.0 | — | 1093.50 |  | — | 4.1 |  |
-| x64 | 10.0 | — | 709.76 |  | — | 5.0 |  |
-| x64 | 20.0 | — | 401.57 |  | — | 2.8 |  |
-| arm | 0.0 | 0.00 | 0.00 |  | 0.6 | 0.5 | +25.1% |
-| arm | 0.5 | 0.00 | 0.00 |  | 0.6 | 0.5 | +6.6% |
-| arm | 1.0 | 0.00 | 0.00 |  | 0.6 | 1.0 | -43.1% |
-| arm | 2.0 | 0.00 | 0.00 |  | 0.7 | 0.6 | +11.8% |
-| arm | 3.0 | 0.00 | 0.00 |  | 0.7 | 0.6 | +12.7% |
-| arm | 5.0 | 0.00 | 0.00 |  | 0.7 | 0.6 | +16.3% |
-| arm | 10.0 | 0.00 | 0.00 |  | 0.6 | 0.5 | +8.9% |
-| arm | 20.0 | 0.00 | 0.00 |  | 0.6 | 0.5 | +18.7% |
+| arch | loss% | TCP-WG req/s | UDP-WG req/s | Δreq/s% | TCP-WG req mean ms | UDP-WG req mean ms | Δreq mean ms% | TCP-WG CPU% | UDP-WG CPU% | ΔCPU% |
+|:----:|------:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| x64 | 0.0 | — | 1738.41 |  | — | 231.58 |  | — | 4.0 |  |
+| x64 | 0.5 | — | 1358.80 |  | — | 236.53 |  | — | 5.1 |  |
+| x64 | 1.0 | — | 1263.37 |  | — | 238.92 |  | — | 4.7 |  |
+| x64 | 2.0 | — | 1147.53 |  | — | 248.44 |  | — | 4.4 |  |
+| x64 | 3.0 | — | 1158.62 |  | — | 259.68 |  | — | 2.5 |  |
+| x64 | 5.0 | — | 1093.50 |  | — | 273.02 |  | — | 4.1 |  |
+| x64 | 10.0 | — | 709.76 |  | — | 314.78 |  | — | 5.0 |  |
+| x64 | 20.0 | — | 401.57 |  | — | 426.38 |  | — | 2.8 |  |
+| arm | 0.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.6 | 0.5 | +25.1% |
+| arm | 0.5 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.6 | 0.5 | +6.6% |
+| arm | 1.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.6 | 1.0 | -43.1% |
+| arm | 2.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.7 | 0.6 | +11.8% |
+| arm | 3.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.7 | 0.6 | +12.7% |
+| arm | 5.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.7 | 0.6 | +16.3% |
+| arm | 10.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.6 | 0.5 | +8.9% |
+| arm | 20.0 | 0.00 | 0.00 |  | 0.00 | 0.00 |  | 0.6 | 0.5 | +18.7% |
 
 ---
 ---

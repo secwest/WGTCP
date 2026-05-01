@@ -71,14 +71,48 @@ def parse_h2load(path):
     out = {}
     m = re.search(r'finished in [\d.]+\w+,\s*([\d.]+)\s*req/s', text)
     if m: out['req_per_sec'] = float(m.group(1))
-    m = re.search(r'time for request:.*?mean\s+([\d.]+)([um]?s)', text)
+
+    # h2load summary lines look like:
+    #   time for request:      265us     30.27ms      5.56ms      5.64ms    91.40%
+    #   time for connect:     6.92ms     39.38ms     21.54ms      9.97ms    56.00%
+    #   time to 1st byte:    11.46ms     49.40ms     42.08ms      6.98ms    94.00%
+    # columns are: min, max, mean, sd, +/- sd (sd-fraction).
+    def to_ms(v, unit):
+        v = float(v)
+        if unit == 'us': return v / 1000.0
+        if unit == 'ms': return v
+        if unit == 's':  return v * 1000.0
+        return v
+
+    val = r'([\d.]+)(us|ms|s)'
+    triples = [
+        ('req',     r'time for request:'),
+        ('connect', r'time for connect:'),
+        ('ttfb',    r'time to 1st byte:'),
+    ]
+    for prefix, label in triples:
+        pat = label + r'\s+' + val + r'\s+' + val + r'\s+' + val + r'\s+' + val
+        m = re.search(pat, text)
+        if not m: continue
+        mn  = to_ms(m.group(1), m.group(2))
+        mx  = to_ms(m.group(3), m.group(4))
+        avg = to_ms(m.group(5), m.group(6))
+        sd  = to_ms(m.group(7), m.group(8))
+        out[f'{prefix}_min_ms']  = mn
+        out[f'{prefix}_max_ms']  = mx
+        out[f'{prefix}_mean_ms'] = avg
+        out[f'{prefix}_sd_ms']   = sd
+
+    # Failure / status awareness — h2load reports per-status counts.
+    m = re.search(r'status codes:\s*(\d+)\s*2xx,\s*(\d+)\s*3xx,\s*(\d+)\s*4xx,\s*(\d+)\s*5xx', text)
     if m:
-        v = float(m.group(1))
-        unit = m.group(2)
-        if unit == 'us': v /= 1000
-        elif unit == 'ms': pass
-        else: v *= 1000  # 's'
-        out['req_mean_ms'] = v
+        s2,s3,s4,s5 = map(int, m.groups())
+        total = s2+s3+s4+s5
+        out['http_2xx'] = s2
+        out['http_4xx'] = s4
+        out['http_5xx'] = s5
+        if total:
+            out['http_success_pct'] = 100.0 * s2 / total
     return out
 
 def parse_ping(path):
