@@ -36,6 +36,7 @@ param(
     [double[]]$LossPercents   = @(0, 0.5, 1, 2, 3, 5, 10, 20),
     [int]$RunsPerCell         = 3,
     [string[]]$Workloads      = @("short-transfer","long-transfer","web-mix","ssh-interactive"),
+    [string[]]$Tunnels        = @("wireguard-udp","wireguard-tcp-fast"),
     [switch]$KeepResources,
     [switch]$SkipDeploy,
     [switch]$SkipBootstrap,
@@ -327,30 +328,64 @@ if (-not $SkipRun) {
         $null      = New-Item -ItemType Directory -Force -Path $localOut
 
         $jobs += Start-ThreadJob -ThrottleLimit 16 -Name "run-$pairId" -ScriptBlock {
-            param($ip, $user, $key, $aTunIp, $pairId, $localOut, $loss, $runs, $workloads)
-            $opts = @("-i",$key,"-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ConnectTimeout=20","-o","ServerAliveInterval=30")
+            param($ip, $user, $key, $aTunIp, $pairId, $localOut, $loss, $runs, $workloads, $tunnels)
+            $opts = @("-i",$key,"-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ConnectTimeout=120","-o","ServerAliveInterval=60","-o","ServerAliveCountMax=30","-o","ControlMaster=no","-o","TCPKeepAlive=yes")
             $log = Join-Path $localOut "run.log"
             "[$pairId] start $(Get-Date -Format o)" | Out-File $log -Encoding utf8
-            foreach ($tun in @("wireguard-udp","wireguard-tcp-base")) {
+            foreach ($tun in $tunnels) {
                 foreach ($wl in $workloads) {
                     foreach ($l in $loss) {
                         for ($r = 1; $r -le $runs; $r++) {
                             $cellId = "${tun}_${wl}_loss${l}_run${r}"
                             $remoteOut = "/var/tmp/cell-$cellId"
-                            "[$pairId] cell $cellId" | Out-File $log -Append -Encoding utf8
-                            & ssh @opts "$user@$ip" "sudo rm -rf $remoteOut && sudo /opt/wgtcp-perf/run-cell.sh --server-ip $aTunIp --tunnel $tun --workload $wl --loss-pct $l --run-index $r --out-dir $remoteOut" 2>&1 |
-                                Out-File $log -Append -Encoding utf8
-                            $rc = $LASTEXITCODE
                             $cellLocal = Join-Path $localOut $cellId
-                            New-Item -ItemType Directory -Force -Path $cellLocal | Out-Null
-                            & scp @opts -r "${user}@${ip}:$remoteOut/." $cellLocal 2>&1 | Out-File $log -Append -Encoding utf8
-                            "[$pairId] $cellId rc=$rc" | Out-File $log -Append -Encoding utf8
+                            $null = New-Item -ItemType Directory -Force -Path $cellLocal
+                            "[$pairId] cell $cellId" | Out-File $log -Append -Encoding utf8
+
+                            $finalRc = 1
+                            $backoffs = @(60, 180, 300)
+                            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                                # ONE ssh call: run cell, then stream cell.json + bundled raw back
+                                # via stdout markers. No separate scp (avoids the Windows-OpenSSH
+                                # 'banner exchange: Connection to UNKNOWN port -1' scp regression
+                                # observed at high-RTT pairs.)
+                                $remoteCmd = "set -e; sudo rm -rf $remoteOut; sudo /opt/wgtcp-perf/run-cell.sh --server-ip $aTunIp --tunnel $tun --workload $wl --loss-pct $l --run-index $r --out-dir $remoteOut >&2; echo '---CELLJSON---'; sudo cat $remoteOut/cell.json; echo '---ENDCELLJSON---'; echo '---RAWBUNDLE---'; sudo tar c -C $remoteOut raw 2>/dev/null | base64 -w0; echo; echo '---ENDRAWBUNDLE---'"
+                                $bundleFile = Join-Path $cellLocal "_bundle.txt"
+                                & ssh @opts "$user@$ip" $remoteCmd 2> ($bundleFile + ".stderr") > $bundleFile
+                                $rc = $LASTEXITCODE
+                                Get-Content ($bundleFile + ".stderr") -ErrorAction SilentlyContinue | Out-File $log -Append -Encoding utf8
+                                if ($rc -eq 0 -and (Test-Path $bundleFile)) {
+                                    $bundle = Get-Content $bundleFile -Raw
+                                    if ($bundle -match '(?s)---CELLJSON---\r?\n(.+?)\r?\n---ENDCELLJSON---') {
+                                        Set-Content -Path (Join-Path $cellLocal 'cell.json') -Value $matches[1] -NoNewline
+                                    }
+                                    if ($bundle -match '(?s)---RAWBUNDLE---\r?\n([A-Za-z0-9+/=]+)\s*\r?\n---ENDRAWBUNDLE---') {
+                                        try {
+                                            $rawTarPath = Join-Path $cellLocal '_raw.tar'
+                                            [IO.File]::WriteAllBytes($rawTarPath, [Convert]::FromBase64String($matches[1]))
+                                            tar -xf $rawTarPath -C $cellLocal 2>&1 | Out-Null
+                                            Remove-Item $rawTarPath -Force -ErrorAction SilentlyContinue
+                                        } catch {}
+                                    }
+                                    Remove-Item $bundleFile, ($bundleFile + ".stderr") -Force -ErrorAction SilentlyContinue
+                                    $finalRc = 0
+                                    break
+                                }
+                                if ($attempt -lt 3) {
+                                    $sleepSec = $backoffs[$attempt - 1]
+                                    "[$pairId] $cellId attempt $attempt failed (rc=$rc), retrying after ${sleepSec}s" | Out-File $log -Append -Encoding utf8
+                                    Start-Sleep -Seconds $sleepSec
+                                } else {
+                                    "[$pairId] $cellId attempt $attempt failed (rc=$rc), giving up" | Out-File $log -Append -Encoding utf8
+                                }
+                            }
+                            "[$pairId] $cellId rc=$finalRc" | Out-File $log -Append -Encoding utf8
                         }
                     }
                 }
             }
             "[$pairId] done $(Get-Date -Format o)" | Out-File $log -Append -Encoding utf8
-        } -ArgumentList $bIp, $AdminUser, $keyPath, $aTunIp, $pairId, $localOut, $LossPercents, $RunsPerCell, $Workloads
+        } -ArgumentList $bIp, $AdminUser, $keyPath, $aTunIp, $pairId, $localOut, $LossPercents, $RunsPerCell, $Workloads, $Tunnels
     }
     Sub "matrix jobs running: $(($jobs|Measure).Count)"
     Sub "tail any pair: Get-Content $cellsRoot\<pair>\run.log -Wait"
