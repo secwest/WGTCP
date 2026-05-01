@@ -321,14 +321,19 @@ if (-not $SkipRun) {
     $jobs = @()
     foreach ($p in $pairTable) {
         $b = $vms | Where-Object { $_.PairId -eq $p.Id -and $_.Role -eq "B" }
+        $a = $vms | Where-Object { $_.PairId -eq $p.Id -and $_.Role -eq "A" }
         $bIp       = $b.PubIp
+        $aPubIp    = $a.PubIp
         $aTunIp    = "10.99.$($p.Index).1"
         $pairId    = $p.Id
         $localOut  = Join-Path $cellsRoot $pairId
         $null      = New-Item -ItemType Directory -Force -Path $localOut
 
         $jobs += Start-ThreadJob -ThrottleLimit 16 -Name "run-$pairId" -ScriptBlock {
-            param($ip, $user, $key, $aTunIp, $pairId, $localOut, $loss, $runs, $workloads, $tunnels)
+            param($ip, $aPubIp, $user, $key, $aTunIp, $pairId, $localOut, $loss, $runs, $workloads, $tunnels, $rg, $bVmName)
+            # Direct ssh to B (orchestrator is on CorpNetPublic which Azure NSG
+            # NRMS-Rule-103 allows; A->B over Azure Internet would be blocked
+            # by NRMS-Rule-106 deny-tcp-22-from-internet, so proxy-jump is unsafe.)
             $opts = @("-i",$key,"-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ConnectTimeout=120","-o","ServerAliveInterval=60","-o","ServerAliveCountMax=30","-o","ControlMaster=no","-o","TCPKeepAlive=yes")
             $log = Join-Path $localOut "run.log"
             "[$pairId] start $(Get-Date -Format o)" | Out-File $log -Encoding utf8
@@ -340,6 +345,13 @@ if (-not $SkipRun) {
                             $remoteOut = "/var/tmp/cell-$cellId"
                             $cellLocal = Join-Path $localOut $cellId
                             $null = New-Item -ItemType Directory -Force -Path $cellLocal
+
+                            # RESUME: skip if we already have a valid cell.json
+                            $existingJson = Join-Path $cellLocal 'cell.json'
+                            if ((Test-Path $existingJson) -and (Get-Item $existingJson).Length -gt 50) {
+                                "[$pairId] cell $cellId SKIP (already complete)" | Out-File $log -Append -Encoding utf8
+                                continue
+                            }
                             "[$pairId] cell $cellId" | Out-File $log -Append -Encoding utf8
 
                             $finalRc = 1
@@ -385,7 +397,7 @@ if (-not $SkipRun) {
                 }
             }
             "[$pairId] done $(Get-Date -Format o)" | Out-File $log -Append -Encoding utf8
-        } -ArgumentList $bIp, $AdminUser, $keyPath, $aTunIp, $pairId, $localOut, $LossPercents, $RunsPerCell, $Workloads, $Tunnels
+        } -ArgumentList $bIp, $aPubIp, $AdminUser, $keyPath, $aTunIp, $pairId, $localOut, $LossPercents, $RunsPerCell, $Workloads, $Tunnels, $ResourceGroup, $b.Name
     }
     Sub "matrix jobs running: $(($jobs|Measure).Count)"
     Sub "tail any pair: Get-Content $cellsRoot\<pair>\run.log -Wait"
