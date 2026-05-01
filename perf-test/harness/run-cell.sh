@@ -77,8 +77,10 @@ T0_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ip -s link show "$APPLY_IFACE" > "$OUT_DIR/raw/iface-pre.txt"
 sudo dmesg --since "5 minutes ago" > "$OUT_DIR/raw/dmesg-pre.txt" 2>/dev/null || true
 
-# Background CPU & ss sampling
-mpstat -P ALL 1 > "$OUT_DIR/raw/mpstat.log" 2>/dev/null &
+# Background CPU & ss sampling (0.5s interval — captures at least 1 sample
+# even for sub-second workloads like h2load on LAN. Earlier 1s interval
+# produced empty mpstat.log on ~98 web-mix cells.)
+mpstat -P ALL 0.5 > "$OUT_DIR/raw/mpstat.log" 2>/dev/null &
 MPSTAT_PID=$!
 ( while true; do ss -ti >> "$OUT_DIR/raw/ss-snapshots.txt" 2>/dev/null || true
   echo "--- $(date -u +%s) ---" >> "$OUT_DIR/raw/ss-snapshots.txt"
