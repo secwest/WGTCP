@@ -45,7 +45,9 @@ for (pair, tun, wl, loss), runs in groups.items():
     agg = {}
     for k in ('cpu_pct_mean','goodput_tcp_mbps','goodput_udp_mbps',
               'rtt_mean_ms','rtt_max_ms','rtt_mdev_ms','observed_loss_pct',
-              'req_per_sec','ttfb_p50_ms','ttfb_p95_ms','retrans_count'):
+              'req_per_sec','ttfb_p50_ms','ttfb_p95_ms','retrans_count',
+              'req_mean_ms','req_max_ms','req_sd_ms',
+              'connect_mean_ms','ttfb_mean_ms','ttfb_max_ms','http_success_pct'):
         agg[k] = mean([r.get(k) for r in runs])
     agg['n'] = len(runs)
     data[pair][wl][loss][tun] = agg
@@ -161,7 +163,7 @@ L.append("")
 L.append("- **VM size = 2 vCPU** (D2s_v5 x64, D2ps_v6 arm). CPU-bound workloads (especially bulk-TCP at LAN) are partly capped by VM capacity; bigger boxes would push more Mbps. Bulk-UDP is iperf-rate-capped at 1 Gbps and not VM-bound.")
 L.append("- **Loss model** is uniform random `tc netem` on the carrier `eth0` at one peer. Real-WAN loss is typically burstier and correlated; magnitudes here are representative but not predictive of any specific path.")
 L.append("- **§ 3 short-HTTPS does not reuse TLS connections** — each of the 200 GETs is a fresh TLS 1.3 handshake. This is a TLS-heavy worst-case (think naive REST clients, dumb health checks). Browsers with keep-alive would see higher absolute req/s on both tunnels and a smaller (but still positive) Δ%.")
-L.append("- **§ 4 web-mix latency** is not extracted yet — `h2load` summary parsing for p50/p95 is a TODO in `parse-cell.py`. Only req/s is shown.")
+L.append("- **§ 4 web-mix endpoint returns 4xx**: the current test endpoint serves 4xx for all 5000 requests. Throughput numbers reflect 4xx-serving speed; latency / TTFB / connect are still valid as TLS+HTTP/2 RTT measurements through the tunnel. Fix the endpoint serving and re-run web-mix to get real-content throughput.")
 L.append("- **§ 5 ssh-interactive RTT is ICMP**, not ssh keystroke-echo RTT. The keystroke `.tsv` log is captured per cell but not aggregated.")
 L.append("- **iperf3 uses `-P 4`** for bulk-TCP — 4 parallel streams. Single-stream TCP throughput would be lower, especially at long RTT where window-scaling is the limit. h2load uses `-c 50 -m 10` (50 connections × 10 streams).")
 L.append("- **MTU**: WG default 1420 inside; UDP iperf uses `-l 1200` to fit comfortably.")
@@ -205,11 +207,14 @@ emit_section(L,
 # 4. web-mix
 emit_section(L,
     title="4. Web mix (HTTP/2 + h2load)",
-    intro="`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. *(h2load latency parsing not yet wired into parse-cell.py; CPU is captured but no per-request latency.)*",
+    intro="`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. **Latency** = mean time per HTTP/2 request. *(Caveat: the test endpoint currently returns 4xx for all 5000 requests, so the throughput numbers reflect how fast nginx serves the 4xx response, not real content. The latency / TTFB / connect timings are still meaningful as TLS-handshake + HTTP/2 RTT measurements through the tunnel — TTFB and connect mean are in matrix.csv but omitted here for compactness.)*",
     workload='web-mix',
     primary_key='req_per_sec',
     primary_label='req/s',
     primary_nd=2,
+    latency_key='req_mean_ms',
+    latency_label='req mean ms',
+    latency_nd=2,
 )
 
 # 5. ssh-interactive
