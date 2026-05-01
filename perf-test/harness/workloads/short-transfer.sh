@@ -13,6 +13,7 @@ echo -e "size\tttfb_ms\tconnect_ms\ttotal_ms\thttp_code" > "$OUT"
 for i in $(seq 1 200); do
   for sz in 1k 64k 1m; do
     curl -k -s -o /dev/null \
+        --connect-timeout 10 --max-time 30 \
         -w "${sz}\t%{time_starttransfer}\t%{time_connect}\t%{time_total}\t%{http_code}\n" \
         --resolve "perf:443:$PEER" \
         "https://perf/static/${sz}.bin" >> "$OUT"
