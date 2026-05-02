@@ -40,9 +40,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---- 1. select tunnel iface
 case "$TUNNEL" in
-  wireguard-udp)      WG_IFACE="wg-udp0";  OTHER_IFACE="wg-tcp0" ;;
-  wireguard-tcp-base) WG_IFACE="wg-tcp0";  OTHER_IFACE="wg-udp0" ;;
-  baseline)           WG_IFACE="";         OTHER_IFACE="" ;;
+  wireguard-udp)                          WG_IFACE="wg-udp0";  OTHER_IFACE="wg-tcp0" ;;
+  wireguard-tcp-base|wireguard-tcp-fast)  WG_IFACE="wg-tcp0";  OTHER_IFACE="wg-udp0" ;;
+  baseline)                               WG_IFACE="";         OTHER_IFACE="" ;;
   *) echo "unknown tunnel: $TUNNEL"; exit 2 ;;
 esac
 
@@ -77,10 +77,12 @@ T0_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ip -s link show "$APPLY_IFACE" > "$OUT_DIR/raw/iface-pre.txt"
 sudo dmesg --since "5 minutes ago" > "$OUT_DIR/raw/dmesg-pre.txt" 2>/dev/null || true
 
-# Background CPU & ss sampling (0.5s interval — captures at least 1 sample
-# even for sub-second workloads like h2load on LAN. Earlier 1s interval
-# produced empty mpstat.log on ~98 web-mix cells.)
-mpstat -P ALL 0.5 > "$OUT_DIR/raw/mpstat.log" 2>/dev/null &
+# Background CPU & ss sampling. mpstat in sysstat 12.6.1 (Ubuntu 24.04) does
+# NOT accept fractional intervals — `mpstat -P ALL 0.5` exits rc=1 with a
+# usage error, producing an empty log. Stick to integer 1s interval.
+# Sub-second workloads (h2load on LAN) get at least one sample via the
+# `sleep 2` idle pad inside web-mix.sh.
+mpstat -P ALL 1 > "$OUT_DIR/raw/mpstat.log" 2>/dev/null &
 MPSTAT_PID=$!
 ( while true; do ss -ti >> "$OUT_DIR/raw/ss-snapshots.txt" 2>/dev/null || true
   echo "--- $(date -u +%s) ---" >> "$OUT_DIR/raw/ss-snapshots.txt"
