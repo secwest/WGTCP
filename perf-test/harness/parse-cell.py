@@ -86,26 +86,29 @@ def parse_h2load(path):
     text = p2.read_text()
     out = {}
 
-    # If the run failed entirely (no requests succeeded) emit no latency/req
-    # metrics. Otherwise h2load prints "0us 0us 0us 0us 0.00%" lines and the
-    # parser would faithfully emit zero TTFB / req-rate, which downstream is
-    # indistinguishable from a real measurement.  Detect by looking at the
-    # 'requests:' status line.
+    # The 'requests:' line reports total/started/done/succeeded/failed/errored.
+    # h2load classifies any non-2xx (e.g. 4xx) response as "failed" — but the
+    # response was still received and timed correctly, so the latency / req-rate
+    # numbers are meaningful HTTP-over-TLS-over-WG measurements regardless of
+    # HTTP status code.  Only "errored" means no response (connection failure).
+    # We therefore emit metrics whenever done > 0 and not all errored.
     m_req = re.search(
-        r'requests:\s*(\d+)\s*total,\s*\d+\s*started,\s*\d+\s*done,\s*'
-        r'(\d+)\s*succeeded,\s*\d+\s*failed,\s*(\d+)\s*errored',
+        r'requests:\s*(\d+)\s*total,\s*\d+\s*started,\s*(\d+)\s*done,\s*'
+        r'(\d+)\s*succeeded,\s*(\d+)\s*failed,\s*(\d+)\s*errored',
         text,
     )
     if m_req:
         total_req  = int(m_req.group(1))
-        succeeded  = int(m_req.group(2))
-        errored    = int(m_req.group(3))
+        done       = int(m_req.group(2))
+        succeeded  = int(m_req.group(3))
+        failed_4xx = int(m_req.group(4))
+        errored    = int(m_req.group(5))
         out['h2load_total']     = total_req
+        out['h2load_done']      = done
         out['h2load_succeeded'] = succeeded
+        out['h2load_failed']    = failed_4xx
         out['h2load_errored']   = errored
-        if total_req == 0 or succeeded == 0:
-            # No usable data; surface only the status counts so callers can
-            # detect the failure and emit em-dashes.
+        if done == 0 or done == errored:
             return out
 
     m = re.search(r'finished in [\d.]+\w+,\s*([\d.]+)\s*req/s', text)
