@@ -72,7 +72,7 @@ def parse_curl_tsv(path):
       'n_curl_attempts':  len(rows),
       'n_curl_ok':        n_ok,
     }
-    if totals_all:
+    if totals_all and n_ok >= 10:
         out['req_per_sec'] = n_ok / (sum(totals_all) / 1000.0)
     if n_ok >= 10:
         out['ttfb_p50_ms'] = ttfbs[n_ok // 2]
@@ -85,6 +85,29 @@ def parse_h2load(path):
     if not p2.exists(): return {}
     text = p2.read_text()
     out = {}
+
+    # If the run failed entirely (no requests succeeded) emit no latency/req
+    # metrics. Otherwise h2load prints "0us 0us 0us 0us 0.00%" lines and the
+    # parser would faithfully emit zero TTFB / req-rate, which downstream is
+    # indistinguishable from a real measurement.  Detect by looking at the
+    # 'requests:' status line.
+    m_req = re.search(
+        r'requests:\s*(\d+)\s*total,\s*\d+\s*started,\s*\d+\s*done,\s*'
+        r'(\d+)\s*succeeded,\s*\d+\s*failed,\s*(\d+)\s*errored',
+        text,
+    )
+    if m_req:
+        total_req  = int(m_req.group(1))
+        succeeded  = int(m_req.group(2))
+        errored    = int(m_req.group(3))
+        out['h2load_total']     = total_req
+        out['h2load_succeeded'] = succeeded
+        out['h2load_errored']   = errored
+        if total_req == 0 or succeeded == 0:
+            # No usable data; surface only the status counts so callers can
+            # detect the failure and emit em-dashes.
+            return out
+
     m = re.search(r'finished in [\d.]+\w+,\s*([\d.]+)\s*req/s', text)
     if m: out['req_per_sec'] = float(m.group(1))
 
