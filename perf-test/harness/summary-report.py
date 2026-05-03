@@ -163,7 +163,7 @@ L.append("")
 L.append("- **VM size = 2 vCPU** (D2s_v5 x64, D2ps_v6 arm). CPU-bound workloads (especially bulk-TCP at LAN) are partly capped by VM capacity; bigger boxes would push more Mbps. Bulk-UDP is iperf-rate-capped at 1 Gbps and not VM-bound.")
 L.append("- **Loss model** is uniform random `tc netem` on the carrier `eth0` at one peer. Real-WAN loss is typically burstier and correlated; magnitudes here are representative but not predictive of any specific path.")
 L.append("- **§ 3 short-HTTPS does not reuse TLS connections** — each of the 200 GETs is a fresh TLS 1.3 handshake. This is a TLS-heavy worst-case (think naive REST clients, dumb health checks). Browsers with keep-alive would see higher absolute req/s on both tunnels and a smaller (but still positive) Δ%.")
-L.append("- **§ 4 web-mix endpoint returns 4xx**: the current test endpoint serves 4xx for all 5000 requests. Throughput numbers reflect 4xx-serving speed; latency / TTFB / connect are still valid as TLS+HTTP/2 RTT measurements through the tunnel. Fix the endpoint serving and re-run web-mix to get real-content throughput.")
+L.append("- **§ 4 web-mix on LAN-x64 TCP-WG**: h2load opens 50 simultaneous TLS handshakes; on the near-zero-RTT LAN tunnel the wg-tcp transport is unable to absorb the connection burst and h2load reports 5000/5000 errored. Other workloads on the same tunnel (short-/long-transfer, ssh) work normally. This appears to be a wg-tcp behavioral characteristic at LAN-RTT, not a harness bug. Web-mix on LAN-x64 TCP-WG is therefore left blank in the table.")
 L.append("- **§ 5 ssh-interactive RTT is ICMP**, not ssh keystroke-echo RTT. The keystroke `.tsv` log is captured per cell but not aggregated.")
 L.append("- **iperf3 uses `-P 4`** for bulk-TCP — 4 parallel streams. Single-stream TCP throughput would be lower, especially at long RTT where window-scaling is the limit. h2load uses `-c 50 -m 10` (50 connections × 10 streams).")
 L.append("- **MTU**: WG default 1420 inside; UDP iperf uses `-l 1200` to fit comfortably.")
@@ -207,7 +207,7 @@ emit_section(L,
 # 4. web-mix
 emit_section(L,
     title="4. Web mix (HTTP/2 + h2load)",
-    intro="`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. **Latency** = mean time per HTTP/2 request. *(Caveat: the test endpoint currently returns 4xx for all 5000 requests, so the throughput numbers reflect how fast nginx serves the 4xx response, not real content. The latency / TTFB / connect timings are still meaningful as TLS-handshake + HTTP/2 RTT measurements through the tunnel — TTFB and connect mean are in matrix.csv but omitted here for compactness.)*",
+    intro="`h2load -n 5000 -c 50 -m 10` over HTTPS/h2 — multiplexed mixed-size object pull. **Throughput** = total req/s. **Latency** = mean time per HTTP/2 request. All cells are 5000/5000 succeeded with 200 responses unless otherwise noted; blanks in this table indicate cells where h2load could not establish its 50-connection burst on the wg-tcp transport (see Caveats §4).",
     workload='web-mix',
     primary_key='req_per_sec',
     primary_label='req/s',

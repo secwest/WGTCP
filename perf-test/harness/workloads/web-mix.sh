@@ -15,7 +15,6 @@ RAW="$2"
 # 5000/5000 errored cells. Warmup is a ~1ms no-op when tunnel is healthy.
 curl -k --http2 --connect-timeout 5 --max-time 10 \
     -o /dev/null -sS \
-    --header "Host: perf" \
     "https://$PEER:8443/index.html" \
     > "$RAW/warmup-curl.log" 2>&1 || true
 
@@ -29,7 +28,6 @@ H2LOAD_OK=0
 for ATTEMPT in 1 2 3; do
     LOG="$RAW/h2load-attempt${ATTEMPT}.log"
     h2load -n 5000 -c 50 -m 10 -t 2 \
-        --header "Host: perf" \
         "https://$PEER:8443/index.html" \
         > "$LOG" 2>&1 || true
     # "requests: N total, M started" — accept when M > 0
