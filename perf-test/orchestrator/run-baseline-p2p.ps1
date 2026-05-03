@@ -40,6 +40,7 @@ param(
     [switch]$KeepResources,
     [switch]$SkipDeploy,
     [switch]$SkipBootstrap,
+    [switch]$SkipTunnelSetup,
     [switch]$SkipRun,
     [switch]$SkipAggregate
 )
@@ -262,6 +263,22 @@ if (-not $SkipBootstrap) {
         RunSsh $vm.PubIp "umask 077; mkdir -p ~/wg && (test -f ~/wg/me.key || (wg genkey | tee ~/wg/me.key | wg pubkey > ~/wg/me.pub))"
         $vm.WgPub = (& ssh @sshOpts "$AdminUser@$($vm.PubIp)" "cat ~/wg/me.pub").Trim()
         Sub "$($vm.Name) wgPub=$($vm.WgPub)"
+    }
+}
+
+# =========================================================================
+# 2b. TUNNEL SETUP — runs unless -SkipTunnelSetup. Independent of bootstrap
+# so a -SkipBootstrap re-run still re-establishes tunnels (e.g. after a VM
+# restart wiped the wg interfaces, or after harness/key rotation).
+# Requires WgPub on each $vm; if -SkipBootstrap was set we read it now.
+# =========================================================================
+if (-not $SkipTunnelSetup) {
+    if ($SkipBootstrap) {
+        Step "Read WG pubkeys (bootstrap was skipped)"
+        foreach ($vm in $vms) {
+            $vm.WgPub = (& ssh @sshOpts "$AdminUser@$($vm.PubIp)" "cat ~/wg/me.pub" 2>&1).Trim()
+            Sub "$($vm.Name) wgPub=$($vm.WgPub)"
+        }
     }
 
     Step "Bring up tunnels (point-to-point)"
