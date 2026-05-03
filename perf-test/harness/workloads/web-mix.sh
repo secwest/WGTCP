@@ -18,13 +18,15 @@ curl -k --http2 --connect-timeout 5 --max-time 10 \
     "https://$PEER:8443/index.html" \
     > "$RAW/warmup-curl.log" 2>&1 || true
 
-# Run h2load with up to 3 attempts. If the result is "0 started" (TCP
-# connections never established — symptomatic of a transient wg-tcp
-# burst wedge that typically clears within seconds), pause 5s and retry
-# with identical parameters. Canonical h2load.log = first attempt that
-# starts at least one request; diagnostic logs from all attempts are
-# preserved as h2load-attempt{N}.log so failures stay observable.
+# Run h2load with up to 3 attempts at -c 50, then a 4th attempt at -c 10
+# as a fallback. The 50-connection TLS burst overwhelms wg-tcp's reorder
+# logic at high RTT × loss (HIGH-x64 ≥1% loss observed empirically). The
+# -c 10 fallback gives the carrier TCP enough room to handshake all
+# connections before any retransmits arrive, while still exercising HTTP/2
+# multiplexing (10 conns × 10 streams = 100 in-flight) to get a meaningful
+# req/s number. Cells captured via the fallback set h2load_fallback=1.
 H2LOAD_OK=0
+H2LOAD_FALLBACK=0
 for ATTEMPT in 1 2 3; do
     LOG="$RAW/h2load-attempt${ATTEMPT}.log"
     h2load -n 5000 -c 50 -m 10 -t 2 \
@@ -42,8 +44,22 @@ for ATTEMPT in 1 2 3; do
 done
 
 if [ "$H2LOAD_OK" = "0" ]; then
+    LOG="$RAW/h2load-fallback.log"
+    h2load -n 5000 -c 10 -m 10 -t 2 \
+        "https://$PEER:8443/index.html" \
+        > "$LOG" 2>&1 || true
+    if grep -qE "requests: [0-9]+ total, [1-9][0-9]* started" "$LOG"; then
+        cp "$LOG" "$RAW/h2load.log"
+        H2LOAD_OK=1
+        H2LOAD_FALLBACK=1
+        echo "$H2LOAD_FALLBACK" > "$RAW/h2load-fallback.flag"
+        echo "web-mix fallback (-c 10): started>0, accepting" >&2
+    fi
+fi
+
+if [ "$H2LOAD_OK" = "0" ]; then
     cp "$RAW/h2load-attempt3.log" "$RAW/h2load.log"
-    echo "web-mix: all 3 attempts had 0 started — recording failed cell" >&2
+    echo "web-mix: all attempts had 0 started — recording failed cell" >&2
 fi
 
 # h2load on LAN cells finishes in <1s — short enough that mpstat's first
