@@ -276,7 +276,8 @@ if (-not $SkipTunnelSetup) {
     if ($SkipBootstrap) {
         Step "Read WG pubkeys (bootstrap was skipped)"
         foreach ($vm in $vms) {
-            $vm.WgPub = (& ssh @sshOpts "$AdminUser@$($vm.PubIp)" "cat ~/wg/me.pub" 2>&1).Trim()
+            $raw = & ssh @sshOpts "$AdminUser@$($vm.PubIp)" "cat ~/wg/me.pub" 2>$null
+            $vm.WgPub = ([string]$raw).Trim()
             Sub "$($vm.Name) wgPub=$($vm.WgPub)"
         }
     }

@@ -80,10 +80,10 @@ EOF
 write_conf "$UDP_IFACE" udp "$MY_UDP_PORT" "$PEER_UDP_PORT"
 write_conf "$TCP_IFACE" tcp "$MY_TCP_PORT" "$PEER_TCP_PORT"
 
-sudo wg-quick down "$UDP_IFACE" 2>/dev/null || true
-sudo wg-quick down "$TCP_IFACE" 2>/dev/null || true
-sudo ip link delete "$UDP_IFACE" 2>/dev/null || true
-sudo ip link delete "$TCP_IFACE" 2>/dev/null || true
+sudo timeout 10 wg-quick down "$UDP_IFACE" 2>/dev/null || true
+sudo timeout 10 wg-quick down "$TCP_IFACE" 2>/dev/null || true
+sudo timeout 5 ip link delete "$UDP_IFACE" 2>/dev/null || true
+sudo timeout 5 ip link delete "$TCP_IFACE" 2>/dev/null || true
 sudo wg-quick up "$UDP_IFACE"
 sudo wg-quick up "$TCP_IFACE"
 
