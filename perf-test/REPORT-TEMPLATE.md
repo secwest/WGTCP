@@ -1,4 +1,4 @@
-# Performance Report — WireguardTCP-FAST v<VERSION>
+# Performance Report — WireguardTCP v<VERSION>
 
 > Template. Fill in for each version. Commit the completed report under
 > `perf-test/results/v<VERSION>/REPORT.md`.
@@ -16,14 +16,14 @@
 
 ## 1. Headline numbers
 
-| Region pair | Workload | Stock UDP (Mbps) | TCP-FAST (Mbps) | Delta | Loss tolerance crossover |
+| Region pair | Workload | Stock UDP (Mbps) | TCP baseline (Mbps) | Delta | Loss tolerance crossover |
 |---|---|---|---|---|---|
 | LAN | long-transfer | | | | |
 | MED | long-transfer | | | | |
 | HIGH | long-transfer | | | | |
 | MAX | long-transfer | | | | |
 
-> "Loss tolerance crossover" = lowest loss% at which TCP-FAST goodput
+> "Loss tolerance crossover" = lowest loss% at which TCP baseline goodput
 > exceeds UDP goodput by more than the noise floor.
 
 ## 2. Hypothesis disposition
@@ -34,7 +34,7 @@
 |---|---|---|---|
 | H1 | Short distance, clean: parity | confirm/refute | cite cells |
 | H2 | Long distance, clean: parity | confirm/refute | cite cells |
-| H3 | ≥1% loss: TCP-FAST wins | confirm/refute | cite cells |
+| H3 | ≥1% loss: TCP baseline wins | confirm/refute | cite cells |
 | H4 | ≥10% loss: UDP collapses, TCP graceful | confirm/refute | cite cells |
 | H5 | ARM64 ≥ 80% throughput at <80% CPU | confirm/refute | cite cells |
 
@@ -57,7 +57,7 @@
 
 | Metric | v<prev> | v<this> | Δ | Significance |
 |---|---|---|---|---|
-| LAN long-transfer goodput (TCP-FAST) | | | | |
+| LAN long-transfer goodput (TCP baseline) | | | | |
 | HIGH long-transfer goodput at 5% loss | | | | |
 | ARM64 web-mix req/s | | | | |
 

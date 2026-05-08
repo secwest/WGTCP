@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Full multi-pair, multi-region WireguardTCP-FAST performance campaign.
+    Full multi-pair, multi-region WireguardTCP performance campaign.
 
 .DESCRIPTION
     Provisions one resource group with up to 8 region-pairs (LAN-x64,
@@ -60,7 +60,7 @@ $null = New-Item -ItemType Directory -Force -Path $ResultsDir
 
 $subId   = "87243d30-26d0-4f86-bd4e-198f8befe9fa"
 $gallery = "wireguardtcp_gallery"
-$galleryRg = "RG-WIREGUARDTCP-FAST"
+$galleryRg = "RG-WIREGUARDTCP"
 $imgX64 = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-tls/versions/$ImageVersionX64"
 $imgArm = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-arm64-tls/versions/$ImageVersionArm"
 

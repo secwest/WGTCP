@@ -1,8 +1,8 @@
-# Test Plan — WireguardTCP-FAST vs WireGuard UDP
+# Test Plan — WireguardTCP vs WireGuard UDP
 
 ## 1. Goals
 
-1. Quantify how WireguardTCP-FAST (TCP transport with adaptive CC + DSACK +
+1. Quantify how WireguardTCP (TCP transport with adaptive CC + DSACK +
    four-zone tuning) compares against stock WireGuard (UDP) in workloads that
    stress the tunnel differently:
    - bulk goodput (long file transfers),

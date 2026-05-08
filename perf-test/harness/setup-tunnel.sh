@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-tunnel.sh — idempotent. Brings up one (UDP, TCP-FAST) tunnel pair
+# setup-tunnel.sh — idempotent. Brings up one (UDP, TCP baseline) tunnel pair
 # between two peers. Defaults match the smoke-test layout (wg-udp0/wg-tcp0
 # on ports 51820/51821, /24 tunnel net at 10.99.0.x).
 #
@@ -64,9 +64,9 @@ write_conf() {
 PrivateKey = $(cat "$PRIV")
 Address    = ${MYIP}/${TUNNEL_CIDR}
 ListenPort = ${my_port}
-# Custom param consumed by WireguardTCP-FAST:
+# Custom param consumed by WireguardTCP:
 #   transport=udp -> stock UDP behaviour (control case)
-#   transport=tcp -> TCP-FAST transport
+#   transport=tcp -> TCP baseline transport
 Transport  = ${transport}
 
 [Peer]

@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Full multi-pair, multi-region WireguardTCP BASELINE performance campaign.
+    Full multi-pair, multi-region WireguardTCP baseline performance campaign.
     Forked from run-full-campaign.ps1; uses the baseline gallery image
     (wireguardtcp-ubuntu24-tls{,-arm64}) for cell-for-cell comparison
-    against the FAST campaign output.
+    against the baseline campaign output.
 
 .DESCRIPTION
     Provisions one resource group with up to 8 region-pairs (LAN-x64,
@@ -63,7 +63,7 @@ $null = New-Item -ItemType Directory -Force -Path $ResultsDir
 
 $subId   = "87243d30-26d0-4f86-bd4e-198f8befe9fa"
 $gallery = "wireguardtcp_gallery"
-$galleryRg = "RG-WIREGUARDTCP-FAST"
+$galleryRg = "RG-WIREGUARDTCP"
 $imgX64 = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-tls/versions/$ImageVersionX64"
 $imgArm = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-arm64-tls/versions/$ImageVersionArm"
 
