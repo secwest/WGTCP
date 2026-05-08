@@ -148,7 +148,7 @@ Replicating a TrustedLaunchSupported image version to 3 extra regions:
 
 ---
 
-## 7. Quota check (BareMetalFuzzer subscription, observed 2026-04-27)
+## 7. Quota check (observed 2026-04-27)
 
 | Region | DSv5 (cores) used/limit | DPSv5 (cores) used/limit | DPSv6 (cores) used/limit | OK? |
 |---|---|---|---|---|
