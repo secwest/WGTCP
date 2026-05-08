@@ -179,8 +179,8 @@ az sig image-version show -r wireguardtcp_gallery -g RG-WIREGUARDTCP-FAST `
 ## 6. Run the campaign
 
 ```pwsh
-git clone https://github.com/secwest/WireguardTCP-FAST.git
-cd WireguardTCP-FAST
+git clone https://github.com/secwest/WireguardTCP.git
+cd WireguardTCP
 git checkout tcp
 
 # Smoke test first (recommended; ~$0.50, ~30 min) — proves the harness is good.
@@ -226,7 +226,7 @@ perf-test/results/v1.0.2/
 
 ## 7. Comparing two module versions
 
-To regression-test a new TCP-FAST build:
+To regression-test a new TCP build:
 
 1. Build a new gallery image-version (see `azure-images/RUNBOOK.md`).
 2. Replicate to all four regions.
