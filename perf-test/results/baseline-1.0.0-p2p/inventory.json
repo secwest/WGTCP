@@ -21,7 +21,7 @@
       "Region": "canadacentral",
       "Name": "vm-high-x64-a",
       "Size": "Standard_D2s_v5",
-      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
       "PubIp": "20.104.55.162",
       "PrivIp": "10.50.0.4",
       "WgPub": ""
@@ -35,7 +35,7 @@
       "Region": "australiaeast",
       "Name": "vm-high-x64-b",
       "Size": "Standard_D2s_v5",
-      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP-FAST/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
+      "Image": "/subscriptions/87243d30-26d0-4f86-bd4e-198f8befe9fa/resourceGroups/RG-WIREGUARDTCP/providers/Microsoft.Compute/galleries/wireguardtcp_gallery/images/wireguardtcp-ubuntu24-tls/versions/1.0.0",
       "PubIp": "20.193.76.156",
       "PrivIp": "10.50.0.4",
       "WgPub": ""

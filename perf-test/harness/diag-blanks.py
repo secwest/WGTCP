@@ -22,7 +22,7 @@ for cj in cells_dir.rglob('cell.json'):
     try: doc = json.loads(cj.read_text())
     except Exception: continue
     ax = doc.get('axes', {})
-    tun = ax.get('tunnel','?').replace('wireguard-tcp-fast','wireguard-tcp-base')
+    tun = ax.get('tunnel','?').replace('wireguard-tcp-base','wireguard-tcp-base')
     wl = ax.get('workload','?')
     loss = ax.get('loss_pct','?')
     if args.workload and wl != args.workload: continue

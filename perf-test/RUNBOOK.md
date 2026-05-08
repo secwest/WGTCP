@@ -1,10 +1,10 @@
 # Performance Campaign RUNBOOK
 
 End-to-end recipe for an LLM agent (or human operator) to reproduce the
-WireguardTCP-FAST performance test campaign from a clean Azure subscription.
+WireguardTCP performance test campaign from a clean Azure subscription.
 
 The campaign measures four workloads (`short-transfer`, `long-transfer`,
-`web-mix`, `ssh-interactive`) over two tunnel modes (stock UDP, TCP-FAST),
+`web-mix`, `ssh-interactive`) over two tunnel modes (stock UDP, TCP baseline),
 across four latency tiers (LAN / MED / HIGH / MAX) and two CPU
 architectures (x64, arm64), at eight packet-loss rates (0, 0.5, 1, 2, 3,
 5, 10, 20%) with three runs per cell.
@@ -40,7 +40,7 @@ themselves run on Linux.
 
 ### Source artefacts
 
-- `wireguardtcp_gallery` Shared Image Gallery in `RG-WIREGUARDTCP-FAST`
+- `wireguardtcp_gallery` Shared Image Gallery in `RG-WIREGUARDTCP`
   containing image versions for both architectures, replicated to all
   four target regions:
   - `wireguardtcp-ubuntu24-tls` (x64) ≥ v1.0.2
@@ -74,7 +74,7 @@ themselves run on Linux.
 - Two **hubs** in canadacentral (one x64, one arm64) each terminate one
   LAN peer and three cross-region peers concurrently.
 - Each peer pair runs over a **distinct WireGuard /30** and **distinct
-  UDP port pair** (`51820+2N` for stock UDP, `51821+2N` for TCP-FAST,
+  UDP port pair** (`51820+2N` for stock UDP, `51821+2N` for TCP baseline,
   with `N = pair index`):
 
 | Pair | Hub iface | Spoke | Hub /30 IP | Spoke /30 IP | UDP port | TCP port |
@@ -95,7 +95,7 @@ LAN-arm, 6 cross-region spokes).
 NSGs allow:
 - TCP/22 from operator IP (or 0.0.0.0/0 if pre-authenticated)
 - UDP/51820–51827 from peer public IPs
-- TCP/51820–51827 from peer public IPs (TCP-FAST uses TCP for the
+- TCP/51820–51827 from peer public IPs (TCP baseline uses TCP for the
   outer transport)
 
 ---
@@ -160,7 +160,7 @@ The gallery image versions must exist in every campaign region:
 ```pwsh
 foreach ($img in @("wireguardtcp-ubuntu24-tls","wireguardtcp-ubuntu24-arm64-tls")) {
     $ver = if ($img -match "arm64") { "1.0.0" } else { "1.0.2" }
-    az sig image-version update -r wireguardtcp_gallery -g RG-WIREGUARDTCP-FAST -i $img -e $ver `
+    az sig image-version update -r wireguardtcp_gallery -g RG-WIREGUARDTCP -i $img -e $ver `
         --target-regions "Canada Central" "West US 3" "Australia East" "South Africa North" `
         --no-wait
 }
@@ -169,7 +169,7 @@ foreach ($img in @("wireguardtcp-ubuntu24-tls","wireguardtcp-ubuntu24-arm64-tls"
 Replication is ~30–60 minutes per region per definition. Verify:
 
 ```pwsh
-az sig image-version show -r wireguardtcp_gallery -g RG-WIREGUARDTCP-FAST `
+az sig image-version show -r wireguardtcp_gallery -g RG-WIREGUARDTCP `
     -i wireguardtcp-ubuntu24-tls -e 1.0.2 `
     --query "publishingProfile.targetRegions[].name" -o tsv
 ```
@@ -300,14 +300,14 @@ sudo ip link delete wg-tcp0 2>/dev/null || true
 sudo wg-quick up wg-tcp0
 ```
 
-### E. `ip -s link` shows zero bytes for tcp-fast
+### E. `ip -s link` shows zero bytes for tcp-base
 
-The TCP-FAST module forwards via a different code path; `ip -s link`
+The TCP baseline module forwards via a different code path; `ip -s link`
 under-reports. Use `wg show <iface> dump` for accurate counters.
 
 ### F. dmesg false-positive anomalies
 
-The TCP-FAST module emits informational `wireguard:` lines that look
+The TCP baseline module emits informational `wireguard:` lines that look
 scary but are normal handshake traces. `parse-cell.py` regex is tuned
 to require `error|fail|drop|reject|timeout` to flag.
 
@@ -338,5 +338,5 @@ If empty: re-run the perfuser key-injection block in the orchestrator.
 az group delete -n rg-wgtcp-perf --yes --no-wait
 ```
 
-The campaign image gallery (`RG-WIREGUARDTCP-FAST`) is *not* deleted —
+The campaign image gallery (`RG-WIREGUARDTCP`) is *not* deleted —
 it's the long-lived artefact. Only the per-campaign RG is recycled.

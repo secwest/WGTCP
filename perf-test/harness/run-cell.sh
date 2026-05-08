@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---- 1. select tunnel iface
 case "$TUNNEL" in
   wireguard-udp)                          WG_IFACE="wg-udp0";  OTHER_IFACE="wg-tcp0" ;;
-  wireguard-tcp-base|wireguard-tcp-fast)  WG_IFACE="wg-tcp0";  OTHER_IFACE="wg-udp0" ;;
+  wireguard-tcp-base)                     WG_IFACE="wg-tcp0";  OTHER_IFACE="wg-udp0" ;;
   baseline)                               WG_IFACE="";         OTHER_IFACE="" ;;
   *) echo "unknown tunnel: $TUNNEL"; exit 2 ;;
 esac

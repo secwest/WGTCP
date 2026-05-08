@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Idempotent. Creates one RG, one VNet per region, peerings hub<->spoke,
-  and one VM per (region, arch) pair. Uses the WireguardTCP-FAST gallery
+  and one VM per (region, arch) pair. Uses the WireguardTCP gallery
   images. Skips anything already present.
 
 .PARAMETER Subscription      Azure subscription ID.
@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory)] [string] $ResourceGroup,
     [Parameter(Mandatory)] [string] $ImageVersion,
     [string] $Gallery        = 'wireguardtcp_gallery',
-    [string] $GalleryRG      = 'rg-wireguardtcp-fast',
+    [string] $GalleryRG      = 'rg-wireguardtcp-base',
     [string] $ImageDefX64    = 'wireguardtcp-ubuntu24-tls',
     [string] $ImageDefArm    = 'wireguardtcp-ubuntu24-arm64-tls',
     [string] $HubRegion      = 'canadacentral',

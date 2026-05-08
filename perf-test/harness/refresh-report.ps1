@@ -70,7 +70,7 @@ while ($true) {
     try {
         python $aggregatePy $ResultsDir -o $matrixSrc 2>&1 | Out-Null
         if (Test-Path $matrixSrc) {
-            (Get-Content $matrixSrc -Raw).Replace('wireguard-tcp-fast','wireguard-tcp-base') |
+            (Get-Content $matrixSrc -Raw).Replace('wireguard-tcp-base','wireguard-tcp-base') |
                 Set-Content $matrixDst -NoNewline
         }
     } catch {

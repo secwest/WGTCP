@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Point-to-point WireguardTCP-FAST performance campaign (no hub).
+    Point-to-point WireguardTCP performance campaign (no hub).
 
 .DESCRIPTION
     Replaces the multi-port hub topology of run-full-campaign.ps1 with a
@@ -30,13 +30,16 @@ param(
     [string]$ResourceGroup    = "rg-wgtcpbase-p2p",
     [string]$ImageVersionX64  = "1.0.0",
     [string]$ImageVersionArm  = "1.0.0",
+    [string]$ImageIdX64       = "",
+    [string]$ImageIdArm       = "",
+    [string]$GalleryResourceGroup = "RG-WIREGUARDTCP",
     [string]$AdminUser        = "azureuser",
     [string]$ResultsDir       = "",
     [string[]]$Pairs          = @("LAN-x64","LAN-arm","MED-x64","MED-arm","HIGH-x64","HIGH-arm","MAX-x64","MAX-arm"),
     [double[]]$LossPercents   = @(0, 0.5, 1, 2, 3, 5, 10, 20),
     [int]$RunsPerCell         = 3,
     [string[]]$Workloads      = @("short-transfer","long-transfer","web-mix","ssh-interactive"),
-    [string[]]$Tunnels        = @("wireguard-udp","wireguard-tcp-fast"),
+    [string[]]$Tunnels        = @("wireguard-udp","wireguard-tcp-base"),
     [switch]$KeepResources,
     [switch]$SkipDeploy,
     [switch]$SkipBootstrap,
@@ -52,9 +55,8 @@ $null = New-Item -ItemType Directory -Force -Path $ResultsDir
 
 $subId   = "87243d30-26d0-4f86-bd4e-198f8befe9fa"
 $gallery = "wireguardtcp_gallery"
-$galleryRg = "RG-WIREGUARDTCP-FAST"
-$imgX64 = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-tls/versions/$ImageVersionX64"
-$imgArm = "/subscriptions/$subId/resourceGroups/$galleryRg/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-arm64-tls/versions/$ImageVersionArm"
+$imgX64 = if ($ImageIdX64) { $ImageIdX64 } else { "/subscriptions/$subId/resourceGroups/$GalleryResourceGroup/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-tls/versions/$ImageVersionX64" }
+$imgArm = if ($ImageIdArm) { $ImageIdArm } else { "/subscriptions/$subId/resourceGroups/$GalleryResourceGroup/providers/Microsoft.Compute/galleries/$gallery/images/wireguardtcp-ubuntu24-arm64-tls/versions/$ImageVersionArm" }
 
 # ---- Pair table: each entry = one isolated 2-VM tunnel ----------------
 # Index N -> tunnel /24 at 10.99.N.0/24; A=.1, B=.2.
