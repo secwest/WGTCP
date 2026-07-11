@@ -120,6 +120,15 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 
 	// Initialize the spinlock for the TX send queue
 	spin_lock_init(&peer->send_queue_lock);
+	mutex_init(&peer->tcp_write_mutex);
+	mutex_init(&peer->tcp_cleanup_mutex);
+
+	spin_lock_init(&peer->tcp_read_lock);
+	spin_lock_init(&peer->tcp_write_lock);
+	peer->tcp_read_worker_scheduled = false;
+	peer->tcp_read_worker_recheck = false;
+	peer->tcp_write_worker_scheduled = false;
+	peer->tcp_write_worker_recheck = false;
 
 	// Initialize the list head for pending connection list
 	INIT_LIST_HEAD(&peer->pending_connection_list);
@@ -206,11 +215,11 @@ static void peer_make_dead(struct wg_peer *peer)
 	cancel_delayed_work(&peer->tcp_retry_work);
 	peer->tcp_retry_scheduled = false;
 
-	// Check if the TCP read work is scheduled before canceling it
-	if (peer->tcp_read_worker_scheduled) {
-        	cancel_work_sync(&peer->tcp_read_work);
-        	peer->tcp_read_worker_scheduled = false;  // Reset the flag after canceling
-	}
+	cancel_work_sync(&peer->tcp_read_work);
+	spin_lock_bh(&peer->tcp_read_lock);
+	peer->tcp_read_worker_scheduled = false;
+	peer->tcp_read_worker_recheck = false;
+	spin_unlock_bh(&peer->tcp_read_lock);
 
 	// Destroy the TCP read workqueue if it exists
 	if (peer->tcp_read_wq) {
@@ -218,11 +227,11 @@ static void peer_make_dead(struct wg_peer *peer)
 		peer->tcp_read_wq = NULL; // Avoid dangling pointers
 	}
 
-	// Check if the TCP write work is scheduled before canceling it
-	if (peer->tcp_write_worker_scheduled) {
-		cancel_work_sync(&peer->tcp_write_work);
-		peer->tcp_write_worker_scheduled = false;  // Reset the flag after canceling
-    	}
+	cancel_work_sync(&peer->tcp_write_work);
+	spin_lock_bh(&peer->tcp_write_lock);
+	peer->tcp_write_worker_scheduled = false;
+	peer->tcp_write_worker_recheck = false;
+	spin_unlock_bh(&peer->tcp_write_lock);
 
 	// Destroy the TCP write workqueue if it exists
 	if (peer->tcp_write_wq) {
