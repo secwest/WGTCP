@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <linux/netfilter.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/kref.h>
 #include <net/dst_cache.h>
 
@@ -101,6 +102,8 @@ struct wg_peer {
 
 	struct sk_buff_head send_queue;		// TX queue
         spinlock_t send_queue_lock;		// TX lock
+	struct mutex tcp_write_mutex;		// Serializes TCP senders with socket retirement
+	struct mutex tcp_cleanup_mutex;	// Grants exclusive TCP socket retirement ownership
 
 	struct list_head pending_connection_list;	//peers pending connection handshake
 	spinlock_t tcp_lock;			// Protects TCP-related state
@@ -109,11 +112,13 @@ struct wg_peer {
 	struct workqueue_struct *tcp_read_wq;	// Workqueue for handling TCP data processing
 	spinlock_t tcp_read_lock;		// Spinlock to protect access to the socket data
 	bool tcp_read_worker_scheduled;		// Flag to indicate if the TCP read worker is scheduled
+	bool tcp_read_worker_recheck;		// Data arrived while the read worker was running
 
 	struct work_struct tcp_write_work;      // Work struct for scheduling the worker
 	struct workqueue_struct *tcp_write_wq;	// Workqueue for handling TCP data processing
 	spinlock_t tcp_write_lock;              // Spinlock to protect access to the socket data
 	bool tcp_write_worker_scheduled; 	// Flag to indicate if the TCP write worker is scheduled
+	bool tcp_write_worker_recheck;		// Write space changed while the write worker was running
 
 };
 
