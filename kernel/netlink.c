@@ -22,8 +22,6 @@
 #include <crypto/utils.h>
 #include "wg_tcp_debug.h"
 
-void wg_tcp_listener_socket_release(struct wg_device *wg);
-
 static struct genl_family genl_family;
 
 static const struct nla_policy device_policy[WGDEVICE_A_MAX + 1] = {
@@ -616,12 +614,16 @@ static int wg_get_device_done(struct netlink_callback *cb)
 static int set_port(struct wg_device *wg, u16 port)
 {
 	struct wg_peer *peer;
-	int rett, retu;
 	
 	wg_dbg("Entering set_port: wg = %px, port = %u\n", wg, port);
 
 	if (wg->incoming_port == port)
 		return 0;
+	/* Replacing both TCP listeners is not transactional. Require a down/up
+	 * cycle and leave the active listeners completely untouched.
+	 */
+	if (wg->transport == WG_TRANSPORT_TCP && netif_running(wg->dev))
+		return -EBUSY;
 	list_for_each_entry(peer, &wg->peer_list, peer_list)
 		wg_socket_clear_peer_endpoint_src(peer);
 	if (!netif_running(wg->dev)) {
@@ -629,17 +631,7 @@ static int set_port(struct wg_device *wg, u16 port)
 		return 0;
 	}
 
-	if (wg->transport == WG_TRANSPORT_TCP) {
-		/* Release the existing listening sockets and stop the associated threads */
-		wg_tcp_listener_socket_release(wg);
-		/* Reestablish the listening socket and associated threads */
-		rett = wg_tcp_listener_socket_init(wg, port);
-	} 
-        retu = wg_socket_init(wg, port);
-        /* Check if either rett or retu is negative and return an error code if so */
-//        if (rett < 0 || retu < 0)
-//                return -1;
-        return retu;	
+	return wg_socket_init(wg, port);
 }
 
 static int set_allowedip(struct wg_peer *peer, struct nlattr **attrs)
@@ -752,10 +744,10 @@ static int set_peer(struct wg_device *wg, struct nlattr **attrs)
 
 		if (len == sizeof(struct sockaddr_in) && addr->sa_family == AF_INET) {
 			endpoint.addr4 = *(struct sockaddr_in *)addr;
-			wg_socket_set_peer_endpoint(peer, &endpoint);
+			wg_socket_set_peer_endpoint_configured(peer, &endpoint);
 		} else if (len == sizeof(struct sockaddr_in6) && addr->sa_family == AF_INET6) {
 			endpoint.addr6 = *(struct sockaddr_in6 *)addr;
-			wg_socket_set_peer_endpoint(peer, &endpoint);
+			wg_socket_set_peer_endpoint_configured(peer, &endpoint);
 		}
 	}
 
@@ -829,7 +821,9 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 	if (flags & ~__WGDEVICE_F_ALL)
 		goto out;
 
-	if (info->attrs[WGDEVICE_A_LISTEN_PORT] || info->attrs[WGDEVICE_A_FWMARK]) {
+	if (info->attrs[WGDEVICE_A_LISTEN_PORT] ||
+	    info->attrs[WGDEVICE_A_FWMARK] ||
+	    info->attrs[WGDEVICE_A_TRANSPORT]) {
 		struct net *net;
 		rcu_read_lock();
 		net = rcu_dereference(wg->creating_net);
@@ -838,6 +832,24 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 		if (ret) {
 			wg_dbg("Permission error for NET_ADMIN capability: %d\n", ret);
 			goto out;
+		}
+	}
+
+	if (info->attrs[WGDEVICE_A_TRANSPORT]) {
+		u8 transport = nla_get_u8(info->attrs[WGDEVICE_A_TRANSPORT]);
+
+		if (transport > WG_TRANSPORT_TCP) {
+			ret = -EINVAL;
+			goto out;
+		}
+		if (transport != wg->transport) {
+			if (netif_running(wg->dev) ||
+			    (!list_empty(&wg->peer_list) &&
+			     !(flags & WGDEVICE_F_REPLACE_PEERS))) {
+				ret = -EBUSY;
+				goto out;
+			}
+			wg->transport = transport;
 		}
 	}
 
@@ -899,13 +911,6 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 				wg_packet_send_staged_packets(peer);
 		}
 		up_write(&wg->static_identity.lock);
-	}
-
-	if (info->attrs[WGDEVICE_A_TRANSPORT]) {
-		u8 transport = nla_get_u8(info->attrs[WGDEVICE_A_TRANSPORT]);
-		wg->transport = transport;
-//		wg_dbg("Parsed WGDEVICE_A_TRANSPORT: %u\n", wg->transport);
-//		pr_debug("WireGuard: Setting device %p transport mode to %u\n", wg, transport);
 	}
 
 skip_set_private_key:

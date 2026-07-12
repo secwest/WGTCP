@@ -179,10 +179,8 @@ enum cookie_mac_state wg_cookie_validate_packet(struct cookie_checker *checker,
 	compute_mac1(computed_mac, skb->data, skb->len, checker->message_mac1_key);
 	wg_dbg("Computed MAC1: %*phN\n", COOKIE_LEN, computed_mac);
 
-	if (crypto_memneq(computed_mac, macs->mac1, COOKIE_LEN)) {
-		printk(KERN_ERR "MAC1 validation failed.\n");
+	if (crypto_memneq(computed_mac, macs->mac1, COOKIE_LEN))
 		goto out;
-	}
 
 	ret = VALID_MAC_BUT_NO_COOKIE;
 	wg_dbg("MAC1 validated successfully.\n");
@@ -197,10 +195,8 @@ enum cookie_mac_state wg_cookie_validate_packet(struct cookie_checker *checker,
 	compute_mac2(computed_mac, skb->data, skb->len, cookie);
 	wg_dbg("Computed MAC2: %*phN\n", COOKIE_LEN, computed_mac);
 
-	if (crypto_memneq(computed_mac, macs->mac2, COOKIE_LEN)) {
-		printk(KERN_ERR "MAC2 validation failed.\n");
+	if (crypto_memneq(computed_mac, macs->mac2, COOKIE_LEN))
 		goto out;
-	}
 
 	ret = VALID_MAC_WITH_COOKIE_BUT_RATELIMITED;
 	wg_dbg("MAC2 validated successfully.\n");

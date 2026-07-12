@@ -177,10 +177,6 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 			    skb_tail_pointer(skb))) {
 		wg_dbg("Exiting prepare_skb_header with error -EINVAL: "
 		       "Invalid transport header or protocol check failed.\n");
-		printk(KERN_ERR "wg: prepare_skb_header: INVALID PROTOCOL OR TRANSPORT HEADER\n"
-		       "    protocol=%d transport_hdr=%px head=%px tail_ptr=%px\n",
-		       skb->protocol, skb_transport_header(skb),
-		       skb->head, skb_tail_pointer(skb));
 		return -EINVAL; /* Bogus IP header */
 	}
 	wg_dbg("wg: prepare_skb_header: protocol checks "
@@ -197,14 +193,6 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 
 	wg_dbg("UDP header source=%u, dest=%u\n",
 	       ntohs(udp->source), ntohs(udp->dest));
-
-	// Check for valid UDP ports
-	if (unlikely(udp->source == 0 || udp->dest == 0)) {
-		printk(KERN_ERR "Invalid UDP source or destination port: "
-		       "src=%u, dst=%u\n", ntohs(udp->source),
-		       ntohs(udp->dest));
-		return -EINVAL;
-	}
 
 	// Calculate data offset and validate
 	data_offset = skb_transport_offset(skb) + sizeof(struct udphdr);
@@ -247,13 +235,6 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		       "-EINVAL: pskb_may_pull or pskb_trim failed. "
 		       "data_offset=%zu, data_len=%zu, len=%d\n",
 		       data_offset, data_len, skb->len);
-		printk(KERN_ERR "wg: prepare_skb_header: pskb_may_pull or pskb_trim "
-		       "failed!\n"
-		       "    data_offset=%zu data_len=%zu skb->len=%u\n"
-		       "    tailroom=%u headroom=%u\n",
-		       data_offset, data_len, skb->len,
-		       skb_tailroom(skb), skb_headroom(skb));
-
 		return -EINVAL;
 	}
 
@@ -278,7 +259,6 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	wg_dbg("Header length validated: header_len=%zu\n", header_len);
 
 	if (unlikely(!header_len)) {
-		printk(KERN_ERR "Header length validation failed. Dropping packet.\n");
 		wg_dbg("Exiting prepare_skb_header with error -EINVAL\n");
 		return -EINVAL;
 	}
@@ -430,6 +410,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 	static u64 last_under_load;
 	bool packet_needs_cookie;
 	bool under_load;
+	enum cookie_validation_action cookie_action;
 
 	wg_dbg("Validating handshake packet with len=%u\n", skb->len);
 	wg_dbg("Received Handshake Packet: %*ph\n", (int)skb->len, skb->data);
@@ -464,17 +445,11 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 	// Validate packet's MAC and set packet_needs_cookie flag
 	mac_state = wg_cookie_validate_packet(&wg->cookie_checker, skb, under_load);
 	wg_dbg("MAC validation result: %d\n", mac_state);
-	if (mac_state != VALID_MAC_WITH_COOKIE && mac_state != VALID_MAC_BUT_NO_COOKIE) {
-		printk(KERN_ERR "Invalid MAC state: %d\n", mac_state);
-	}
-
-	// Determine if a cookie is needed based on load and MAC state
-	if ((under_load && mac_state == VALID_MAC_WITH_COOKIE) ||
-	    (!under_load && mac_state == VALID_MAC_BUT_NO_COOKIE)) {
+	cookie_action = wg_cookie_validation_action(under_load, mac_state);
+	if (cookie_action == WG_COOKIE_ACCEPT) {
 		packet_needs_cookie = false;
-	} else if (under_load && mac_state == VALID_MAC_BUT_NO_COOKIE) {
-		if(wg->transport == WG_TRANSPORT_UDP)
-			packet_needs_cookie = false;
+	} else if (cookie_action == WG_COOKIE_CHALLENGE) {
+		packet_needs_cookie = true;
 	} else {
 		net_dbg_skb_ratelimited("%s: Invalid MAC of handshake, dropping packet from %pISpfsc\n", wg->dev->name, skb);
 		wg_dbg("Exiting wg_receive_handshake_packet\n");
@@ -502,7 +477,8 @@ nocookie:
 			return;
 		}
 		print_peer_socket_info(peer);
-		wg_socket_set_peer_endpoint_from_skb(peer, skb);
+		if (wg->transport == WG_TRANSPORT_UDP)
+			wg_socket_set_peer_endpoint_from_skb(peer, skb);
 		net_dbg_ratelimited("%s: Receiving handshake initiation from peer %llu (%pISpfsc)\n", wg->dev->name, peer->internal_id, &peer->endpoint.addr);
 		wg_packet_send_handshake_response(peer);
 		break;
@@ -520,115 +496,24 @@ nocookie:
 		// Handle handshake response
 		peer = wg_noise_handshake_consume_response(message, wg);
 		if (unlikely(!peer)) {
-			printk(KERN_ERR "Peer object is NULL. Dropping packet.\n");
+			wg_dbg("Peer object is NULL. Dropping packet.\n");
 			net_dbg_skb_ratelimited("%s: Invalid handshake response from %pISpfsc\n", wg->dev->name, skb);
 			wg_dbg("Exiting wg_receive_handshake_packet\n");
 			return;
 		}
 
-		// TCP-specific endpoint handling
-		struct endpoint ep = peer->endpoint;
-		struct wg_tcp_socket_list_entry *socket_iter;
-		bool found = false;
 		print_peer_socket_info(peer);
-		wg_socket_set_peer_endpoint_from_skb(peer, skb);
-
-		if (!endpoint_eq(&peer->endpoint, &ep) && peer->device->transport == WG_TRANSPORT_TCP) {
-			wg_dbg("New TCP endpoint detected\n");
-			log_wireguard_endpoint(&peer->endpoint);
-			print_peer_socket_info(peer);
-			
-			if(!skb->sk) {
-				wg_dbg("No skb sk. skb=%px peer=%px\n", skb, peer);
-			} else {
-				if(skb->sk->sk_socket) {
-						
-					if ((skb->sk->sk_socket != peer->inbound_socket) && (skb->sk->sk_socket != peer->outbound_socket)) {
-			 			wg_dbg("Promoting pending connection to active\n");	
- 
-						if (list_empty(&peer->device->tcp_connection_list)) {
-						pr_err("Wireguard: tcp_connection_list is empty\n");
-						} else {
-							found = false;
-							list_for_each_entry_rcu(socket_iter, &peer->device->tcp_connection_list, tcp_connection_ll) {
-							// Defensive checks to ensure all relevant fields are populated
-								if (!socket_iter) {
-									wg_dbg("NULL LIST ENTRY\n");
-									continue;
-								}
-								if (!socket_iter->tcp_socket || !socket_iter->tcp_socket->sk) {
-									wg_dbg("NULL SOCKET\n");
-									continue;
-								}
-								if (!socket_iter->temp_peer || IS_ERR(socket_iter->temp_peer)) {
-									wg_dbg("NULL TEMP PEER\n");
-									continue;
-								}
-	
-								if (endpoint_eq(&peer->endpoint, &socket_iter->temp_peer->endpoint)) {
-									wg_dbg("Matching connection found in pending list\n");
-									found = true;
-									break;
-								}
-							}
-
-							if (found) {
-								wg_dbg("Removing and promoting connection from pending list\n");
-								spin_lock_bh(&peer->device->tcp_connection_list_lock);
-								list_del_rcu(&socket_iter->tcp_connection_ll);
-								spin_unlock_bh(&peer->device->tcp_connection_list_lock);
-								synchronize_rcu();
-
-								spin_lock(&peer->tcp_lock);
-								if (socket_iter->temp_peer->tcp_inbound_callbacks_set) {
-									peer->original_inbound_state_change = socket_iter->temp_peer->original_inbound_state_change;
-									peer->original_inbound_write_space = socket_iter->temp_peer->original_inbound_write_space;
-									peer->original_inbound_data_ready = socket_iter->temp_peer->original_inbound_data_ready;
-									peer->tcp_inbound_callbacks_set = true;
-								}
-								peer->inbound_connected = true;
-								peer->inbound_timestamp = ktime_get();
-								peer->tcp_established = true;
-								peer->tcp_inbound_remove_scheduled = false;
-								peer->clean_inbound = false;
-								peer->clean_outbound = true;
-								spin_unlock(&peer->tcp_lock);	
-
-								// Clean up temporary peer structure
-								wg_clean_peer_socket(socket_iter->temp_peer, false, false, false);
-								if (!IS_ERR(socket_iter->temp_peer) && socket_iter->temp_peer)
-									kfree(socket_iter->temp_peer);
-
-								write_lock_bh(&peer->endpoint_lock);
-								peer->tcp_reply_endpoint = socket_iter->temp_peer->endpoint;
-								peer->peer_socket = skb->sk->sk_socket;
-								peer->inbound_socket = skb->sk->sk_socket;
-								extract_sockaddr_from_skb(skb, &peer->inbound_source, &peer->inbound_dest);
-								((struct wg_socket_data *)(peer->peer_socket->sk->sk_user_data))->peer = peer;
-								write_unlock_bh(&peer->endpoint_lock);
-
-								kfree(socket_iter);
-							} else {
-								pr_err("Wireguard: TCP connection not found in pending list\n");
-							}
-						}	
-					}
-				}
-			}
-		}
-
-		// Update timestamps and session handling for TCP
-		if (peer->device->transport == WG_TRANSPORT_TCP && skb->sk) {
-			write_lock_bh(&peer->endpoint_lock);
-			peer->peer_socket = skb->sk->sk_socket;
-			write_unlock_bh(&peer->endpoint_lock);
-			if(skb->sk->sk_socket) {
-				if (skb->sk->sk_socket == peer->inbound_socket) {
-					peer->inbound_timestamp = ktime_get();
-				} else {
-					peer->outbound_timestamp = ktime_get();
-				}
-			}
+		if (peer->device->transport == WG_TRANSPORT_UDP) {
+			wg_socket_set_peer_endpoint_from_skb(peer, skb);
+		} else if (skb->sk && skb->sk->sk_socket) {
+			/* TCP endpoint promotion is intentionally disabled. Only a socket
+			 * already owned by this authenticated peer may refresh activity.
+			 * In particular, never adopt the companion UDP socket here.
+			 */
+			if (skb->sk->sk_socket == peer->inbound_socket)
+				peer->inbound_timestamp = ktime_get();
+			else if (skb->sk->sk_socket == peer->outbound_socket)
+				peer->outbound_timestamp = ktime_get();
 		}
 		net_dbg_ratelimited("%s: Receiving handshake response from peer %llu (%pISpfsc)\n", wg->dev->name, peer->internal_id, &peer->endpoint.addr);
 
@@ -641,7 +526,8 @@ nocookie:
 	}
 
 	default:
-		printk(KERN_WARNING "Unknown packet type received in handshake processing: %u\n", SKB_TYPE_LE32(skb));
+		wg_dbg("Unknown packet type received in handshake processing: %u\n",
+		       SKB_TYPE_LE32(skb));
 		break;
 	}
 
@@ -785,8 +671,8 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	       skb->len, skb->data_len, skb_network_header(skb));
 
 	if (unlikely(!keypair)) {
-		printk(KERN_ERR "Keypair is NULL\n");
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Keypair is NULL\n");
+		wg_dbg("Exiting decrypt_packet with false\n");
 		return false;
 	}
 
@@ -794,9 +680,9 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 			wg_birthdate_has_expired(keypair->receiving.birthdate, REJECT_AFTER_TIME) ||
 			READ_ONCE(keypair->receiving_counter.counter) >= REJECT_AFTER_MESSAGES)) {
 		WRITE_ONCE(keypair->receiving.is_valid, false);
-		printk(KERN_ERR "Keypair is invalid or expired: is_valid=%d, counter=%llu\n",
+		wg_dbg("Keypair is invalid or expired: is_valid=%d, counter=%llu\n",
 		keypair->receiving.is_valid, keypair->receiving_counter.counter);
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Exiting decrypt_packet with false\n");
 		return false;
 	}
 
@@ -815,15 +701,15 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	wg_dbg("Pulled skb to offset: %u, skb->len=%u, skb->data=%px\n", offset, skb->len, skb->data);
 	if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
 		wg_dbg("skb->data (after decryption failed): %*ph\n", skb->len, skb->data);
-		printk(KERN_ERR "Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
+		wg_dbg("Exiting decrypt_packet with false\n");
 		return false;
 	}
 
 	sg_init_table(sg, num_frags);
 	if (skb_to_sgvec(skb, sg, 0, skb->len) <= 0) {
-		printk(KERN_ERR "Failed skb_to_sgvec, skb->len=%u\n", skb->len);
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Failed skb_to_sgvec, skb->len=%u\n", skb->len);
+		wg_dbg("Exiting decrypt_packet with false\n");
 		return false;
 	}
 
@@ -836,19 +722,21 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
                                              keypair->receiving.key)) {
 		wg_dbg("skb->data (after decryption failed): %*ph\n",
 		       skb->len, skb->data);
-		printk(KERN_ERR "Decryption failed\n");
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Decryption failed\n");
+		wg_dbg("Exiting decrypt_packet with false\n");
         return false;
 	}
+#ifdef WG_TCP_VERBOSE
 	decode_and_print_packet(skb, "[decrypt]");
+#endif
 	
 	// Ensure endpoint information remains intact
 	wg_dbg("Pushing skb to preserve endpoint information\n");
 	skb_push(skb, offset);
 	if (pskb_trim(skb, skb->len - noise_encrypted_len(0))) {
 		wg_dbg("skb->data (after decryption failed): %*ph\n", skb->len, skb->data);
-		printk(KERN_ERR "Failed pskb_trim, skb->len=%u\n", skb->len);
-		printk(KERN_ERR "Exiting decrypt_packet with false\n");
+		wg_dbg("Failed pskb_trim, skb->len=%u\n", skb->len);
+		wg_dbg("Exiting decrypt_packet with false\n");
 		return false;
 	}
 	skb_pull(skb, offset);
@@ -904,6 +792,7 @@ out:
 }
 
 #include "selftest/counter.c"
+#include "selftest/cookie.c"
 
 static void wg_packet_consume_data_done(struct wg_peer *peer,
 					struct sk_buff *skb,
@@ -916,7 +805,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 	struct wg_peer *routed_peer;
 
 	if (unlikely(!endpoint)) {
-    		printk(KERN_ERR "Endpoint object is NULL. Cannot set peer endpoint.\n");
+		wg_dbg("Endpoint object is NULL. Cannot set peer endpoint.\n");
     		return;
 	}
 
@@ -982,7 +871,8 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 
 
 	if (unlikely(len == 0 || len_before_trim == 0)) {
-    		printk(KERN_ERR "Invalid packet length detected: len=%u, len_before_trim=%u\n", len, len_before_trim);
+		wg_dbg("Invalid packet length detected: len=%u, len_before_trim=%u\n",
+		       len, len_before_trim);
     		return;
 	}
 

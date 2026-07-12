@@ -153,7 +153,6 @@ static struct allowedips_node *find_node(struct allowedips_node *trie, u8 bits,
 }
 
 
-#ifdef ORIGINAL
 /* Returns a strong reference to a peer */
 static struct wg_peer *lookup(struct allowedips_node __rcu *root, u8 bits,
 			      const void *be_ip)
@@ -174,53 +173,6 @@ retry:
 		if (!peer)
 			goto retry;
 	}
-	rcu_read_unlock_bh();
-	wg_dbg("Exiting lookup with peer=%px\n", peer);
-	return peer;
-}
-#endif // ORIGINAL
-
-/* Returns a strong reference to a peer */
-static struct wg_peer *lookup(struct allowedips_node __rcu *root, u8 bits,
-                              const void *be_ip)
-{
-	u8 ip[16] __aligned(__alignof(u64));
-	struct allowedips_node *node;
-	struct wg_peer *peer = NULL;
-
-	/* Defensive check for null pointers */
-	if (!root || !be_ip) {
-		printk(KERN_ERR "lookup: Invalid arguments: root=%px, be_ip=%px\n", root, be_ip);
-		return NULL;
-	}
-
-	swap_endian(ip, be_ip, bits);
-
-	rcu_read_lock_bh();
-retry:
-	node = rcu_dereference_bh(root);
-	if (!node) {
-		printk(KERN_ERR "lookup: root dereferenced to NULL\n");
-		rcu_read_unlock_bh();
-		return NULL;
-	}
-
-	node = find_node(node, bits, ip);
-	if (node) {
-		peer = rcu_dereference_bh(node->peer);
-		if (!peer) {
-			printk(KERN_WARNING "lookup: node->peer dereferenced to NULL, retrying\n");
-			goto retry;
-		}
-		peer = wg_peer_get_maybe_zero(peer);
-		if (!peer) {
-			printk(KERN_WARNING "lookup: wg_peer_get_maybe_zero returned NULL, retrying\n");
-			goto retry;
-		}
-	} else {
-		wg_dbg("lookup: find_node returned NULL, no matching peer found\n");
-	}
-
 	rcu_read_unlock_bh();
 	wg_dbg("Exiting lookup with peer=%px\n", peer);
 	return peer;

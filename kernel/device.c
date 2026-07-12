@@ -40,9 +40,12 @@ static int wg_open(struct net_device *dev)
 	struct inet6_dev *dev_v6 = __in6_dev_get(dev);
 	struct wg_device *wg = netdev_priv(dev);
 	struct wg_peer *peer;
+	u16 requested_port = wg->incoming_port;
 	int ret = 0;
 
 	wg_dbg("Entering wg_open: dev=%px\n", dev);
+	WRITE_ONCE(wg->tcp_cleanup_scheduled,
+		   wg->transport == WG_TRANSPORT_TCP);
 
 	if (dev_v4) {
 		/* At some point we might put this check near the ip_rt_send_
@@ -57,21 +60,44 @@ static int wg_open(struct net_device *dev)
 
 	
 	wg->listener_active = false;
+	/* Bind UDP first so port zero retains WireGuard's random-port semantics.
+	 * TCP then uses the concrete port selected by the companion UDP socket.
+	 */
+	ret = wg_socket_init(wg, wg->incoming_port);
+	if (ret < 0) {
+		WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+		return ret;
+	}
 	if (wg->transport == WG_TRANSPORT_TCP) {
 		ret = wg_tcp_listener_socket_init(wg, wg->incoming_port);
-		if (ret < 0)
-			goto out;
+		if (ret < 0) {
+			WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+			wg_tcp_listener_socket_release(wg);
+			cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+			wg_destruct_tcp_connection_list(wg);
+			wg_socket_reinit(wg, NULL, NULL);
+			wg->incoming_port = requested_port;
+			return ret;
+		}
 	}
-	ret = wg_socket_init(wg, wg->incoming_port);
-	if (ret < 0)
-		 goto out;
 	mutex_lock(&wg->device_update_lock);
 	list_for_each_entry(peer, &wg->peer_list, peer_list) {
+		bool queue_tcp_retry = false;
+
+		if (wg->transport == WG_TRANSPORT_TCP && peer->peer_endpoint_set) {
+			spin_lock_bh(&peer->tcp_lock);
+			if (!peer->tcp_retry_scheduled) {
+				peer->tcp_retry_scheduled = true;
+				queue_tcp_retry = true;
+			}
+			spin_unlock_bh(&peer->tcp_lock);
+			if (queue_tcp_retry)
+				mod_delayed_work(system_wq, &peer->tcp_retry_work, 0);
+		}
 		wg_packet_send_staged_packets(peer);
 		if (peer->persistent_keepalive_interval)
 			wg_packet_send_keepalive(peer);
 	}
-out:
 	mutex_unlock(&wg->device_update_lock);
 	wg_dbg("Exiting wg_open: dev=%px, ret=%d\n", dev, ret);
 	return ret;
@@ -145,9 +171,16 @@ static int wg_stop(struct net_device *dev)
 	struct sk_buff *skb;
 
 	wg_dbg("Entering wg_stop: dev=%px\n", dev);
+	WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+	if (wg->transport == WG_TRANSPORT_TCP)
+		wg_tcp_listener_socket_release(wg);
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+	wg_destruct_tcp_connection_list(wg);
 
 	mutex_lock(&wg->device_update_lock);
 	list_for_each_entry(peer, &wg->peer_list, peer_list) {
+		if (wg->transport == WG_TRANSPORT_TCP)
+			wg_tcp_peer_stop(peer);
 		wg_packet_purge_staged_packets(peer);
 		wg_timers_stop(peer);
 		wg_noise_handshake_clear(&peer->handshake);
@@ -160,17 +193,6 @@ static int wg_stop(struct net_device *dev)
 
 	atomic_set(&wg->handshake_queue_len, 0);
 
-	// Cancel the delayed work and wait for it to finish
-	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
-
-	// Clear the tcp_cleanup_scheduled flag
-	spin_lock_bh(&wg->tcp_cleanup_lock);
-	wg->tcp_cleanup_scheduled = false;
-	spin_unlock_bh(&wg->tcp_cleanup_lock);
-
-	if (wg->transport == WG_TRANSPORT_TCP)
-		wg_tcp_listener_socket_release(wg);
-	
 	wg_socket_reinit(wg, NULL, NULL);
 
 	wg_dbg("Exiting wg_stop: dev=%px\n", dev);
@@ -297,6 +319,11 @@ static void wg_destruct(struct net_device *dev)
 	list_del(&wg->device_list);
 	rtnl_unlock();
 	mutex_lock(&wg->device_update_lock);
+	WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+	if (wg->transport == WG_TRANSPORT_TCP)
+		wg_tcp_listener_socket_release(wg);
+	wg_destruct_tcp_connection_list(wg);
 	rcu_assign_pointer(wg->creating_net, NULL);
 	wg->incoming_port = 0;
 	wg_socket_reinit(wg, NULL, NULL);
@@ -314,7 +341,6 @@ static void wg_destruct(struct net_device *dev)
 	free_percpu(dev->tstats);
 	kvfree(wg->index_hashtable);
 	kvfree(wg->peer_hashtable);
-	wg_destruct_tcp_connection_list(wg);
 	mutex_unlock(&wg->device_update_lock);
 
 	pr_debug("%s: Interface destroyed\n", dev->name);
@@ -440,8 +466,6 @@ static int wg_newlink(struct net *src_net, struct net_device *dev,
 
 	list_add(&wg->device_list, &device_list);
 
-	wg->incoming_port = WG_INCOMING_PORT;
-
 	INIT_LIST_HEAD(&wg->tcp_connection_list);
 	spin_lock_init(&wg->tcp_connection_list_lock);
 	wg->tcp_socket4_ready = false;
@@ -501,6 +525,17 @@ static void wg_netns_pre_exit(struct net *net)
 			pr_debug("%s: Creating namespace exiting\n", wg->dev->name);
 			netif_carrier_off(wg->dev);
 			mutex_lock(&wg->device_update_lock);
+			if (wg->transport == WG_TRANSPORT_TCP) {
+				/* Stop every user of sockets created in this namespace
+				 * before publishing that the namespace is gone.
+				 */
+				WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+				wg_tcp_listener_socket_release(wg);
+				cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+				wg_destruct_tcp_connection_list(wg);
+				list_for_each_entry(peer, &wg->peer_list, peer_list)
+					wg_tcp_peer_stop(peer);
+			}
 			rcu_assign_pointer(wg->creating_net, NULL);
 			wg_socket_reinit(wg, NULL, NULL);
 			list_for_each_entry(peer, &wg->peer_list, peer_list)
