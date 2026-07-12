@@ -9,6 +9,9 @@
 modules.order
 Module.symvers
 .tmp_versions/
+__pycache__/
+*.pyc
+tests/hyperv/results/
 
 # Tools binary
 tools/wg

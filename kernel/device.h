@@ -22,8 +22,6 @@
 #include <linux/ptr_ring.h>
 #include <linux/spinlock.h>
 
-#define WG_INCOMING_PORT 51820
-
 struct wg_device;
 
 struct multicore_worker {
@@ -82,6 +80,7 @@ struct wg_device {
 	bool tcp_socket6_ready;
 	bool listener_active;
 	spinlock_t tcp_connection_list_lock;
+	unsigned int tcp_pending_connections;
 	atomic_t handshake_queue_len;
 	unsigned int num_peers, device_update_gen;
 	u32 fwmark;

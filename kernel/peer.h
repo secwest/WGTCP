@@ -84,6 +84,7 @@ struct wg_peer {
 
 	struct delayed_work tcp_outbound_remove_work;	// Work for removing outbound peer TCP connection
 	bool tcp_outbound_remove_scheduled;		// Flag to track outbound peer removal scheduling
+	bool tcp_reconnect_requested;		// Reconnect after the current outbound socket is quiesced
 	struct delayed_work tcp_inbound_remove_work;	// Work for removing inbound peer TCP connection
 	bool tcp_inbound_remove_scheduled;		// Flag to track inbound peer removal scheduling
 
@@ -92,6 +93,7 @@ struct wg_peer {
 
 	bool tcp_established;			// Flag to track TCP connection status
 	bool tcp_pending;			// Flag to track outbount pending TCP connection status
+	bool tcp_connecting;			// Synchronous connect setup owns outbound cleanup
 	bool inbound_connected;			// peer connected to us
 	bool outbound_connected;		// we connected to them
 	bool clean_outbound;			// release outbound at next cleanup

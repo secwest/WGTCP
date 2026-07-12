@@ -19,11 +19,7 @@
 #include "ipc.h"
 #include "subcommands.h"
 
-#ifdef DEBUG
-#define DEBUG_PRINT(fmt, args...) fprintf(stderr, fmt, ##args)
-#else
-#define DEBUG_PRINT(fmt, args...) /* Don't do anything in release builds */
-#endif
+#define DEBUG_PRINT(fmt, args...) do { } while (0)
 
 int showconf_main(int argc, const char *argv[])
 {
@@ -64,7 +60,7 @@ int showconf_main(int argc, const char *argv[])
 		DEBUG_PRINT("Device private key: %s\n", base64);
 	}
 	if (device->transport) {
-		printf("TransportMode = %s\n", (device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp"));
+		printf("Transport = %s\n", (device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp"));
 		DEBUG_PRINT("Device transport mode: %s\n", (device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp"));
 	}
 	printf("\n");

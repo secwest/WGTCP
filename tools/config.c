@@ -23,11 +23,7 @@
 
 #define COMMENT_CHAR '#'
 
-#ifdef DEBUG
-#define DEBUG_PRINT(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
-#else
-#define DEBUG_PRINT(fmt, ...) (void)0
-#endif
+#define DEBUG_PRINT(fmt, ...) do { } while (0)
 
 static const char *get_value(const char *line, const char *key)
 {
@@ -603,7 +599,7 @@ static bool process_line(struct config_ctx *ctx, const char *line)
 				ctx->device->flags |= WGDEVICE_HAS_PRIVATE_KEY;
 				DEBUG_PRINT("Parsed PrivateKey successfully. Flag WGDEVICE_HAS_PRIVATE_KEY set\n");
 			}
-		} else if (key_match("Transport")) {
+		} else if (key_match("Transport") || key_match("TransportMode")) {
 			ret = parse_transport(&ctx->device->transport, value);
 			ctx->device->flags |= WGDEVICE_HAS_TRANSPORT;
 		} else

@@ -46,7 +46,7 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 		return ERR_PTR(ret);
 	}
 	if (unlikely(dst_cache_init(&peer->endpoint_cache, GFP_KERNEL))) {
-		goto err;
+		goto err_free_peer;
 	}
 
 	peer->device = wg;
@@ -66,13 +66,6 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	kref_init(&peer->refcount);
 	skb_queue_head_init(&peer->staged_packet_queue);
 	wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
-	set_bit(NAPI_STATE_NO_BUSY_POLL, &peer->napi.state);
-	netif_napi_add(wg->dev, &peer->napi, wg_packet_rx_poll);
-	napi_enable(&peer->napi);
-	list_add_tail(&peer->peer_list, &wg->peer_list);
-	INIT_LIST_HEAD(&peer->allowedips_list);
-	wg_pubkey_hashtable_add(wg->peer_hashtable, peer);
-
 	// TCP field initialization
 	peer->peer_socket = NULL;  // Initialize the peer socket to NULL
 
@@ -106,9 +99,11 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	// Initialize TCP connection status flags
 	peer->tcp_established = false;
 	peer->tcp_pending = false;
+	peer->tcp_connecting = false;
 	peer->tcp_inbound_callbacks_set = false;
 	peer->tcp_outbound_callbacks_set = false;
 	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_reconnect_requested = false;
 	peer->tcp_inbound_remove_scheduled = false;
 	peer->peer_endpoint_set = false;
 
@@ -126,33 +121,44 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 
 	// Initialize the work structure, associating it with the worker functions
 	INIT_WORK(&peer->tcp_read_work, wg_tcp_read_worker);
-	// Create a workqueue for processing TCP read data
-	peer->tcp_read_wq = alloc_workqueue("tcp_read_wq", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
-	if (!peer->tcp_read_wq) {
-        	pr_err("Failed to allocate read workqueue\n");
-		goto err;
-	}
-
 	INIT_WORK(&peer->tcp_write_work, wg_tcp_write_worker);
-	// Create a workqueue for processing TCP write data
-	peer->tcp_write_wq = alloc_workqueue("tcp_write_wq", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
-	if (!peer->tcp_write_wq) {
-		pr_err("Failed to allocate write workqueue\n");
-		goto err;
+	if (wg->transport == WG_TRANSPORT_TCP) {
+		peer->tcp_read_wq = alloc_workqueue("tcp_read_wq",
+						    WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+		if (!peer->tcp_read_wq) {
+			pr_err("Failed to allocate read workqueue\n");
+			goto err_destroy_endpoint_cache;
+		}
+
+		peer->tcp_write_wq = alloc_workqueue("tcp_write_wq",
+						     WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+		if (!peer->tcp_write_wq) {
+			pr_err("Failed to allocate write workqueue\n");
+			goto err_destroy_tcp_read_wq;
+		}
 	}
 
 	// Indicate this is a real peer not a temp peer
 	peer->temp_peer = false;
 	peer->peer_endpoint = peer->endpoint;
+
+	set_bit(NAPI_STATE_NO_BUSY_POLL, &peer->napi.state);
+	netif_napi_add(wg->dev, &peer->napi, wg_packet_rx_poll);
+	napi_enable(&peer->napi);
+	list_add_tail(&peer->peer_list, &wg->peer_list);
+	INIT_LIST_HEAD(&peer->allowedips_list);
+	wg_pubkey_hashtable_add(wg->peer_hashtable, peer);
 	
 	++wg->num_peers;
-	if (wg->transport == WG_TRANSPORT_TCP)
-		wg_tcp_connect(peer);
 	pr_debug("%s: Peer %llu created\n", wg->dev->name, peer->internal_id);
 	wg_dbg("wg_peer_create: exit with peer=%px\n", peer);
 	return peer;
 
-err:
+err_destroy_tcp_read_wq:
+	destroy_workqueue(peer->tcp_read_wq);
+err_destroy_endpoint_cache:
+	dst_cache_destroy(&peer->endpoint_cache);
+err_free_peer:
 	kmem_cache_free(peer_cache, peer);
 	wg_dbg("wg_peer_create: exit with ERR_PTR(ret) on err\n");
 	return ERR_PTR(ret);
@@ -201,6 +207,7 @@ static void peer_make_dead(struct wg_peer *peer)
 	 */
 	cancel_delayed_work(&peer->tcp_outbound_remove_work);
 	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_reconnect_requested = false;
 	cancel_delayed_work(&peer->tcp_inbound_remove_work);
 	peer->tcp_inbound_remove_scheduled = false;
 	cancel_delayed_work(&peer->tcp_retry_work);
@@ -312,8 +319,10 @@ void wg_peer_remove(struct wg_peer *peer)
 		return;
 	}
 	lockdep_assert_held(&peer->device->device_update_lock);
-	wg_clean_peer_socket(peer, true, true, false); // clean up tcp socket stuff
-	wg_clean_peer_socket(peer, true, true, true);  // both inbound and outbound
+	/* Claim both directions, detach callbacks, and quiesce stream workers
+	 * before either socket or its sk_user_data wrapper can be released.
+	 */
+	wg_tcp_peer_stop(peer);
 	peer_make_dead(peer);
 	synchronize_net();
 	peer_remove_after_dead(peer);
@@ -331,16 +340,11 @@ void wg_peer_remove_all(struct wg_device *wg)
 	/* Avoid having to traverse individually for each one. */
 	wg_allowedips_free(&wg->peer_allowedips, &wg->device_update_lock);
 
-	/* First pass: shut down TCP sockets and reset callbacks for all peers.
-	 * This must happen before peer_make_dead destroys workqueues, to prevent
-	 * socket callbacks from firing queue_work on destroyed wqs.
+	/* First pass: claim and quiesce both TCP directions for every peer before
+	 * peer_make_dead destroys their workqueues.
 	 */
-	list_for_each_entry(peer, &wg->peer_list, peer_list) {
-		wg_reset_tcp_socket_callbacks(peer, false);
-		wg_reset_tcp_socket_callbacks(peer, true);
-		wg_clean_peer_socket(peer, true, false, false);
-		wg_clean_peer_socket(peer, true, false, true);
-	}
+	list_for_each_entry(peer, &wg->peer_list, peer_list)
+		wg_tcp_peer_stop(peer);
 
 	list_for_each_entry_safe(peer, temp, &wg->peer_list, peer_list) {
 		peer_make_dead(peer);
