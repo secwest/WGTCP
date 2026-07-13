@@ -81,7 +81,6 @@ behavior still needs a dedicated runtime campaign.
 
 - Making a TCP-mode peer wire-compatible with a stock UDP-only peer.
 - Disguising the stream as HTTP, TLS, or another application protocol.
-- Claiming TCP is universally faster than UDP.
 - Replacing WireGuard authentication or encryption with TCP security.
 - Guaranteeing that a single reliable byte stream can eliminate head-of-line
   blocking across unrelated inner flows.
