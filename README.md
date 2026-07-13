@@ -274,6 +274,8 @@ kernel/                       WireGuard kernel module with TCP transport
 tools/                        Modified WireGuard userland tools
 include/uapi/                 Additive Linux transport UAPI
 docs/TCP_TRANSPORT_DESIGN.md  Detailed architecture and parity design
+DESIGNLOG.md                  Chronological architectural decisions
+CHANGELOG.md                  User-visible changes and validation history
 docs/                         Relay and tunnel setup notes from the source branch
 perf-test/                    Performance plan, harness, reports, and matrices
 BIG-WireguardTCP-Patch        Combined patch from historical stock WireGuard
@@ -357,6 +359,8 @@ machine-readable output retain stock behavior.
 
 ## Documentation
 
+- [Design decision log](DESIGNLOG.md)
+- [Change log](CHANGELOG.md)
 - [TCP transport design, compatibility, roaming, and behavior](docs/TCP_TRANSPORT_DESIGN.md)
 - [Hyper-V host and VM creation guide](tests/hyperv/HYPERV_SETUP.md)
 - [Hyper-V regression results](tests/hyperv/RESULTS.md)
