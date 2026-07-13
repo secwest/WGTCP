@@ -4,9 +4,6 @@
  * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
-#define RUNSTATEDIR "/var/run" // Define RUNSTATEDIR here
-#define SOCK_PATH RUNSTATEDIR "/wireguard/"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -27,7 +24,6 @@
 #include "encoding.h"
 #include "netlink.h"
 
-#include <ctype.h>
 
 #define IPC_SUPPORTS_KERNEL_INTERFACE
 
@@ -39,307 +35,10 @@ struct interface {
 };
 
 
-// Hex dump function for raw data
-static void hex_dump(const void *data, size_t size)
-{
-    const unsigned char *byte = (const unsigned char *)data;
-    size_t i, j;
-
-    for (i = 0; i < size; i += 16) {
-        printf("%06zx: ", i);
-        for (j = 0; j < 16; j++) {
-            if (i + j < size)
-                printf("%02x ", byte[i + j]);
-            else
-                printf("   ");
-        }
-        printf(" |");
-        for (j = 0; j < 16; j++) {
-            if (i + j < size)
-                printf("%c", isprint(byte[i + j]) ? byte[i + j] : '.');
-            else
-                printf(" ");
-        }
-        printf("|\n");
-    }
-}
-
-// Routine to parse and print flags with verbose values
-static void print_flags_verbose(uint32_t flags)
-{
-    printf("Flags: 0x%08x (", flags);
-    if (flags & NLM_F_REQUEST) printf("REQUEST ");
-    if (flags & NLM_F_MULTI) printf("MULTI ");
-    if (flags & NLM_F_ACK) printf("ACK ");
-    if (flags & NLM_F_ECHO) printf("ECHO ");
-    if (flags & NLM_F_REPLACE) printf("REPLACE ");
-    if (flags & NLM_F_EXCL) printf("EXCL ");
-    if (flags & NLM_F_CREATE) printf("CREATE ");
-    if (flags & NLM_F_APPEND) printf("APPEND ");
-    printf(")\n");
-}
-
-// Routine to parse and print peer flags with verbose labels
-static void print_peer_flags_verbose(uint32_t flags)
-{
-    printf("Peer Flags: 0x%08x (", flags);
-    if (flags & WGPEER_F_REMOVE_ME) printf("REMOVE_ME ");
-    if (flags & WGPEER_F_REPLACE_ALLOWEDIPS) printf("REPLACE_ALLOWEDIPS ");
-    if (flags & WGPEER_F_UPDATE_ONLY) printf("UPDATE_ONLY ");
-    printf(")\n");
-}
-
-// Functions to print the allowed IP attributes
-static void print_allowedip_attr(const struct nlattr *attr)
-{
-    int type = mnl_attr_get_type(attr);
-
-    switch (type) {
-    case WGALLOWEDIP_A_FAMILY:
-        printf("WGALLOWEDIP_A_FAMILY: %u\n", mnl_attr_get_u16(attr));
-        break;
-    case WGALLOWEDIP_A_IPADDR:
-        printf("WGALLOWEDIP_A_IPADDR: %pIS\n", mnl_attr_get_payload(attr));
-        break;
-    case WGALLOWEDIP_A_CIDR_MASK:
-        printf("WGALLOWEDIP_A_CIDR_MASK: %u\n", mnl_attr_get_u8(attr));
-        break;
-    default:
-        printf("Unknown Allowed IP Attribute Type: %d\n", type);
-        break;
-    }
-}
-
-static void print_peer_allowedips(const struct nlattr *attr)
-{
-    struct nlattr *nested_attr;
-    mnl_attr_for_each_nested(nested_attr, attr) {
-        print_allowedip_attr(nested_attr);
-    }
-}
-
-// Functions to print the peer attributes
-static void print_peer_attr(const struct nlattr *attr)
-{
-    int type = mnl_attr_get_type(attr);
-
-    switch (type) {
-    case WGPEER_A_PUBLIC_KEY:
-        printf("WGPEER_A_PUBLIC_KEY: %*phN\n", mnl_attr_get_payload_len(attr), mnl_attr_get_payload(attr));
-        break;
-    case WGPEER_A_PRESHARED_KEY:
-        printf("WGPEER_A_PRESHARED_KEY: %*phN\n", mnl_attr_get_payload_len(attr), mnl_attr_get_payload(attr));
-        break;
-    case WGPEER_A_FLAGS:
-        printf("WGPEER_A_FLAGS: %u\n", mnl_attr_get_u32(attr));
-        print_peer_flags_verbose(mnl_attr_get_u32(attr));
-        break;
-    case WGPEER_A_ENDPOINT:
-        printf("WGPEER_A_ENDPOINT: %pIS\n", mnl_attr_get_payload(attr));
-        break;
-    case WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL:
-        printf("WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL: %u\n", mnl_attr_get_u16(attr));
-        break;
-    case WGPEER_A_LAST_HANDSHAKE_TIME:
-        printf("WGPEER_A_LAST_HANDSHAKE_TIME: %lld.%.9ld\n",
-               (long long)((struct timespec *)mnl_attr_get_payload(attr))->tv_sec,
-               (long)((struct timespec *)mnl_attr_get_payload(attr))->tv_nsec);
-        break;
-    case WGPEER_A_RX_BYTES:
-        printf("WGPEER_A_RX_BYTES: %lu\n", (unsigned long)mnl_attr_get_u64(attr));
-        break;
-    case WGPEER_A_TX_BYTES:
-        printf("WGPEER_A_TX_BYTES: %lu\n", (unsigned long)mnl_attr_get_u64(attr));
-        break;
-    case WGPEER_A_ALLOWEDIPS:
-        printf("WGPEER_A_ALLOWEDIPS (Nested Attributes):\n");
-        print_peer_allowedips(attr);
-        break;
-    default:
-        printf("Unknown Peer Attribute Type: %d\n", type);
-        break;
-    }
-}
-
-// Functions to print the device attributes
-static void print_device_peers(const struct nlattr *attr)
-{
-    struct nlattr *nested_attr;
-    mnl_attr_for_each_nested(nested_attr, attr) {
-        print_peer_attr(nested_attr);
-    }
-}
-
-static void print_device_attr(const struct nlattr *attr)
-{
-    int type = mnl_attr_get_type(attr);
-
-    switch (type) {
-    case WGDEVICE_A_IFINDEX:
-        printf("WGDEVICE_A_IFINDEX: %u\n", mnl_attr_get_u32(attr));
-        break;
-    case WGDEVICE_A_IFNAME:
-        printf("WGDEVICE_A_IFNAME: %s\n", mnl_attr_get_str(attr));
-        break;
-    case WGDEVICE_A_PRIVATE_KEY:
-        printf("WGDEVICE_A_PRIVATE_KEY: %*phN\n", mnl_attr_get_payload_len(attr), mnl_attr_get_payload(attr));
-        break;
-    case WGDEVICE_A_PUBLIC_KEY:
-        printf("WGDEVICE_A_PUBLIC_KEY: %*phN\n", mnl_attr_get_payload_len(attr), mnl_attr_get_payload(attr));
-        break;
-    case WGDEVICE_A_FLAGS:
-        printf("WGDEVICE_A_FLAGS: %u\n", mnl_attr_get_u32(attr));
-        break;
-    case WGDEVICE_A_LISTEN_PORT:
-        printf("WGDEVICE_A_LISTEN_PORT: %u\n", mnl_attr_get_u16(attr));
-        break;
-    case WGDEVICE_A_FWMARK:
-        printf("WGDEVICE_A_FWMARK: %u\n", mnl_attr_get_u32(attr));
-        break;
-    case WGDEVICE_A_PEERS:
-        printf("WGDEVICE_A_PEERS (Nested Attributes):\n");
-        print_device_peers(attr);
-        break;
-    case WGDEVICE_A_TRANSPORT:
-        printf("WGDEVICE_A_TRANSPORT: %u\n", mnl_attr_get_u8(attr));
-        break;
-    default:
-        printf("Unknown Device Attribute Type: %d\n", type);
-        break;
-    }
-}
-
-static void print_netlink_message_verbose(const struct nlmsghdr *nlh)
-{
-    struct nlattr *attr;
-    int rem = 0;
-
-    printf("Verbose Netlink Message:\n");
-    printf("  nlmsg_len: %u\n", nlh->nlmsg_len);
-    printf("  nlmsg_type: %u\n", nlh->nlmsg_type);
-    
-    // Print command
-    switch (nlh->nlmsg_type) {
-    case WG_CMD_GET_DEVICE:
-        printf("  Command: WG_CMD_GET_DEVICE\n");
-        break;
-    case WG_CMD_SET_DEVICE:
-        printf("  Command: WG_CMD_SET_DEVICE\n");
-        break;
-    default:
-        printf("  Unknown Command: %u\n", nlh->nlmsg_type);
-        break;
-    }
-
-    print_flags_verbose(nlh->nlmsg_flags);
-    printf("  nlmsg_seq: %u\n", nlh->nlmsg_seq);
-    printf("  nlmsg_pid: %u\n", nlh->nlmsg_pid);
-    printf("Attributes:\n");
-
-    mnl_attr_for_each(attr, nlh, rem) {
-        switch (nlh->nlmsg_type) {
-        case WG_CMD_GET_DEVICE:
-        case WG_CMD_SET_DEVICE:
-            print_device_attr(attr);
-            break;
-        default:
-            printf("Unknown Netlink Message Type: %u\n", nlh->nlmsg_type);
-            break;
-        }
-    }
-
-    printf("Hex Dump of Netlink Message:\n");
-    hex_dump(nlh, nlh->nlmsg_len);
-}
-
-// Function to print the libmnl formatted netlink message header
-static void print_netlink_header_libmnl(const struct nlmsghdr *nlh)
-{
-    printf("----------------\t------------------\n");
-    printf("|  %.010u  |\t| message length |\n", nlh->nlmsg_len);
-    printf("| %.05u | %c%c%c%c |\t|  type | flags  |\n",
-        nlh->nlmsg_type,
-        nlh->nlmsg_flags & NLM_F_REQUEST ? 'R' : '-',
-        nlh->nlmsg_flags & NLM_F_MULTI ? 'M' : '-',
-        nlh->nlmsg_flags & NLM_F_ACK ? 'A' : '-',
-        nlh->nlmsg_flags & NLM_F_ECHO ? 'E' : '-');
-    printf("|  %.010u  |\t| sequence number|\n", nlh->nlmsg_seq);
-    printf("|  %.010u  |\t|     port ID    |\n", nlh->nlmsg_pid);
-    printf("----------------\t------------------\n");
-}
-
-// Function to print the libmnl formatted netlink message payload
-static void print_netlink_payload_libmnl(const struct nlmsghdr *nlh, size_t extra_header_size)
-{
-    unsigned int i;
-    int rem = 0;
-
-    for (i = sizeof(struct nlmsghdr); i < nlh->nlmsg_len; i += 4) {
-        char *b = (char *)nlh;
-        struct nlattr *attr = (struct nlattr *)(b + i);
-
-        if (nlh->nlmsg_type < NLMSG_MIN_TYPE) {
-            printf("| %.2x %.2x %.2x %.2x  |\t",
-                   0xff & b[i], 0xff & b[i + 1],
-                   0xff & b[i + 2], 0xff & b[i + 3]);
-            printf("|                |\n");
-        } else if (extra_header_size > 0) {
-            extra_header_size -= 4;
-            printf("| %.2x %.2x %.2x %.2x  |\t",
-                   0xff & b[i], 0xff & b[i + 1],
-                   0xff & b[i + 2], 0xff & b[i + 3]);
-            printf("|  extra header  |\n");
-        } else if (rem == 0 && (attr->nla_type & NLA_TYPE_MASK) != 0) {
-            printf("|%.5u|%c%c|%.5u|\t",
-                   attr->nla_len,
-                   attr->nla_type & NLA_F_NESTED ? 'N' : '-',
-                   attr->nla_type & NLA_F_NET_BYTEORDER ? 'B' : '-',
-                   attr->nla_type & NLA_TYPE_MASK);
-            printf("|len |flags| type|\n");
-
-            if (!(attr->nla_type & NLA_F_NESTED)) {
-                rem = NLA_ALIGN(attr->nla_len) -
-                      sizeof(struct nlattr);
-            }
-        } else if (rem > 0) {
-            rem -= 4;
-            printf("| %.2x %.2x %.2x %.2x  |\t",
-                   0xff & b[i], 0xff & b[i + 1],
-                   0xff & b[i + 2], 0xff & b[i + 3]);
-            printf("|      data      |");
-            printf("\t %c %c %c %c\n",
-                   isprint(b[i]) ? b[i] : ' ',
-                   isprint(b[i + 1]) ? b[i + 1] : ' ',
-                   isprint(b[i + 2]) ? b[i + 2] : ' ',
-                   isprint(b[i + 3]) ? b[i + 3] : ' ');
-        }
-    }
-    printf("----------------\t------------------\n");
-}
-
-// Print the netlink message using libmnl format
-static void print_netlink_message_libmnl(const struct nlmsghdr *nlh)
-{
-    print_netlink_header_libmnl(nlh);
-    print_netlink_payload_libmnl(nlh, 0);
-}
-
-// Add a function to print the entire buffer of netlink messages
-static void print_netlink_buffer(const void *buf, size_t len)
-{
-    const struct nlmsghdr *nlh = buf;
-
-    while (mnl_nlmsg_ok(nlh, len)) {
-        print_netlink_message_verbose(nlh);
-        print_netlink_message_libmnl(nlh);
-        nlh = mnl_nlmsg_next(nlh, (int *)&len);
-    }
-}
 static int parse_linkinfo(const struct nlattr *attr, void *data)
 {
 	struct interface *interface = data;
 
-	print_device_attr(attr);
 	if (mnl_attr_get_type(attr) == IFLA_INFO_KIND && !strcmp(WG_GENL_NAME, mnl_attr_get_str(attr)))
 		interface->is_wireguard = true;
 	return MNL_CB_OK;
@@ -349,7 +48,6 @@ static int parse_infomsg(const struct nlattr *attr, void *data)
 {
 	struct interface *interface = data;
 
-	print_device_attr(attr);
 	if (mnl_attr_get_type(attr) == IFLA_LINKINFO)
 		return mnl_attr_parse_nested(attr, parse_linkinfo, data);
 	else if (mnl_attr_get_type(attr) == IFLA_IFNAME)
@@ -363,7 +61,7 @@ static int read_devices_cb(const struct nlmsghdr *nlh, void *data)
 	struct interface interface = { 0 };
 	int ret;
 
-	printf("Entering read_devices_cb\n");
+	DEBUG_PRINT("Entering read_devices_cb\n");
 	ret = mnl_attr_parse(nlh, sizeof(struct ifinfomsg), parse_infomsg, &interface);
 	if (ret != MNL_CB_OK)
 		return ret;
@@ -373,7 +71,7 @@ static int read_devices_cb(const struct nlmsghdr *nlh, void *data)
 		return ret;
 	if (nlh->nlmsg_type != NLMSG_DONE)
 		return MNL_CB_OK + 1;
-	printf("Exiting read_devices_cb\n");
+	DEBUG_PRINT("Exiting read_devices_cb\n");
 	return MNL_CB_OK;
 }
 
@@ -388,7 +86,7 @@ static int kernel_get_wireguard_interfaces(struct string_list *list)
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifm;
 
-	printf("Entering kernel_get_wireguard_interfaces\n");
+	DEBUG_PRINT("Entering kernel_get_wireguard_interfaces\n");
 	ret = -ENOMEM;
 	rtnl_buffer = calloc(SOCKET_BUFFER_SIZE, 1);
 	if (!rtnl_buffer)
@@ -444,20 +142,37 @@ cleanup:
 	free(rtnl_buffer);
 	if (nl)
 		mnl_socket_close(nl);
-	printf("Exiting kernel_get_wireguard_interfaces\n");
+	DEBUG_PRINT("Exiting kernel_get_wireguard_interfaces\n");
 	return ret;
 }
+static int kernel_get_device(struct wgdevice **device, const char *iface);
 
 static int kernel_set_device(struct wgdevice *dev)
 {
 	int ret = 0;
+	struct wgdevice *current = NULL;
 	struct wgpeer *peer = NULL;
 	struct wgallowedip *allowedip = NULL;
 	struct nlattr *peers_nest, *peer_nest, *allowedips_nest, *allowedip_nest;
 	struct nlmsghdr *nlh;
 	struct mnlg_socket *nlg;
 
-	printf("Entering kernel_set_device\n");
+	DEBUG_PRINT("Entering kernel_set_device\n");
+	if (dev->flags & WGDEVICE_HAS_TRANSPORT) {
+		ret = kernel_get_device(&current, dev->name);
+		if (ret < 0)
+			return ret;
+		if (!(current->flags & WGDEVICE_HAS_TRANSPORT)) {
+			free_wgdevice(current);
+			if (dev->transport == WG_TRANSPORT_TCP) {
+				errno = EOPNOTSUPP;
+				return -EOPNOTSUPP;
+			}
+			dev->flags &= ~WGDEVICE_HAS_TRANSPORT;
+		} else {
+			free_wgdevice(current);
+		}
+	}
 	nlg = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
 	if (!nlg)
 		return -errno;
@@ -569,8 +284,6 @@ toobig_peers:
 send:
 
 	// Print the netlink message before sending it
-	print_netlink_message_verbose(nlh);
-	print_netlink_message_libmnl(nlh);
 
 	if (mnlg_socket_send(nlg, nlh) < 0) {
 		ret = -errno;
@@ -587,7 +300,7 @@ send:
 out:
 	mnlg_socket_close(nlg);
 	errno = -ret;
-	printf("Exiting kernel_set_device\n");
+	DEBUG_PRINT("Exiting kernel_set_device\n");
 	return ret;
 }
 
@@ -595,7 +308,6 @@ static int parse_allowedip(const struct nlattr *attr, void *data)
 {
 	struct wgallowedip *allowedip = data;
 
-	print_allowedip_attr(attr);
 	switch (mnl_attr_get_type(attr)) {
 	case WGALLOWEDIP_A_UNSPEC:
 		break;
@@ -624,7 +336,7 @@ static int parse_allowedips(const struct nlattr *attr, void *data)
 	struct wgallowedip *new_allowedip = calloc(1, sizeof(*new_allowedip));
 	int ret;
 
-	printf("Entering parse_allowedips\n");
+	DEBUG_PRINT("Entering parse_allowedips\n");
 	if (!new_allowedip) {
 		perror("calloc");
 		return MNL_CB_ERROR;
@@ -640,7 +352,7 @@ static int parse_allowedips(const struct nlattr *attr, void *data)
 		return ret;
 	if (!((new_allowedip->family == AF_INET && new_allowedip->cidr <= 32) || (new_allowedip->family == AF_INET6 && new_allowedip->cidr <= 128)))
 		return MNL_CB_ERROR;
-	printf("Exiting parse_allowedips\n");
+	DEBUG_PRINT("Exiting parse_allowedips\n");
 	return MNL_CB_OK;
 }
 
@@ -648,7 +360,6 @@ static int parse_peer(const struct nlattr *attr, void *data)
 {
 	struct wgpeer *peer = data;
 
-	print_peer_attr(attr);
 	switch (mnl_attr_get_type(attr)) {
 	case WGPEER_A_UNSPEC:
 		break;
@@ -707,7 +418,7 @@ static int parse_peers(const struct nlattr *attr, void *data)
 	struct wgpeer *new_peer = calloc(1, sizeof(*new_peer));
 	int ret;
 
-	printf("Entering parse_peers\n");
+	DEBUG_PRINT("Entering parse_peers\n");
 	if (!new_peer) {
 		perror("calloc");
 		return MNL_CB_ERROR;
@@ -723,7 +434,7 @@ static int parse_peers(const struct nlattr *attr, void *data)
 		return ret;
 	if (!(new_peer->flags & WGPEER_HAS_PUBLIC_KEY))
 		return MNL_CB_ERROR;
-	printf("Exiting parse_peers\n");
+	DEBUG_PRINT("Exiting parse_peers\n");
 	return MNL_CB_OK;
 }
 
@@ -731,7 +442,6 @@ static int parse_device(const struct nlattr *attr, void *data)
 {
 	struct wgdevice *device = data;
 
-	print_device_attr(attr);
 	switch (mnl_attr_get_type(attr)) {
 	case WGDEVICE_A_UNSPEC:
 		break;
@@ -766,8 +476,12 @@ static int parse_device(const struct nlattr *attr, void *data)
 			device->fwmark = mnl_attr_get_u32(attr);
 		break;
 	case WGDEVICE_A_TRANSPORT:
-		if (!mnl_attr_validate(attr, MNL_TYPE_U8))
+		if (!mnl_attr_validate(attr, MNL_TYPE_U8)) {
 			device->transport = mnl_attr_get_u8(attr);
+			if (device->transport > WG_TRANSPORT_TCP)
+				return MNL_CB_ERROR;
+			device->flags |= WGDEVICE_HAS_TRANSPORT;
+		}
 		break;
 	case WGDEVICE_A_PEERS:
 		return mnl_attr_parse_nested(attr, parse_peers, device);
@@ -778,9 +492,9 @@ static int parse_device(const struct nlattr *attr, void *data)
 
 static int read_device_cb(const struct nlmsghdr *nlh, void *data)
 {
-	printf("Entering read_device_cb\n");
+	DEBUG_PRINT("Entering read_device_cb\n");
 	int ret = mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_device, data);
-	printf("Exiting read_device_cb\n");
+	DEBUG_PRINT("Exiting read_device_cb\n");
 	return ret;
 }
 
@@ -788,7 +502,7 @@ static void coalesce_peers(struct wgdevice *device)
 {
 	struct wgpeer *old_next_peer, *peer = device->first_peer;
 
-	printf("Entering coalesce_peers\n");
+	DEBUG_PRINT("Entering coalesce_peers\n");
 	while (peer && peer->next_peer) {
 		if (memcmp(peer->public_key, peer->next_peer->public_key, sizeof(peer->public_key))) {
 			peer = peer->next_peer;
@@ -805,7 +519,7 @@ static void coalesce_peers(struct wgdevice *device)
 		peer->next_peer = old_next_peer->next_peer;
 		free(old_next_peer);
 	}
-	printf("Exiting coalesce_peers\n");
+	DEBUG_PRINT("Exiting coalesce_peers\n");
 }
 
 static int kernel_get_device(struct wgdevice **device, const char *iface)
@@ -856,6 +570,6 @@ out:
 		*device = NULL;
 	}
 	errno = -ret;
-	printf("Exiting kernel_get_device\n");
+	DEBUG_PRINT("Exiting kernel_get_device\n");
 	return ret;
 }

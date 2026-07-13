@@ -22,6 +22,11 @@
 #define WG_KEY_LEN 32
 #endif
 
+#ifndef WG_TRANSPORT_UDP
+#define WG_TRANSPORT_UDP 0
+#define WG_TRANSPORT_TCP 1
+#endif
+
 /* Cross platform __kernel_timespec */
 struct timespec64 {
 	int64_t tv_sec;

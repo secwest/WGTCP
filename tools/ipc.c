@@ -16,11 +16,7 @@ struct string_list {
 	size_t cap;
 };
 
-#ifdef DEBUG
-#define DEBUG_PRINT(fmt, args...) fprintf(stderr, fmt, ##args)
-#else
-#define DEBUG_PRINT(fmt, args...) /* Don't do anything in release builds */
-#endif
+#define DEBUG_PRINT(fmt, args...) do { } while (0)
 
 static int string_list_add(struct string_list *list, const char *str)
 {
@@ -133,8 +129,25 @@ int ipc_set_device(struct wgdevice *dev)
 	DEBUG_PRINT("Entering ipc_set_device\n");
 	DEBUG_PRINT("ipc_set_device: Setting device '%s'\n", dev->name);
 
+#if !defined(__linux__)
+	if (dev->flags & WGDEVICE_HAS_TRANSPORT) {
+		if (dev->transport == WG_TRANSPORT_TCP) {
+			errno = EOPNOTSUPP;
+			return -EOPNOTSUPP;
+		}
+		dev->flags &= ~WGDEVICE_HAS_TRANSPORT;
+	}
+#endif
+
 #ifdef IPC_SUPPORTS_KERNEL_INTERFACE
 	if (userspace_has_wireguard_interface(dev->name)) {
+		if (dev->flags & WGDEVICE_HAS_TRANSPORT) {
+			if (dev->transport == WG_TRANSPORT_TCP) {
+				errno = EOPNOTSUPP;
+				return -EOPNOTSUPP;
+			}
+			dev->flags &= ~WGDEVICE_HAS_TRANSPORT;
+		}
 		DEBUG_PRINT("ipc_set_device: Interface '%s' found in userspace\n", dev->name);
 		DEBUG_PRINT("Exiting ipc_set_device\n");
 		return userspace_set_device(dev);
@@ -143,6 +156,13 @@ int ipc_set_device(struct wgdevice *dev)
 	DEBUG_PRINT("Exiting ipc_set_device\n");
 	return kernel_set_device(dev);
 #else
+	if (dev->flags & WGDEVICE_HAS_TRANSPORT) {
+		if (dev->transport == WG_TRANSPORT_TCP) {
+			errno = EOPNOTSUPP;
+			return -EOPNOTSUPP;
+		}
+		dev->flags &= ~WGDEVICE_HAS_TRANSPORT;
+	}
 	DEBUG_PRINT("Exiting ipc_set_device\n");
 	return userspace_set_device(dev);
 #endif

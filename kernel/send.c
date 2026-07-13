@@ -492,7 +492,7 @@ static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
 		wg_timers_handshake_initiated(peer);
 	} else {
 		/* Log failure to create handshake initiation */
-		printk(KERN_ERR "wg_packet_send_handshake_initiation: Failed to create handshake initiation for peer=%px\n", peer);
+		wg_dbg("wg_packet_send_handshake_initiation: Failed to create handshake initiation for peer=%px\n", peer);
 	}
 
 	/* Exit function */
@@ -766,7 +766,9 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     wg_dbg("skb->len = %u, skb->data_len = %u, skb->network_header = %px\n", skb->len, skb->data_len, skb_network_header(skb));
     wg_dbg("keypair->remote_index = %u\n", keypair->remote_index);
     wg_dbg("skb->data (before encryption): %*ph\n", skb->len, skb->data);
+#ifdef WG_TCP_VERBOSE
     decode_and_print_packet(skb, "[encrypt]");
+#endif
 	
     // Force hash calculation before encryption
     skb_get_hash(skb);
@@ -781,8 +783,8 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     // Expand data section
     num_frags = skb_cow_data(skb, trailer_len, &trailer);
     if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
-        printk(KERN_ERR "Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
-        printk(KERN_ERR "Exiting encrypt_packet with false\n");
+        wg_dbg("Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
+        wg_dbg("Exiting encrypt_packet with false\n");
         return false;
     }
 
@@ -792,16 +794,16 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 
     // Expand head section
     if (unlikely(skb_cow_head(skb, DATA_PACKET_HEAD_ROOM) < 0)) {
-        printk(KERN_ERR "Failed skb_cow_head, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
-        printk(KERN_ERR "Exiting encrypt_packet with false\n");
+        wg_dbg("Failed skb_cow_head, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
+        wg_dbg("Exiting encrypt_packet with false\n");
         return false;
     }
     wg_dbg("Expanded head section, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
 
     // Finalize checksum calculation
     if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL && skb_checksum_help(skb))) {
-        printk(KERN_ERR "Failed skb_checksum_help, skb->len=%u\n", skb->len);
-        printk(KERN_ERR "Exiting encrypt_packet with false\n");
+        wg_dbg("Failed skb_checksum_help, skb->len=%u\n", skb->len);
+        wg_dbg("Exiting encrypt_packet with false\n");
         return false;
     }
     wg_dbg("Checksum finalized, skb->len=%u\n", skb->len);
@@ -823,8 +825,8 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     // Encrypt the scattergather segments
     sg_init_table(sg, num_frags);
     if (skb_to_sgvec(skb, sg, sizeof(struct message_data), noise_encrypted_len(plaintext_len)) <= 0) {
-        printk(KERN_ERR "Failed skb_to_sgvec, skb->len=%u\n", skb->len);
-        printk(KERN_ERR "Exiting encrypt_packet with false\n");
+        wg_dbg("Failed skb_to_sgvec, skb->len=%u\n", skb->len);
+        wg_dbg("Exiting encrypt_packet with false\n");
         return false;
     }
 
@@ -1053,7 +1055,8 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 		 *  for removal
 		 */
 		/* Extract fragmentation info if this is IPv4 and fragmented */
-		if (skb->protocol == htons(ETH_P_IP)) {
+		if (peer->device->transport == WG_TRANSPORT_TCP &&
+		    skb->protocol == htons(ETH_P_IP)) {
 			__be16 id = 0, frag_off = 0;
 			if (wg_ipv4_get_fraginfo(skb, &id, &frag_off)) {
 				PACKET_CB(skb)->frag_id = id;

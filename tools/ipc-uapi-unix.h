@@ -14,7 +14,6 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 
-#define RUNSTATEDIR "/var/run" // Define RUNSTATEDIR here --dr to fix build wierdness XXX
 #define SOCK_PATH RUNSTATEDIR "/wireguard/"
 #define SOCK_SUFFIX ".sock"
 
