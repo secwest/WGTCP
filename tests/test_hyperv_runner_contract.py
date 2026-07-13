@@ -123,6 +123,21 @@ class HyperVRunnerContractTests(unittest.TestCase):
         self.assertEqual(suite.results[0]["name"], "preflight")
         self.assertIn("ssh connection failed", suite.abort_reason)
 
+    def test_tcp_parity_cases_are_independently_selectable(self):
+        names = [
+            "tcp-asymmetric-listen-ports",
+            "tcp-full-tunnel-live-fwmark",
+            "tcp-route-change",
+            "tcp-source-address-uplink-change",
+            "tcp-ipv6-dual-stack",
+            "tcp-authenticated-carrier-lifetime",
+        ]
+        suite = Harness({})
+        suite.args.only_case = names
+
+        self.assertEqual(run_quietly(suite), 0)
+        self.assertEqual(suite.cases_run, names)
+
     def test_ssh_failure_is_classified_after_command_log_is_written(self):
         with tempfile.TemporaryDirectory() as directory:
             suite = self.command_suite(Path(directory))

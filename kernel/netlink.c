@@ -432,10 +432,25 @@ static int get_peer(struct wg_peer *peer, struct sk_buff *skb, struct dump_ctx *
 			goto err;
 
 		read_lock_bh(&peer->endpoint_lock);
-		if (peer->endpoint.addr.sa_family == AF_INET)
-			fail = nla_put(skb, WGPEER_A_ENDPOINT, sizeof(peer->endpoint.addr4), &peer->endpoint.addr4);
-		else if (peer->endpoint.addr.sa_family == AF_INET6)
-			fail = nla_put(skb, WGPEER_A_ENDPOINT, sizeof(peer->endpoint.addr6), &peer->endpoint.addr6);
+		if (peer->device->transport == WG_TRANSPORT_TCP &&
+		    peer->peer_endpoint_set) {
+			if (peer->peer_endpoint.addr.sa_family == AF_INET)
+				fail = nla_put(skb, WGPEER_A_ENDPOINT,
+					       sizeof(peer->peer_endpoint.addr4),
+					       &peer->peer_endpoint.addr4);
+			else if (peer->peer_endpoint.addr.sa_family == AF_INET6)
+				fail = nla_put(skb, WGPEER_A_ENDPOINT,
+					       sizeof(peer->peer_endpoint.addr6),
+					       &peer->peer_endpoint.addr6);
+		} else if (peer->endpoint.addr.sa_family == AF_INET) {
+			fail = nla_put(skb, WGPEER_A_ENDPOINT,
+				       sizeof(peer->endpoint.addr4),
+				       &peer->endpoint.addr4);
+		} else if (peer->endpoint.addr.sa_family == AF_INET6) {
+			fail = nla_put(skb, WGPEER_A_ENDPOINT,
+				       sizeof(peer->endpoint.addr6),
+				       &peer->endpoint.addr6);
+		}
 		read_unlock_bh(&peer->endpoint_lock);
 		if (fail)
 			goto err;
@@ -857,10 +872,18 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	if (info->attrs[WGDEVICE_A_FWMARK]) {
 		struct wg_peer *peer;
-		wg->fwmark = nla_get_u32(info->attrs[WGDEVICE_A_FWMARK]);
+		const u32 fwmark = nla_get_u32(info->attrs[WGDEVICE_A_FWMARK]);
+		const bool changed = fwmark != wg->fwmark;
+
+		wg->fwmark = fwmark;
 //		wg_dbg("Parsed WGDEVICE_A_FWMARK: %u\n", wg->fwmark);
-		list_for_each_entry(peer, &wg->peer_list, peer_list)
+		if (wg->transport == WG_TRANSPORT_TCP)
+			wg_tcp_set_device_mark(wg, fwmark);
+		list_for_each_entry(peer, &wg->peer_list, peer_list) {
 			wg_socket_clear_peer_endpoint_src(peer);
+			if (changed && wg->transport == WG_TRANSPORT_TCP)
+				wg_tcp_peer_request_reconnect(peer);
+		}
 	}
 
 	if (info->attrs[WGDEVICE_A_LISTEN_PORT]) {

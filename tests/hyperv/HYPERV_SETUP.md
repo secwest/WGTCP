@@ -14,6 +14,12 @@ The recorded campaign used Windows 11 Pro, Hyper-V, Multipass 1.16.3 with the
 `hyperv` driver, and two Ubuntu 24.04 guests running kernel
 `6.8.0-124-generic`.
 
+The final run `wg20260713T185138Z` used source base
+`e827d5f93f088dba4499e7f59d5f18c79600cc94`, base archive SHA-256
+`dc743a6f917fb61aff39bdb58bfdb428d67c9788bfc78a4885c720c2b7f6d3d1`, and
+Git-visible overlay SHA-256
+`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
+
 | Component | `wgtcp-a` | `wgtcp-b` |
 |---|---|---|
 | CPU, memory, disk | 4 vCPU, 8 GB, 60 GB | 4 vCPU, 8 GB, 60 GB |
@@ -172,6 +178,83 @@ Start-Service Multipass
 This recovery is intentionally PID-checked. A broad process kill can terminate
 unrelated Hyper-V or user workloads. If the service again cannot stop or the
 driver remains unresponsive, reboot Windows rather than repeatedly forcing it.
+
+### Orphaned Multipass client recovery
+
+A timed-out host command can leave its `multipass.exe` client alive even while
+the `multipassd` service and VMs remain healthy. After the two excluded
+2026-07-13 runs, seven such clients were consuming CPU. Each was inspected by
+exact PID, creation time, executable path, and complete command line before
+only those seven exact client PIDs were terminated. `multipassd`, `vmwp.exe`,
+and both managed VMs were left untouched; the next clean run passed all 32
+cases.
+
+First inventory clients and correlate their age and CPU use:
+
+```powershell
+$clients = @(Get-CimInstance Win32_Process -Filter "Name='multipass.exe'" |
+    Select-Object ProcessId,CreationDate,ExecutablePath,CommandLine)
+$clients | Sort-Object CreationDate | Format-List
+$clients | ForEach-Object {
+    Get-Process -Id ([int]$_.ProcessId) |
+        Select-Object Id,StartTime,CPU,Path
+}
+```
+
+A candidate is not safe to stop merely because its name is `multipass.exe` or
+it is using CPU. Its complete command line and age must match a known completed
+or timed-out harness invocation. For each candidate, copy the exact command
+line from the inventory, then re-read and compare that same PID immediately
+before termination:
+
+```powershell
+$clientPid = 12345 # Replace with one inspected stale client PID.
+$expectedCommandLine = 'copy the complete inspected command line here'
+$live = @(Get-CimInstance Win32_Process -Filter "ProcessId=$clientPid")
+if ($live.Count -ne 1 -or $live[0].Name -cne 'multipass.exe' -or
+    -not $live[0].CommandLine -or
+    $live[0].CommandLine -cne $expectedCommandLine) {
+    throw 'Client PID or command line changed; nothing was stopped'
+}
+Stop-Process -Id $clientPid -Force
+```
+
+Repeat that verification separately for each confirmed stale client. Never
+use `Stop-Process -Name multipass*` or another blanket kill. Do not stop
+`multipassd`, the `Multipass` service, `vmwp.exe`, or a VM as part of stale
+client cleanup. If a PID has been reused, its command line is incomplete, or
+the invocation may still be active, leave it alone and investigate further.
+
+After clearing verified clients, recover guest ownership from the failed
+run's evidence. The external case name is not the ownership key: read the last
+successful `prepare` command for that case and use the run ID, internal case
+ID, and interface from its argument vector:
+
+```powershell
+$run = 'wg20260713T183821Z'
+$report = Get-Content "./tests/hyperv/results/$run/report.json" -Raw |
+    ConvertFrom-Json
+$failed = @($report.results | Where-Object status -EQ 'FAIL')[-1]
+$report.commands |
+    Where-Object { $_.case -ceq $failed.name -and $_.label -ceq 'prepare' } |
+    ForEach-Object { $_.argv -join ' ' }
+```
+
+For the first excluded run, the logged ownership tuple was
+`wg20260713T183821Z m13 wgt0`; for the second it was
+`wg20260713T184512Z m10 wgt0`. Cleanup was issued on both guests for each
+applicable tuple, for example:
+
+```powershell
+multipass exec wgtcp-a -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T183821Z m13 wgt0
+multipass exec wgtcp-b -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T183821Z m13 wgt0
+multipass exec wgtcp-a -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T184512Z m10 wgt0
+multipass exec wgtcp-b -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T184512Z m10 wgt0
+```
+
+Use values from the current failed run rather than reusing these historical
+ones. The ownership guard will reject a mismatched tuple; do not bypass it or
+delete an interface by name.
 
 ### Exceptional stuck VM worker recovery
 
@@ -421,6 +504,7 @@ does not replace the snapshot manifest or host `provision-state.json`.
 | An early diagnostic cloud-config failed schema validation and used settings unsuitable for a reusable lab. | The final VM creation path uses Multipass's standard cloud-init and installs a small, validated netplan afterward. Diagnostic cloud-init, including any temporary access mechanism, stays under the ignored results tree and is excluded from the repository and source snapshot. |
 | `Test-NetConnection <guest>:22` could sit on "Waiting for response" indefinitely. | `Invoke-MultipassExecProbe` runs `multipass exec -- true` as a child process with a 20-second attempt timeout and a bounded overall deadline. |
 | Multipass service stop could hang even after UAC was accepted. | Close clients first; verify the `multipassd` service PID before a forced stop; reboot if service recovery does not remain stable. |
+| Host timeouts left orphaned `multipass.exe` clients consuming CPU while the service and VMs remained healthy. | Inspect PID, age, executable, CPU, and complete command line; re-read and terminate only each exact verified stale client PID. Never blanket-kill Multipass or stop `multipassd`; then cleanup guest ownership with the run/internal case ID recorded by the successful `prepare` command. |
 | Private NICs could steal attention from management-network diagnosis. | The management NIC and both data-plane NICs have separate roles; provisioning checks management before and private addresses after attachment. |
 | Direct cloud-init/netplan activation could strand a guest. | Render per-guest files, use MAC matching and `set-name`, validate with `netplan generate`, preserve a backup, and activate only after adapters exist. |
 | Unsigned module insertion was blocked and memory allocation varied. | Disable Secure Boot and Dynamic Memory while each managed VM is stopped. |
@@ -475,13 +559,27 @@ replace that provenance step. Machine-readable results and command logs remain
 under the ignored `tests/hyperv/results/<run-id>/` directory. The curated,
 committed outcome is [`RESULTS.md`](RESULTS.md).
 
-The valid brokered-host campaign `wg20260712T212739Z` passed all 26 cases in
-208.713 seconds. An earlier sandboxed attempt, `wg20260712T200006Z`, could not
-reach TCP port 22 on either management address and no guest command succeeded;
-it was a 0-of-26 infrastructure run, not regression evidence. Treat this
-pattern as a control-channel failure, recover Multipass or the Default Switch,
-then start a new run rather than interpreting the case list as product
-failures.
+The valid brokered-host campaign `wg20260713T185138Z` started at
+2026-07-13 18:51:38 UTC and passed all 32 cases with no failures or skips in
+376.109 seconds across 503 recorded commands. Its preflight passed all 89 local
+source-contract checks on both guests.
+
+Two immediately preceding runs are excluded from product evidence.
+`wg20260713T183821Z` completed 12 passing cases before a `wgtcp-a` collection
+client reached its 180-second host timeout. `wg20260713T184512Z` completed nine
+passing cases before the same failure pattern. Seven orphaned `multipass.exe`
+clients were verified and stopped by exact PID as described above, while the
+service and VMs remained running; exact ownership cleanup used `m13` and `m10`
+from the respective logged `prepare` commands. The clean final run then passed
+all 32 cases. These aborts were control-client infrastructure failures, not
+product regressions or partial release results.
+
+A much earlier sandboxed attempt, `wg20260712T200006Z`, could not reach TCP
+port 22 on either management address and no guest command succeeded; it was a
+0-of-26 infrastructure run, not regression evidence. Treat either pattern as
+a control-channel failure, recover the relevant client or Multipass/Default
+Switch layer, perform exact ownership cleanup when preparation occurred, and
+start a new run rather than interpreting the case list as product failures.
 
 ## 9. Recovery and cleanup boundaries
 

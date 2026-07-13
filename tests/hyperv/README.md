@@ -127,12 +127,14 @@ failure logs include public WireGuard state, listening and connected TCP
 sockets, and the kernel log emitted after the per-case reset; private keys are
 never collected.
 
-The 26 cases include preflight validation; all 16 combinations of stock/fork
+The 32 cases include preflight validation; all 16 combinations of stock/fork
 kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
 authenticated roaming, random-port, and output tests; DEBUG initialization selftests; stock
 kernel capability and live-mode-change guards, including TCP listen-port
-mutation and random-port coupling; and three TCP cases covering static
-traffic, stock-tool management, and a configured underlay path change.
+mutation and random-port coupling; and TCP cases covering static traffic,
+asymmetric listen ports, stock-tool management, configured underlay migration,
+full-tunnel live `FwMark` changes, route/source/uplink reconnects, IPv6 and
+dual-stack listeners, and authenticated-carrier lifetime.
 The latest committed campaign summary is in [`RESULTS.md`](RESULTS.md).
 
 Each case records interface and underlay ownership before making changes and
@@ -145,13 +147,20 @@ multipass exec wgtcp-a -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest
 ```
 
 The TCP path-change case explicitly updates both configured endpoints before
-moving to `path1` and cycling both WireGuard links down and up. Run
-`wg20260712T212739Z` passed that forward and reverse migration along with the
-other 25 cases, for **26 PASS, 0 FAIL, 0 SKIP**. The implementation replaces
-`peer_endpoint` on explicit netlink changes and shuts down an active outbound
-stream so retry can dial the new target; learned/SKB endpoint updates remain
-observational. This is a configured migration and interface-restart test, not
-an automatic authenticated-roaming test.
+moving to `path1` and cycling both WireGuard links down and up. The runtime
+parity cases additionally exercise authenticated dial-target updates and
+notifier-driven reconnects after live route, source-address, uplink, and
+`FwMark` changes. They also validate independent asymmetric listen ports,
+IPv4/IPv6 listeners with an IPv6 outer carrier, and a carrier that remains
+authenticated and usable for 40 seconds on each guest.
+
+Run `wg20260713T185138Z` passed all of these checks for **32 PASS, 0 FAIL, 0
+SKIP** in 376.109 seconds, recording 503 commands. Its source identity is base
+`e827d5f93f088dba4499e7f59d5f18c79600cc94`, base archive SHA-256
+`dc743a6f917fb61aff39bdb58bfdb428d67c9788bfc78a4885c720c2b7f6d3d1`, and
+dirty overlay SHA-256
+`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
+Preflight passed all 89 local source-contract checks on each guest.
 
 The same campaign proved the live TCP listen-port guard returns `EBUSY`
 without changing either listener. After the interface was brought down,
@@ -159,11 +168,45 @@ without changing either listener. After the interface was brought down,
 UDP companion used that same port. These checks cover the tested lifecycle;
 they do not replace broader bind-race or multi-namespace stress testing.
 
-The preceding sandboxed attempt, `wg20260712T200006Z`, was not a regression
-campaign: host policy blocked TCP port 22 to both management addresses, all
-bounded guest commands failed, and zero of 26 cases ran. Recover the control
-channel and start a fresh run instead of counting such an infrastructure
-failure as product test evidence.
+The excluded runs `wg20260713T183821Z` and `wg20260713T184512Z` completed 12
+and nine passing cases, respectively, before the `wgtcp-a` collection client
+reached its 180-second host timeout. Seven orphaned, CPU-spinning
+`multipass.exe` clients were inspected by exact PID, age, and command line and
+then terminated by exact PID without stopping `multipassd` or either VM. The
+guest state was ownership-cleaned using the internal IDs from the logged
+successful `prepare` commands (`m13` for the first run and `m10` for the
+second), after which the clean run above passed all 32 cases. These were
+control-client infrastructure aborts, not product failures or partial
+campaigns.
+
+When a host timeout leaves Multipass clients consuming CPU, inspect before
+terminating anything:
+
+```powershell
+$clients = @(Get-CimInstance Win32_Process -Filter "Name='multipass.exe'" |
+    Select-Object ProcessId,CreationDate,ExecutablePath,CommandLine)
+$clients | Sort-Object CreationDate | Format-List
+$clients | ForEach-Object {
+    Get-Process -Id ([int]$_.ProcessId) |
+        Select-Object Id,StartTime,CPU,Path
+}
+```
+
+Match each stale client to an old, timed-out command by exact PID, command
+line, and age, re-read that PID immediately before stopping it, and terminate
+only that exact `multipass.exe` client. Never use a blanket process-name kill,
+and do not stop `multipassd`, `vmwp.exe`, or either VM for this condition. Then
+read the failed run's last successful `prepare` commands and invoke
+`guest-node.sh cleanup` on both guests with their logged run ID, internal case
+ID, and interface. The fully PID-checked procedure and the exact `m13`/`m10`
+recovery record are in
+[`HYPERV_SETUP.md`](HYPERV_SETUP.md#orphaned-multipass-client-recovery).
+
+The runtime evidence still stops short of authenticated socket promotion for
+arbitrary NAT ephemeral-port roaming, a cookie-equivalent TCP pre-authentication
+cost defense, hostile short-write/parser-resynchronization/queue-pressure
+stress, complete configuration round trips, link-local IPv6 and VRF or
+namespace-move behavior, and long-duration multi-flow soak testing.
 
 Useful inspection commands are:
 

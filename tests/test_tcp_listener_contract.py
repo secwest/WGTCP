@@ -13,7 +13,8 @@ def source(relative_path: str) -> str:
 
 
 def section(text: str, start: str, end: str) -> str:
-    return text[text.index(start) : text.index(end)]
+    start_index = text.index(start)
+    return text[start_index : text.index(end, start_index + len(start))]
 
 
 class TcpListenerContract(unittest.TestCase):
@@ -142,6 +143,11 @@ class TcpListenerContract(unittest.TestCase):
             "static void wg_socket_set_peer_endpoint_internal(",
             "void wg_socket_set_peer_endpoint(",
         )
+        reconnect = section(
+            self.socket,
+            "static void wg_tcp_peer_request_reconnect_after(",
+            "static void wg_socket_set_peer_endpoint_internal(",
+        )
         remove_worker = section(
             self.socket,
             "void wg_tcp_outbound_remove_worker(",
@@ -149,8 +155,15 @@ class TcpListenerContract(unittest.TestCase):
         )
 
         self.assertIn("tcp_target_changed = peer->peer_endpoint_set", endpoint_update)
-        self.assertIn("kernel_sock_shutdown(outbound_socket, SHUT_RDWR);", endpoint_update)
-        self.assertIn("peer->tcp_reconnect_requested = true;", endpoint_update)
+        self.assertIn("wg_tcp_peer_request_reconnect(peer);", endpoint_update)
+        self.assertNotIn("kernel_sock_shutdown(", reconnect)
+        self.assertIn("peer->tcp_reconnect_requested = true;", reconnect)
+        self.assertIn(
+            "peer->tcp_outbound_remove_socket = peer->outbound_socket;",
+            reconnect,
+        )
+        queue = reconnect.index("mod_delayed_work(")
+        self.assertLess(queue, reconnect.index("spin_unlock_bh(&peer->tcp_lock);", queue))
         self.assertIn("peer->tcp_reconnect_requested = false;", remove_worker)
         self.assertLess(
             remove_worker.index("wg_clean_peer_socket(peer, true, false, false);"),
@@ -174,6 +187,54 @@ class TcpListenerContract(unittest.TestCase):
         self.assertIn("wg = socket_data->device;", receive)
         self.assertNotIn("skb->sk = sk", receive)
 
+    def test_listeners_and_accepted_streams_keep_the_device_mark(self) -> None:
+        listener = section(
+            self.socket,
+            "int wg_tcp_listener_worker(",
+            "int wg_tcp_listener4_thread(",
+        )
+        setup = section(
+            self.socket,
+            "int wg_setup_tcp_listen4(",
+            "int wg_tcp_listener_socket_init(",
+        )
+        refresh = section(
+            self.socket,
+            "void wg_tcp_set_device_mark(",
+            "void wg_free_peer_socket_data(",
+        )
+        fwmark = section(
+            self.netlink,
+            "if (info->attrs[WGDEVICE_A_FWMARK]) {",
+            "if (info->attrs[WGDEVICE_A_LISTEN_PORT]) {",
+        )
+        add = section(
+            self.socket,
+            "int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socket,",
+            "static void wg_touch_tcp_connection(",
+        )
+
+        self.assertIn(
+            "WRITE_ONCE(new_peer_connection->sk->sk_mark, wg->fwmark);",
+            listener,
+        )
+        self.assertEqual(
+            setup.count("WRITE_ONCE(socket->sk->sk_mark, wg->fwmark);"), 2
+        )
+        self.assertIn("wg->tcp_listen_socket4->sk->sk_mark", refresh)
+        self.assertIn("wg->tcp_listen_socket6->sk->sk_mark", refresh)
+        self.assertIn("entry->tcp_socket->sk->sk_mark", refresh)
+        self.assertIn("wg_tcp_set_device_mark(wg, fwmark);", fwmark)
+        list_lock = "spin_lock_bh(&wg->tcp_connection_list_lock);"
+        publish_mark = "WRITE_ONCE(receive_socket->sk->sk_mark, wg->fwmark);"
+        publish = "list_add_tail_rcu(&entry->tcp_connection_ll"
+        self.assertLess(add.index(list_lock), add.index(publish_mark))
+        self.assertLess(add.index(publish_mark), add.index(publish))
+        self.assertLess(
+            add.index(publish),
+            add.index("spin_unlock_bh(&wg->tcp_connection_list_lock);", add.index(publish)),
+        )
+
     def test_tcp_read_worker_closes_the_lost_wakeup_window(self) -> None:
         read_worker = section(
             self.socket,
@@ -182,7 +243,7 @@ class TcpListenerContract(unittest.TestCase):
         )
 
         clear = "peer->tcp_read_worker_scheduled = false;"
-        pending = "!skb_queue_empty(&peer->peer_socket->sk->sk_receive_queue)"
+        pending = "!skb_queue_empty(&socket->sk->sk_receive_queue)"
         requeue = "queue_work(peer->tcp_read_wq, &peer->tcp_read_work);"
         self.assertIn(clear, read_worker)
         self.assertIn(pending, read_worker)
@@ -206,6 +267,8 @@ class TcpListenerContract(unittest.TestCase):
         for scheduler in (read_worker_exit, data_ready):
             lifetime_lock = "spin_lock_bh(&peer->tcp_lock);"
             scheduler_lock = "spin_lock(&peer->tcp_read_lock);"
+            stopping_guard = "!peer->tcp_stopping"
+            cleanup_guard = "READ_ONCE(peer->device->tcp_cleanup_scheduled)"
             outbound_guard = "!peer->tcp_outbound_remove_scheduled"
             inbound_guard = "!peer->tcp_inbound_remove_scheduled"
             queue = "queue_work(peer->tcp_read_wq, &peer->tcp_read_work);"
@@ -215,6 +278,8 @@ class TcpListenerContract(unittest.TestCase):
             for operation in (
                 lifetime_lock,
                 scheduler_lock,
+                stopping_guard,
+                cleanup_guard,
                 outbound_guard,
                 inbound_guard,
                 queue,
@@ -223,7 +288,9 @@ class TcpListenerContract(unittest.TestCase):
             ):
                 self.assertIn(operation, scheduler)
             self.assertLess(scheduler.index(lifetime_lock), scheduler.index(scheduler_lock))
-            self.assertLess(scheduler.index(scheduler_lock), scheduler.index(outbound_guard))
+            self.assertLess(scheduler.index(scheduler_lock), scheduler.index(stopping_guard))
+            self.assertLess(scheduler.index(stopping_guard), scheduler.index(cleanup_guard))
+            self.assertLess(scheduler.index(cleanup_guard), scheduler.index(outbound_guard))
             self.assertLess(scheduler.index(outbound_guard), scheduler.index(inbound_guard))
             self.assertLess(scheduler.index(inbound_guard), scheduler.index(queue))
             self.assertLess(scheduler.index(queue), scheduler.index(scheduler_unlock))
@@ -256,7 +323,9 @@ class TcpListenerContract(unittest.TestCase):
         ):
             self.assertNotIn(unused_generic_resource, temp_create)
         self.assertIn("skb_queue_head_init(&peer->send_queue);", temp_create)
-        self.assertIn("peer->tcp_read_wq = alloc_workqueue", temp_create)
+        self.assertIn("peer->tcp_read_wq = wg->tcp_auth_wq;", temp_create)
+        self.assertIn("peer->tcp_write_wq = wg->tcp_auth_wq;", temp_create)
+        self.assertNotIn("alloc_workqueue", temp_create)
 
     def test_temp_destroy_quiesces_workers_before_socket_wrapper(self) -> None:
         destroy = section(
@@ -310,6 +379,8 @@ class TcpListenerContract(unittest.TestCase):
             stop.index("wg_destruct_tcp_connection_list(wg);"),
         )
         drain = destruct.index("wg_destruct_tcp_connection_list(wg);")
+        auth_queue = destruct.index("destroy_workqueue(wg->tcp_auth_wq);")
+        self.assertLess(drain, auth_queue)
         self.assertLess(drain, destruct.index("wg_peer_remove_all(wg);"))
         self.assertLess(drain, destruct.index("destroy_workqueue(wg->handshake_receive_wq);"))
         self.assertLess(drain, destruct.index("kvfree(wg->peer_hashtable);"))

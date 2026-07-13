@@ -71,6 +71,11 @@ class TcpStreamContract(unittest.TestCase):
         self.assertNotIn("struct wg_tcp_encap_header", worker)
 
     def test_writer_claim_and_teardown_share_the_socket_lifetime_lock(self) -> None:
+        schedule_locked = section(
+            self.socket,
+            "static void wg_tcp_schedule_write_locked(",
+            "static void wg_tcp_schedule_write(",
+        )
         schedule = section(
             self.socket,
             "static void wg_tcp_schedule_write(",
@@ -89,12 +94,24 @@ class TcpStreamContract(unittest.TestCase):
 
         claim_lock = "spin_lock_bh(&peer->tcp_lock);"
         queue = "queue_work(peer->tcp_write_wq, &peer->tcp_write_work);"
-        self.assertLess(schedule.index(claim_lock), schedule.index(queue))
+        self.assertIn("lockdep_assert_held(&peer->tcp_lock);", schedule_locked)
+        self.assertIn(queue, schedule_locked)
         self.assertLess(
-            schedule.index(queue),
+            schedule.index(claim_lock),
+            schedule.index("wg_tcp_schedule_write_locked(peer);"),
+        )
+        self.assertLess(
+            schedule.index("wg_tcp_schedule_write_locked(peer);"),
             schedule.index("spin_unlock_bh(&peer->tcp_lock);"),
         )
-        self.assertIn("wg_tcp_schedule_write(peer);", enqueue)
+        enqueue_lock = enqueue.index(claim_lock)
+        enqueue_tail = enqueue.index("__skb_queue_tail(&peer->send_queue, frame);")
+        enqueue_schedule = enqueue.index("wg_tcp_schedule_write_locked(peer);")
+        enqueue_unlock = enqueue.index("spin_unlock_bh(&peer->tcp_lock);")
+        self.assertLess(enqueue_lock, enqueue_tail)
+        self.assertLess(enqueue_tail, enqueue_schedule)
+        self.assertLess(enqueue_schedule, enqueue_unlock)
+        self.assertIn("peer->tcp_stopping", enqueue)
         self.assertNotIn("peer->peer_socket->sk", enqueue)
         self.assertIn("struct socket *socket = NULL;", worker)
         self.assertIn("socket = peer->peer_socket;", worker)
@@ -134,7 +151,7 @@ class TcpStreamContract(unittest.TestCase):
     def test_resynchronization_uses_the_full_header_validator(self) -> None:
         sync = section(
             self.socket,
-            "bool wg_sync_header(struct wg_peer *peer)\n{",
+            "bool wg_sync_header(struct wg_peer *peer, struct socket *socket)\n{",
             "bool wg_check_potential_header_validity(",
         )
 
@@ -144,6 +161,11 @@ class TcpStreamContract(unittest.TestCase):
         self.assertNotIn("wg_validate_header_checksum(potential_hdr)", sync)
         self.assertIn("WG_MAX_PACKET_SIZE +", sync)
         self.assertIn("WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN", sync)
+        self.assertIn("skb_put(read_skb, read_bytes);", sync)
+        self.assertNotIn("skb_trim(read_skb, read_bytes)", sync)
+        self.assertIn("WG_TCP_ENCAP_HDR_LEN - 1", sync)
+        self.assertIn("peer->received_len = keep;", sync)
+        self.assertIn("kernel_recvmsg(socket,", sync)
 
     def test_reader_rebinds_and_revalidates_after_resynchronization(self) -> None:
         reader = section(
@@ -151,7 +173,7 @@ class TcpStreamContract(unittest.TestCase):
             "void wg_tcp_read_worker(",
             "void wg_tcp_data_ready(",
         )
-        resync = reader.index("if (!wg_sync_header(peer))")
+        resync = reader.index("if (!wg_sync_header(peer, socket))")
         rebind = reader.index("memcpy(&header, peer->partial_skb->data", resync)
         revalidate = reader.index(
             "wg_check_potential_header_validity(", rebind
@@ -163,6 +185,97 @@ class TcpStreamContract(unittest.TestCase):
         self.assertLess(revalidate, resize)
         self.assertIn("needed = peer->expected_len - peer->received_len", reader)
         self.assertIn("skb_headroom(peer->partial_skb)", reader)
+
+    def test_reader_drains_buffered_records_before_receiving_more(self) -> None:
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+
+        ready = reader.index("record_ready = peer->expected_len ?")
+        receive_guard = reader.index("if (!record_ready)", ready)
+        receive = reader.index("kernel_recvmsg(", receive_guard)
+        self.assertLess(ready, receive_guard)
+        self.assertLess(receive_guard, receive)
+        self.assertIn("if (++packets_processed >= 64)", reader)
+        self.assertIn("budget_exhausted = true;", reader)
+        self.assertIn(
+            "budget_exhausted && peer->partial_skb", reader
+        )
+        self.assertIn(
+            "peer->received_len >= WG_TCP_ENCAP_HDR_LEN", reader
+        )
+
+    def test_reader_pins_one_socket_through_parse_and_delivery(self) -> None:
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+
+        claim = reader.index("spin_lock_bh(&peer->tcp_lock);")
+        pin = reader.index("socket = peer->peer_socket;", claim)
+        unlock = reader.index("spin_unlock_bh(&peer->tcp_lock);", pin)
+        receive = reader.index("kernel_recvmsg(socket,", unlock)
+        resync = reader.index("wg_sync_header(peer, socket)", receive)
+        synthesize = reader.index(
+            "wg_tcp_build_fake_headers(peer->partial_skb, peer,", resync
+        )
+        deliver = reader.index("wg_receive(sk, peer->partial_skb)", synthesize)
+
+        self.assertLess(claim, pin)
+        self.assertLess(pin, unlock)
+        self.assertLess(unlock, receive)
+        self.assertLess(receive, resync)
+        self.assertLess(resync, synthesize)
+        self.assertLess(synthesize, deliver)
+        self.assertIn("peer->peer_socket == socket", reader)
+
+    def test_coalesced_leftover_buffer_is_right_sized(self) -> None:
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+
+        allocation = section(
+            reader,
+            "leftover_skb = alloc_skb(",
+            "if (!leftover_skb)",
+        )
+        self.assertIn("leftover_len +", allocation)
+        self.assertIn("WG_TCP_RESERVED_HEADER_SIZE +", allocation)
+        self.assertNotIn("WG_TCP_SKB_READ_ALLOC_SIZE", allocation)
+
+    def test_outbound_headers_use_the_connected_socket_tuple(self) -> None:
+        headers = section(
+            self.socket,
+            "static int wg_tcp_build_fake_headers(",
+            "void wg_tcp_read_worker(",
+        )
+
+        self.assertIn("struct socket *socket", headers)
+        self.assertIn("outbound_source.sin_port = inet->inet_sport;", headers)
+        self.assertIn("outbound_dest.sin_port = inet->inet_dport;", headers)
+        self.assertIn("outbound_dest6.sin6_addr = sk->sk_v6_daddr;", headers)
+        self.assertNotIn("peer->outbound_source", headers)
+        self.assertNotIn("peer->outbound_dest", headers)
+
+    def test_outbound_tuple_is_cached_after_connect_selects_it(self) -> None:
+        connect = section(
+            self.socket,
+            "int wg_tcp_connect(struct wg_peer *peer)",
+            "static void __maybe_unused wg_release_peer_tcp_connection(",
+        )
+
+        call = connect.index("ret = kernel_connect(socket, addr,")
+        accepted = connect.index("if (ret != -EINPROGRESS && ret != 0)", call)
+        cache = connect.index("memset(&peer->outbound_source", accepted)
+        self.assertLess(call, accepted)
+        self.assertLess(accepted, cache)
+        self.assertIn("source->sin_port = inet->inet_sport;", connect[cache:])
+        self.assertIn("dest->sin_port = inet->inet_dport;", connect[cache:])
 
 
 if __name__ == "__main__":
