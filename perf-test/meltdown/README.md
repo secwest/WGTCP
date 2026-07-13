@@ -47,6 +47,11 @@ meltdown/
         cell.json
         cell.fingerprint
         cell.complete
+  results/<qualified-composite>/
+    composite-status.json
+    provenance.csv
+    cells.csv
+    REPORT.md
 ```
 
 ## Safety model
@@ -102,3 +107,18 @@ axes, repetition, module, or tool identity make the prior cell stale. Campaign
 analysis also requires a complete manifest listing every expected fingerprint.
 Raw artifacts stay under the gitignored `cells/` directory; generated
 `cells.csv` and the dated report are the reviewable evidence.
+
+When a separate fingerprinted campaign reruns evidence-invalid cells, build an
+auditable qualified composite rather than copying over the original cells:
+
+```powershell
+python .\harness\merge_campaigns.py `
+  --base <raw-initial-campaign> `
+  --replacement <raw-exact-cell-rerun> `
+  --output .\results\<qualified-composite>
+```
+
+The merger refuses to replace valid evidence or combine different runtime
+identities or matrix axes. It retains both source campaign fingerprints and
+writes the selected fingerprint and analyzed `cell.json` SHA-256 for every cell
+to `provenance.csv`.

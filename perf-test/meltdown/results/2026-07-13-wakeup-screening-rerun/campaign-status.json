@@ -1,0 +1,33 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-13T23:33:32.8645790Z",
+  "expected_cells": [
+    "boundary-rtt100-16f-tcp-r2",
+    "boundary-rtt175-16f-tcp-r2",
+    "boundary-rtt300-16f-tcp-r2",
+    "boundary-rtt300-16f-udp-r2",
+    "boundary-rtt400-16f-tcp-r2",
+    "boundary-rtt400-16f-udp-r1",
+    "boundary-rtt400-16f-udp-r2"
+  ],
+  "completed_cells": [
+    "boundary-rtt100-16f-tcp-r2",
+    "boundary-rtt175-16f-tcp-r2",
+    "boundary-rtt300-16f-tcp-r2",
+    "boundary-rtt300-16f-udp-r2",
+    "boundary-rtt400-16f-tcp-r2",
+    "boundary-rtt400-16f-udp-r1",
+    "boundary-rtt400-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "bc8f80381ee99eb1b9f3a6cbcac74be8a87be14a738e6b6100a25a760b7ed9f1",
+  "cell_fingerprints": {
+    "boundary-rtt400-16f-udp-r1": "d88972898a41fc7c90b349e181036a59a7e4413eaaaa99349bcb0afc41aefcba",
+    "boundary-rtt400-16f-udp-r2": "82230d429d278e4a16530bd5ee8bb96bea7df2a960a5ac9bb79b264cd6a88644",
+    "boundary-rtt400-16f-tcp-r2": "325592e98035603830eb3a5ed6a1d159d0e95cfcb68e382885a8fb334247ed99",
+    "boundary-rtt300-16f-tcp-r2": "dda95dd6a0fcb639533a978712408c6db96b9580f5397b0c78ecdc1a8667bc9a",
+    "boundary-rtt175-16f-tcp-r2": "f36725202584b2670d28461ae45a8292c2a7800e4c67bb3af857b87da713f6c5",
+    "boundary-rtt100-16f-tcp-r2": "38a62b6f38b8c24efabc70772d1744266974bf69ba87282e565df342e4ea8116",
+    "boundary-rtt300-16f-udp-r2": "8f275080c41c6b0f3b698181633b742bcf04175b764f9379bb636e5232b885c0"
+  }
+}

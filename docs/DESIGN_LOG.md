@@ -329,3 +329,31 @@ about 46.4-47.3 Mb/s. These are valid observations at the measured offered
 load, but they do not test the complete loss/recovery feedback loop. The next
 mechanism stage must lower the bottleneck rate or add contention before drawing
 a resistance conclusion.
+
+### DL-022: Qualify reruns as an explicit multi-fingerprint composite
+
+**Status:** Accepted
+
+The seven evidence-invalid screening repetitions were rerun under a new
+campaign fingerprint because sampler lifetime, exact-cell selection, and the
+bounded tracer-shutdown rule changed. The loaded module, userspace tool, matrix
+axes, and workload definitions did not change. All seven reruns are
+valid/stable with complete telemetry.
+
+The original invalid records remain published. Qualification does not edit
+their campaign or claim that both harness revisions share one fingerprint.
+Instead, `merge_campaigns.py` builds a composite that:
+
+- verifies complete source manifests, completion markers, and cell
+  fingerprints;
+- requires identical module srcversion, module hash, tool hash, and replacement
+  axes;
+- permits replacement only when the base cell is invalid and the rerun is
+  valid;
+- recomputes matched UDP comparisons over the selected documents;
+- writes per-cell source campaign, cell fingerprint, and analyzed `cell.json`
+  SHA-256 provenance.
+
+This yields a qualified 68/68 stable screening inventory while preserving the
+audit trail from the initial 61-valid/7-invalid campaign and the separate
+seven-cell rerun.

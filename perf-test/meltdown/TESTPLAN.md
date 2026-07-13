@@ -69,6 +69,13 @@ Queue overflow is reported separately from validity. A valid run with no
 finite-queue drops shows that offered load did not reach the overflow regime;
 it does not test the complete feedback loop.
 
+An exact-cell rerun remains a separate campaign when its source fingerprint
+changes. A qualified composite may select it only when both source manifests
+are complete, runtime module/tool identities and matrix axes match, the base
+cell is invalid, and the replacement is valid. The original cell is never
+overwritten; the composite records the source campaign and cell fingerprint for
+every selected row, plus a SHA-256 of the selected analyzed cell document.
+
 ## 4. Bottleneck construction
 
 Each carrier egress uses:

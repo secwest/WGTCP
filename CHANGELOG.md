@@ -28,8 +28,12 @@ All notable changes to this repository are documented here.
   provenance, authenticated carrier deadlines, listener handoff, and buffered
   record draining.
 - Added the interim investigation report and design decision log.
-- Added compact reviewable evidence for the 14-cell clean calibration and
-  68-cell initial finite-queue/RTT screening.
+- Added compact reviewable evidence for the 14-cell clean calibration, 68-cell
+  initial finite-queue/RTT screening, seven-cell qualification rerun, and final
+  68-cell qualified composite.
+- Added a fail-closed campaign composite generator that requires complete source
+  manifests, identical runtime identities and matrix axes, valid replacement
+  evidence, and explicit per-cell source fingerprints.
 
 ### Changed
 
@@ -99,14 +103,12 @@ All notable changes to this repository are documented here.
   `EAGAIN` from arming `SOCK_NOSPACE`.
 - Fixed concurrent BPF summary updates disagreeing with their emitted raw events.
 - Completed 14/14 valid/stable clean calibration cells and all 68 initial
-  screening executions. The formal screening inventory is 61 valid/stable and
-  seven invalid, with no degraded, near-meltdown, or meltdown cells.
+  screening executions. Seven exact-cell reruns replaced only the initial
+  evidence-invalid repetitions, qualifying all 68 screening cells as stable
+  with no degraded, near-meltdown, meltdown, or remaining invalid cells.
 
 ### Known limitations
 
-- Seven screening repetitions remain invalid because evidence windows ended
-  early or one final BPF event raced summary shutdown; exact-cell reruns are
-  required before the screening inventory is final.
 - Most 50 Mb/s queue cells did not overflow because observed TCP delivery was
   about 47 Mb/s. Lower-rate/contention, burst, dynamics, workload, and endurance
   stages remain; no interim result should be presented as the final meltdown
