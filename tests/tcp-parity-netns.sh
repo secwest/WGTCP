@@ -5,9 +5,9 @@ set -Eeuo pipefail
 
 MODE=${1:-}
 case "$MODE" in
-fwmark|route|source-uplink|ipv6|carrier-lifetime) ;;
+fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|config-roundtrip|fault-injection) ;;
 *)
-	printf 'usage: %s {fwmark|route|source-uplink|ipv6|carrier-lifetime}\n' "$0" >&2
+	printf 'usage: %s {fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|config-roundtrip|fault-injection}\n' "$0" >&2
 	exit 1
 	;;
 esac
@@ -17,7 +17,7 @@ if (( EUID != 0 )); then
 	exit 1
 fi
 
-for command in awk ip ping readlink sort ss sysctl; do
+for command in awk cmp grep ip ping readlink sort ss stat sysctl wc; do
 	command -v "$command" >/dev/null || {
 		echo "missing required command: $command" >&2
 		exit 1
@@ -64,6 +64,12 @@ cleanup() {
 	local -a namespaces=() ifaces=()
 	trap - EXIT
 	set +e
+	if [[ $MODE == fault-injection && -d /sys/module/wireguard/parameters ]]; then
+		for parameter in write_delay_ms max_send_bytes garbage_prefix_bytes queue_limit; do
+			printf '0\n' >"/sys/module/wireguard/parameters/tcp_test_$parameter" || \
+				cleanup_failed=1
+		done
+	fi
 	[[ ! -r $ownership_dir/netns ]] || mapfile -t namespaces <"$ownership_dir/netns"
 	[[ ! -r $ownership_dir/extra-ifaces ]] || mapfile -t ifaces <"$ownership_dir/extra-ifaces"
 	if (( status != 0 )); then
@@ -432,6 +438,221 @@ carrier-lifetime)
 	}
 	printf 'mode=carrier-lifetime\nauthenticated_lifetime=pass\nduration_seconds=40\n'
 	;;
+config-roundtrip)
+	port=52204
+	setup_ipv4_pair "$port"
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+
+	# showconf contains private and optional preshared keys. Keep every copy in
+	# the guest-local 0700 temporary directory and never write it to stdout.
+	run "$ns_a" "$WG_FORK" showconf wga >"$tmpdir/a.conf"
+	run "$ns_b" "$WG_FORK" showconf wgb >"$tmpdir/b.conf"
+	[[ $(stat -c '%a' "$tmpdir/a.conf") == 600 &&
+	   $(stat -c '%a' "$tmpdir/b.conf") == 600 ]] || {
+		echo "showconf files are not mode 0600" >&2
+		exit 1
+	}
+	for config in "$tmpdir/a.conf" "$tmpdir/b.conf"; do
+		grep -Fxq 'Transport = tcp' "$config" || {
+			echo "TCP transport was omitted from showconf" >&2
+			exit 1
+		}
+		grep -Fxq "ListenPort = $port" "$config" || {
+			echo "TCP listen port was omitted from showconf" >&2
+			exit 1
+		}
+		grep -q '^PrivateKey = ' "$config" || {
+			echo "private key was omitted from showconf" >&2
+			exit 1
+		}
+	done
+
+	wg_quick=$(command -v wg-quick) || {
+		echo "wg-quick is required for the configuration round-trip case" >&2
+		exit 1
+	}
+	# wg-quick prepends its own directory to PATH. Run a guest-local copy
+	# beside the fork shim so SaveConfig and the subsequent down/up reload use
+	# the modified wg grammar without exposing secret-bearing output.
+	install -d -m 0700 "$tmpdir/bin"
+	install -m 0700 "$wg_quick" "$tmpdir/bin/wg-quick"
+	ln -s "$WG_FORK" "$tmpdir/bin/wg"
+	printf '[Interface]\nSaveConfig = true\nTable = off\n' >"$tmpdir/wga.conf"
+	if ! run "$ns_a" env "PATH=$tmpdir/bin:$PATH" \
+		"$tmpdir/bin/wg-quick" save \
+		"$tmpdir/wga.conf" >"$tmpdir/wg-quick-save.log" 2>&1; then
+		echo "wg-quick save failed" >&2
+		exit 1
+	fi
+	[[ $(stat -c '%a' "$tmpdir/wga.conf") == 600 ]] || {
+		echo "wg-quick SaveConfig file is not mode 0600" >&2
+		exit 1
+	}
+	grep -Fxq 'Transport = tcp' "$tmpdir/wga.conf" || {
+		echo "wg-quick SaveConfig omitted TCP transport" >&2
+		exit 1
+	}
+	grep -q '^PrivateKey = ' "$tmpdir/wga.conf" || {
+		echo "wg-quick SaveConfig omitted the private key" >&2
+		exit 1
+	}
+	if ! run "$ns_a" env "PATH=$tmpdir/bin:$PATH" \
+		"$tmpdir/bin/wg-quick" down \
+		"$tmpdir/wga.conf" >"$tmpdir/wg-quick-down.log" 2>&1; then
+		echo "wg-quick down failed" >&2
+		exit 1
+	fi
+	if ! run "$ns_a" env "PATH=$tmpdir/bin:$PATH" \
+		"$tmpdir/bin/wg-quick" up \
+		"$tmpdir/wga.conf" >"$tmpdir/wg-quick-up.log" 2>&1; then
+		echo "wg-quick up failed" >&2
+		exit 1
+	fi
+	run "$ns_a" ip route replace 10.210.0.2/32 dev wga
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	run "$ns_a" "$WG_FORK" showconf wga >"$tmpdir/a.wg-quick"
+	cmp -s "$tmpdir/a.conf" "$tmpdir/a.wg-quick" || {
+		echo "namespace A configuration changed across wg-quick down/up" >&2
+		exit 1
+	}
+
+	assert_quiet run "$ns_a" "$WG_FORK" setconf wga "$tmpdir/a.conf"
+	assert_quiet run "$ns_b" "$WG_FORK" setconf wgb "$tmpdir/b.conf"
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	run "$ns_a" "$WG_FORK" showconf wga >"$tmpdir/a.setconf"
+	run "$ns_b" "$WG_FORK" showconf wgb >"$tmpdir/b.setconf"
+	cmp -s "$tmpdir/a.conf" "$tmpdir/a.setconf" || {
+		echo "namespace A configuration changed across setconf" >&2
+		exit 1
+	}
+	cmp -s "$tmpdir/b.conf" "$tmpdir/b.setconf" || {
+		echo "namespace B configuration changed across setconf" >&2
+		exit 1
+	}
+
+	# Drift both live peer sets without placing private material in command
+	# arguments. syncconf must remove the extra public key, restore A's saved
+	# keepalive, preserve TCP mode, and leave the tunnel usable.
+	extra_pub=$("$WG_FORK" genkey | "$WG_FORK" pubkey)
+	assert_quiet run "$ns_a" "$WG_FORK" set wga peer "$extra_pub" \
+		allowed-ips 10.211.0.0/16
+	assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$extra_pub" \
+		allowed-ips 10.211.0.0/16
+	assert_quiet run "$ns_a" "$WG_FORK" set wga peer "$b_pub" \
+		persistent-keepalive 7
+	(( $(run "$ns_a" "$WG_FORK" show wga peers | wc -l) == 2 )) || {
+		echo "namespace A drift peer was not installed" >&2
+		exit 1
+	}
+	(( $(run "$ns_b" "$WG_FORK" show wgb peers | wc -l) == 2 )) || {
+		echo "namespace B drift peer was not installed" >&2
+		exit 1
+	}
+	assert_quiet run "$ns_a" "$WG_FORK" syncconf wga "$tmpdir/a.conf"
+	assert_quiet run "$ns_b" "$WG_FORK" syncconf wgb "$tmpdir/b.conf"
+	[[ $(run "$ns_a" "$WG_FORK" show wga peers) == "$b_pub" ]] || {
+		echo "namespace A syncconf did not remove configuration drift" >&2
+		exit 1
+	}
+	[[ $(run "$ns_b" "$WG_FORK" show wgb peers) == "$a_pub" ]] || {
+		echo "namespace B syncconf did not remove configuration drift" >&2
+		exit 1
+	}
+	keepalive=$(run "$ns_a" "$WG_FORK" show wga persistent-keepalive | \
+		awk -v key="$b_pub" '$1 == key { print $2 }')
+	[[ $keepalive == 1 ]] || {
+		echo "syncconf did not restore the saved persistent keepalive" >&2
+		exit 1
+	}
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	run "$ns_a" "$WG_FORK" showconf wga >"$tmpdir/a.syncconf"
+	run "$ns_b" "$WG_FORK" showconf wgb >"$tmpdir/b.syncconf"
+	cmp -s "$tmpdir/a.conf" "$tmpdir/a.syncconf" || {
+		echo "namespace A configuration changed across syncconf" >&2
+		exit 1
+	}
+	cmp -s "$tmpdir/b.conf" "$tmpdir/b.syncconf" || {
+		echo "namespace B configuration changed across syncconf" >&2
+		exit 1
+	}
+	printf 'mode=config-roundtrip\nshowconf=pass\nsetconf=pass\nsyncconf=pass\nwg_quick_roundtrip=pass\nsecrets=guest-local\ntraffic=pass\n'
+	;;
+fault-injection)
+	parameter_root=/sys/module/wireguard/parameters
+	for parameter in max_send_bytes garbage_prefix_bytes queue_limit write_delay_ms; do
+		[[ -w $parameter_root/tcp_test_$parameter ]] || {
+			echo "fault control is unavailable: tcp_test_$parameter" >&2
+			exit 1
+		}
+	done
+	for counter in short_writes injected_prefixes resyncs queue_drops; do
+		[[ -r $parameter_root/tcp_test_$counter ]] || {
+			echo "fault counter is unavailable: tcp_test_$counter" >&2
+			exit 1
+		}
+	done
+
+	port=52214
+	setup_ipv4_pair "$port"
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	short_before=$(<"$parameter_root/tcp_test_short_writes")
+	prefix_before=$(<"$parameter_root/tcp_test_injected_prefixes")
+	resync_before=$(<"$parameter_root/tcp_test_resyncs")
+	printf '7\n' >"$parameter_root/tcp_test_max_send_bytes"
+	printf '11\n' >"$parameter_root/tcp_test_garbage_prefix_bytes"
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	short_after=$(<"$parameter_root/tcp_test_short_writes")
+	prefix_after=$(<"$parameter_root/tcp_test_injected_prefixes")
+	resync_after=$(<"$parameter_root/tcp_test_resyncs")
+	(( short_after > short_before )) || {
+		echo "forced send cap did not produce a short write" >&2
+		exit 1
+	}
+	(( prefix_after > prefix_before )) || {
+		echo "malformed prefixes were not injected" >&2
+		exit 1
+	}
+	(( resync_after > resync_before )) || {
+		echo "receiver did not resynchronize after malformed prefixes" >&2
+		exit 1
+	}
+	printf '0\n' >"$parameter_root/tcp_test_max_send_bytes"
+	printf '0\n' >"$parameter_root/tcp_test_garbage_prefix_bytes"
+	wait_ping "$ns_a" wga 10.210.0.2
+
+	queue_before=$(<"$parameter_root/tcp_test_queue_drops")
+	printf '500\n' >"$parameter_root/tcp_test_write_delay_ms"
+	printf '1\n' >"$parameter_root/tcp_test_queue_limit"
+	pressure_pids=()
+	for _ in {1..8}; do
+		run "$ns_a" ping -4 -I wga -c 100 -i 0.001 -w 3 \
+			10.210.0.2 >/dev/null 2>&1 &
+		pressure_pids+=("$!")
+	done
+	for pressure_pid in "${pressure_pids[@]}"; do
+		wait "$pressure_pid" || true
+	done
+	queue_after=$(<"$parameter_root/tcp_test_queue_drops")
+	(( queue_after > queue_before )) || {
+		echo "bounded writer pause did not force a queue-pressure drop" >&2
+		exit 1
+	}
+	printf '0\n' >"$parameter_root/tcp_test_write_delay_ms"
+	printf '0\n' >"$parameter_root/tcp_test_queue_limit"
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	printf 'mode=fault-injection\nshort_writes=%s\ninjected_prefixes=%s\nresyncs=%s\nqueue_drops=%s\nrecovery=pass\n' \
+		"$(( short_after - short_before ))" \
+		"$(( prefix_after - prefix_before ))" \
+		"$(( resync_after - resync_before ))" \
+		"$(( queue_after - queue_before ))"
+	;;
 ipv6)
 	port_a=52210
 	port_b=52211
@@ -476,5 +697,77 @@ ipv6)
 	ipv6_endpoint=$(wait_tcp_endpoint "$ns_a" 6 "[fd00:77::2]" "$port_b" "[fd00:77::1]:")
 	printf 'mode=ipv6\ndual_stack_listeners=pass\nipv6_tunnel=pass\nouter_tcp_endpoint=%s\nport_a=%s\nport_b=%s\n' \
 		"$ipv6_endpoint" "$port_a" "$port_b"
+	;;
+ipv6-link-local)
+	port_a=52212
+	port_b=52213
+	run "$ns_a" ip -6 addr flush dev "$p0a" scope link
+	run "$ns_b" ip -6 addr flush dev "$p0b" scope link
+	run "$ns_a" ip -6 addr add fe80::a/64 dev "$p0a" nodad
+	run "$ns_b" ip -6 addr add fe80::b/64 dev "$p0b" nodad
+	route_a=$(run "$ns_a" ip -6 route get fe80::b oif "$p0a")
+	route_b=$(run "$ns_b" ip -6 route get fe80::a oif "$p0b")
+	[[ $route_a == *"dev $p0a"* && $route_a == *"src fe80::a"* ]] || {
+		echo "namespace A did not select its scoped link-local source" >&2
+		exit 1
+	}
+	[[ $route_b == *"dev $p0b"* && $route_b == *"src fe80::b"* ]] || {
+		echo "namespace B did not select its scoped link-local source" >&2
+		exit 1
+	}
+	run "$ns_a" ip link add wglla type wireguard
+	run "$ns_b" ip link add wgllb type wireguard
+	assert_quiet run "$ns_a" "$WG_FORK" set wglla private-key "$tmpdir/a.key" \
+		listen-port "$port_a" transport tcp
+	assert_quiet run "$ns_b" "$WG_FORK" set wgllb private-key "$tmpdir/b.key" \
+		listen-port "$port_b" transport tcp
+	run "$ns_a" ip -6 addr add fd00:212::1/128 dev wglla nodad
+	run "$ns_b" ip -6 addr add fd00:212::2/128 dev wgllb nodad
+	run "$ns_a" ip link set wglla up
+	run "$ns_b" ip link set wgllb up
+	run "$ns_a" ip -6 route add fd00:212::2/128 dev wglla
+	run "$ns_b" ip -6 route add fd00:212::1/128 dev wgllb
+
+	expected_a="[fe80::b%$p0a]:$port_b"
+	expected_b="[fe80::a%$p0b]:$port_a"
+	assert_quiet run "$ns_a" "$WG_FORK" set wglla peer "$b_pub" \
+		allowed-ips fd00:212::2/128 endpoint "$expected_a" \
+		persistent-keepalive 1
+	assert_quiet run "$ns_b" "$WG_FORK" set wgllb peer "$a_pub" \
+		allowed-ips fd00:212::1/128 endpoint "$expected_b"
+	configured_a=$(run "$ns_a" "$WG_FORK" show wglla endpoints | \
+		awk -v key="$b_pub" '$1 == key { print $2 }')
+	configured_b=$(run "$ns_b" "$WG_FORK" show wgllb endpoints | \
+		awk -v key="$a_pub" '$1 == key { print $2 }')
+	[[ $configured_a == "$expected_a" ]] || {
+		echo "namespace A link-local endpoint lost its interface scope" >&2
+		exit 1
+	}
+	[[ $configured_b == "$expected_b" ]] || {
+		echo "namespace B link-local endpoint lost its interface scope" >&2
+		exit 1
+	}
+
+	run "$ns_a" "$WG_FORK" showconf wglla >"$tmpdir/ll-a.conf"
+	run "$ns_b" "$WG_FORK" showconf wgllb >"$tmpdir/ll-b.conf"
+	grep -Fxq "Endpoint = $expected_a" "$tmpdir/ll-a.conf" || {
+		echo "namespace A showconf lost the link-local endpoint scope" >&2
+		exit 1
+	}
+	grep -Fxq "Endpoint = $expected_b" "$tmpdir/ll-b.conf" || {
+		echo "namespace B showconf lost the link-local endpoint scope" >&2
+		exit 1
+	}
+	wait_ping "$ns_a" wglla fd00:212::2 6
+	wait_ping "$ns_b" wgllb fd00:212::1 6
+	# `ss` annotates the local link-local address with its interface but omits
+	# the redundant scope on the remote column. The configured/showconf checks
+	# above prove the dial-target scope; these checks prove the carrier source.
+	outer_a=$(wait_tcp_endpoint "$ns_a" 6 "[fe80::b]" "$port_b" \
+		"[fe80::a]%$p0a:")
+	outer_b=$(wait_tcp_endpoint "$ns_b" 6 "[fe80::a]" "$port_a" \
+		"[fe80::b]%$p0b:")
+	printf 'mode=ipv6-link-local\nscoped_endpoints=pass\nlink_local_carrier=pass\ntraffic=pass\nouter_a=%s\nouter_b=%s\n' \
+		"$outer_a" "$outer_b"
 	;;
 esac

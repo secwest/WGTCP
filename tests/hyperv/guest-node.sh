@@ -520,10 +520,37 @@ tcp-parity-netns)
 	(( $# == 3 || $# == 4 )) || die "tcp-parity-netns RUN CASE MODE [SOURCE_ROOT]"
 	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
 	[[ $mode == fwmark || $mode == route || $mode == source-uplink || \
-	   $mode == ipv6 || $mode == carrier-lifetime ]] || \
+	   $mode == ipv6 || $mode == ipv6-link-local || \
+	   $mode == carrier-lifetime || $mode == config-roundtrip || \
+	   $mode == fault-injection ]] || \
 		die "invalid TCP parity mode: $mode"
 	[[ -f $source_root/tests/tcp-parity-netns.sh ]] || die "TCP parity netns test not found"
 	dir=$(new_auxiliary_state "$run_id" "$case_id")
+	if [[ $mode == fault-injection ]]; then
+		module_helper=$(dirname "$0")/guest-module.sh
+		restore_fault_module() {
+			local primary_status=$? restore_status=0
+
+			trap - EXIT HUP INT TERM
+			set +e
+			"$module_helper" fork >/dev/null
+			restore_status=$?
+			if (( restore_status != 0 )); then
+				printf 'guest-node: hostile-stream status=%d; production module restore status=%d\n' \
+					"$primary_status" "$restore_status" >&2
+			fi
+			if (( primary_status == 0 && restore_status == 0 )); then
+				printf 'restored_kernel_variant=fork\n'
+			fi
+			(( primary_status == 0 )) || exit "$primary_status"
+			exit "$restore_status"
+		}
+		trap restore_fault_module EXIT
+		trap 'exit 129' HUP
+		trap 'exit 130' INT
+		trap 'exit 143' TERM
+		"$module_helper" fork-fault >/dev/null
+	fi
 	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
 		bash "$source_root/tests/tcp-parity-netns.sh" "$mode"
 	;;

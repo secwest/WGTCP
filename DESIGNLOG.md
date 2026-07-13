@@ -96,8 +96,9 @@ scope from the accepted or dialed socket so authenticated learning does not
 discard link-local scope information.
 
 **Evidence:** Independent dual-stack listeners, asymmetric listen ports, and an
-IPv6 outer carrier passed at runtime. Link-local IPv6, VRF, and namespace-move
-behavior remain follow-up work.
+IPv6 outer carrier passed at runtime. The later scoped-IPv6 campaign below
+supersedes this entry's original link-local validation gap; VRF and
+namespace-move behavior remain follow-up work.
 
 ### Simultaneous Noise initiation uses a deterministic tie-break
 
@@ -130,3 +131,132 @@ internal case ID recorded by the successful `prepare` command.
 recovering from a failed host control channel. The final clean campaign passed
 after seven verified stale clients and the exact `m13` and `m10` guest state
 were removed.
+
+## 2026-07-13: Persistence, scoped IPv6, and hostile-stream validation
+
+### Configuration persistence keeps secrets inside the guest
+
+**Decision:** TCP mode must round-trip the canonical `Transport = tcp` state
+through `showconf`, `setconf`, and `syncconf`, and preserve it through
+`wg-quick SaveConfig`. Runtime tests keep secret-bearing private-key material
+in a mode-0700 guest temporary directory, require each configuration file to be
+mode 0600, compare files without printing them, and emit only public pass/fail
+fields.
+
+**Evidence:** Both guests restored traffic and exact canonical configuration
+after live `setconf` and drift-removing `syncconf`. Focused run
+`wg20260713T225629Z` also used a guest-local `wg-quick` copy paired with the
+modified `wg` tool to save, remove, recreate, and retest the interface; both
+guests returned `wg_quick_roundtrip=pass`.
+
+### Link-local IPv6 scope is part of the endpoint
+
+**Decision:** A link-local IPv6 TCP endpoint is the address, numeric port, and
+interface scope together. Userspace preserves the named `%interface` zone,
+kernel endpoint state carries `sin6_scope_id`, and synthetic receive metadata
+uses the selected socket scope rather than collapsing it to zero.
+
+**Evidence:** Asymmetric scoped endpoints survived tool output and `showconf`,
+the outer TCP tuples used the expected link-local interfaces, and bidirectional
+inner IPv6 traffic passed on both guests.
+
+### Destructive fault injection is a separate artifact
+
+**Decision:** Forced stream faults are compiled only when both `DEBUG` and
+`WG_TCP_FAULT_INJECTION` are defined. The lab builds a distinct
+`wireguard-fork-fault.ko`; production and ordinary DEBUG modules expose no
+`tcp_test_*` parameters. Root-only controls cap actual send requests, prepend a
+bounded provably invalid byte prefix, lower the drop-newest queue cap, and pause
+one writer invocation for at most one second. The delay is consumed with an
+atomic exchange so partial-send suffix retries do not repeat it. Read-only
+counters prove each path fired. Tests arm controls only after a clean tunnel
+exists, compare counter deltas, reset every module-global control, and require
+traffic recovery. Artifact reuse compares live `modinfo` output with the saved
+manifests before accepting an existing build.
+
+**Rationale:** This validates real kernel short-write, parser-resynchronization,
+and backpressure paths without turning unstable destructive controls into a
+production or general DEBUG interface.
+
+### Promotion must bind an authenticated carrier before learning from it
+
+**Decision:** The target roaming design uses a refcounted carrier object with
+`PROVISIONAL`, `AUTHENTICATED`, `PROMOTING`, `ACTIVE`, `RETIRING`, and `DEAD`
+states. An atomic `authenticate_candidate(connection_id, peer)` operation must
+find a live ID, bind it once to exactly one configured peer while retaining a
+peer reference, reject stale IDs and later identities, release admission, and
+only then permit dial-IP learning or queue promotion. Promotion selects at most
+one active and one bounded standby carrier and retires duplicates without
+moving a partially read or written record between streams.
+
+**Rationale:** Current connection IDs are a useful foundation, but marking a
+connection authenticated does not associate it with a peer. Endpoint mutation
+before a successful exact-ID claim permits stale completion and multi-identity
+ambiguity. The existing public-key tie-break resolves Noise initiation state,
+not physical TCP ownership.
+
+**Compatibility:** Pre-binding parsing cannot be handshake-only. A reconnect
+may carry a valid data message for an existing receiver index before a fresh
+handshake, so provisional carriers need strict byte/frame budgets while allowing
+exact-size handshake/cookie messages and bounded existing-key data until AEAD
+authentication binds the peer.
+
+### Carrier collision ordering needs shared authenticated input
+
+**Decision:** Static public-key ordering selects the preferred physical
+direction: the lower-key endpoint prefers outbound and the higher-key endpoint
+prefers the corresponding inbound carrier. Duplicate carriers in that direction
+must be ordered by a token derived from or exchanged inside their authenticated
+handshake. A device-local connection ID may locate a carrier and a local
+publication generation may reject stale work, but neither is shared and neither
+may decide a cross-peer winner.
+
+**Reason:** Using independent local counters can make the two endpoints publish
+different streams. Direction ordering is shared already; same-direction
+deduplication needs a second value both authenticated endpoints observe.
+
+### TCP cookie enforcement requires exact-stream replies and staged rollout
+
+**Decision:** Restore TCP pre-Noise cost defense in phases. First route
+handshake and cookie replies by exact TCP connection ID, consume cookie
+responses before transport branching, and enforce MAC1. Then deploy clients
+that understand same-stream cookie responses. Only afterward enforce under-load
+MAC2 challenges, because the current snapshot skips TCP cookie consumption and
+would not be rolling-upgrade compatible with immediate challenge enforcement.
+
+**Boundary:** Application cookies reduce pre-Noise CPU cost; they do not prevent
+TCP SYN, accept-queue, or socket state. Kernel SYN cookies/backlog policy and
+the existing accept caps remain separate first-layer controls.
+
+### Final evidence for this tranche
+
+Hyper-V run `wg20260713T221904Z` completed **35 PASS, 0 FAIL, 0 SKIP** in
+452.476 seconds across 533 commands with no kernel-log failures. Each guest
+observed 80 forced short writes, four injected malformed prefixes, four
+successful parser resynchronizations, more than 2,300 queue-pressure drops,
+and clean bidirectional recovery. The completed checks narrow the remaining
+work to promotion/cookie implementation, MTU, VRF and namespace churn,
+physical-carrier impairment, longer multi-flow soak, and platform breadth.
+
+### Fault-only modules are ephemeral test state
+
+**Decision:** One guest-side command owns the complete fault-module lifecycle.
+It installs an `EXIT` cleanup before loading the fault artifact, runs the
+namespace test, restores production after the namespace cleanup, and reports a
+combined test/restore failure when necessary. The host runner requires each
+guest to return `restored_kernel_variant=fork` before the case can pass.
+
+**Reason:** Root-only controls and a separate build guard prevent production
+parameter exposure, but leaving the instrumented artifact active after a
+successful case would still make later manual testing differ from the declared
+production state.
+
+**Evidence:** The exact hardened follow-up worktree snapshot (base archive SHA-256
+`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`,
+overlay SHA-256
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`)
+built all three module variants on both guests. Focused run
+`wg20260713T225629Z` passed the configuration and hostile-stream cases and
+returned `restored_kernel_variant=fork` from each guest-side command.
+Reuse-only artifact verification and all 103 contracts also passed on both
+guests.

@@ -86,6 +86,15 @@ tests the exact Git-visible snapshot described by the captured status. Ignored
 and other Git-unreported filesystem content is excluded. The recorded commit,
 status, and SHA-256 hashes are written beneath `tests/hyperv/results/`.
 
+Each guest build produces three fork kernel artifacts. `wireguard-fork.ko` is
+the production build, `wireguard-fork-debug.ko` enables initialization
+selftests, and `wireguard-fork-fault.ko` additionally enables the isolated
+hostile-stream controls. `guest-build.sh` uses `modinfo` to require every
+`tcp_test_*` parameter in the fault artifact and to prove those parameters are
+absent from the production and ordinary DEBUG artifacts. Reuse-only
+`--verify` calls recompute live module metadata, compare it with the saved
+manifests, repeat parameter-isolation checks, and validate the manifest kernel.
+
 The command is idempotent for instances recorded in its state manifest. It
 refuses to adopt or delete same-named instances that it did not create. Rebuild
 managed guests from clean Ubuntu images with:
@@ -122,19 +131,29 @@ python .\tests\hyperv\regression.py `
     --tcp-kernel-variant fork-debug
 ```
 
+The `tcp-debug-hostile-stream` case selects `wireguard-fork-fault.ko` and
+restores production inside one guest-side command. An `EXIT` trap covers normal
+failure and catchable termination, and the host requires an explicit restore
+acknowledgement from both guests. After a guest power loss or uncatchable
+process termination, inspect the module variant before resuming. The fault
+artifact is not a general TCP kernel variant and should not be used for
+unrelated cases.
+
 On a managed-pair failure the runner captures both guests before cleanup. The
 failure logs include public WireGuard state, listening and connected TCP
 sockets, and the kernel log emitted after the per-case reset; private keys are
 never collected.
 
-The 32 cases include preflight validation; all 16 combinations of stock/fork
+The 35 cases include preflight validation; all 16 combinations of stock/fork
 kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
-authenticated roaming, random-port, and output tests; DEBUG initialization selftests; stock
-kernel capability and live-mode-change guards, including TCP listen-port
-mutation and random-port coupling; and TCP cases covering static traffic,
-asymmetric listen ports, stock-tool management, configured underlay migration,
-full-tunnel live `FwMark` changes, route/source/uplink reconnects, IPv6 and
-dual-stack listeners, and authenticated-carrier lifetime.
+authenticated roaming, random-port, and output tests; DEBUG initialization
+selftests; stock kernel capability and live-mode-change guards, including TCP
+listen-port mutation and random-port coupling; and TCP cases covering static
+traffic, asymmetric listen ports, stock-tool management, configuration round
+trips, configured underlay migration, full-tunnel live `FwMark` changes,
+route/source/uplink reconnects, ULA and scoped link-local IPv6 carriers,
+dual-stack listeners, authenticated-carrier lifetime, and isolated
+short-write/parser/queue-pressure faults with recovery.
 The latest committed campaign summary is in [`RESULTS.md`](RESULTS.md).
 
 Each case records interface and underlay ownership before making changes and
@@ -154,13 +173,28 @@ notifier-driven reconnects after live route, source-address, uplink, and
 IPv4/IPv6 listeners with an IPv6 outer carrier, and a carrier that remains
 authenticated and usable for 40 seconds on each guest.
 
-Run `wg20260713T185138Z` passed all of these checks for **32 PASS, 0 FAIL, 0
-SKIP** in 376.109 seconds, recording 503 commands. Its source identity is base
-`e827d5f93f088dba4499e7f59d5f18c79600cc94`, base archive SHA-256
-`dc743a6f917fb61aff39bdb58bfdb428d67c9788bfc78a4885c720c2b7f6d3d1`, and
+The configuration case round-trips TCP state through `showconf`, `setconf`,
+`syncconf`, and an actual `wg-quick` save/down/up reload. Secret-bearing files
+remain guest-local, under a mode-0700 temporary directory, with mode 0600. The
+link-local case proves that `%interface` endpoint scopes survive configuration
+and serialization and that both guests carry tunnel traffic over scoped IPv6
+TCP connections.
+
+The hostile-stream case uses only the isolated fault module. After the tunnel
+is established, it forces real short writes, bounded garbage prefixes and
+parser resynchronization, and deterministic queue pressure. The recorded
+per-guest counter deltas were `80/4/4/2380` on `wgtcp-a` and `80/4/4/2378` on
+`wgtcp-b` for short writes/prefixes/resyncs/drops; normal traffic recovered on
+both guests after the controls were cleared.
+
+Run `wg20260713T221904Z` passed all of these checks for **35 PASS, 0 FAIL, 0
+SKIP** in 452.476 seconds, recording 533 commands. Its source identity is HEAD
+`7c398d543158b5ef77d8c822b64f90bb99229a44`, base archive SHA-256
+`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`, and
 dirty overlay SHA-256
-`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
-Preflight passed all 89 local source-contract checks on each guest.
+`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
+Preflight passed all 100 local source-contract checks on each guest running
+Ubuntu 24.04 with kernel `6.8.0-124-generic`.
 
 The same campaign proved the live TCP listen-port guard returns `EBUSY`
 without changing either listener. After the interface was brought down,
@@ -175,9 +209,9 @@ reached its 180-second host timeout. Seven orphaned, CPU-spinning
 then terminated by exact PID without stopping `multipassd` or either VM. The
 guest state was ownership-cleaned using the internal IDs from the logged
 successful `prepare` commands (`m13` for the first run and `m10` for the
-second), after which the clean run above passed all 32 cases. These were
-control-client infrastructure aborts, not product failures or partial
-campaigns.
+second). The next clean 32-case campaign passed, and the later expanded run
+above passed all 35 cases. These were control-client infrastructure aborts, not
+product failures or partial campaigns.
 
 When a host timeout leaves Multipass clients consuming CPU, inspect before
 terminating anything:
@@ -202,11 +236,18 @@ ID, and interface. The fully PID-checked procedure and the exact `m13`/`m10`
 recovery record are in
 [`HYPERV_SETUP.md`](HYPERV_SETUP.md#orphaned-multipass-client-recovery).
 
-The runtime evidence still stops short of authenticated socket promotion for
+The runtime evidence still stops short of authenticated carrier promotion for
 arbitrary NAT ephemeral-port roaming, a cookie-equivalent TCP pre-authentication
-cost defense, hostile short-write/parser-resynchronization/queue-pressure
-stress, complete configuration round trips, link-local IPv6 and VRF or
-namespace-move behavior, and long-duration multi-flow soak testing.
+cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
+coverage, long-duration multi-flow soak testing, and wider kernel-version and
+distribution breadth.
+
+Focused hardening run `wg20260713T225629Z` passed `tcp-config-roundtrip` and
+`tcp-debug-hostile-stream` for **2 PASS, 0 FAIL, 0 SKIP** in 134.149 seconds.
+Both guests returned `wg_quick_roundtrip=pass` and
+`restored_kernel_variant=fork`; the one-shot fault deltas were `80/4/4/434` on
+`wgtcp-a` and `80/4/4/441` on `wgtcp-b`. Its overlay SHA-256 was
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`.
 
 Useful inspection commands are:
 

@@ -13,11 +13,13 @@
 
 #include <asm/byteorder.h> // For ntohl
 #include <linux/ctype.h>
+#include <linux/delay.h>
 #include <linux/if_vlan.h>
 #include <linux/if_ether.h>
 #include <linux/inetdevice.h>
 #include <linux/wireguard.h>
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
 #include <linux/skbuff.h>
 #include <linux/net.h>
 #include <linux/tcp.h>
@@ -43,6 +45,114 @@
 #include <net/inet_connection_sock.h>
 #include <linux/version.h>
 #include "wg_tcp_debug.h"
+
+
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+#define WG_TCP_TEST_MAX_GARBAGE_PREFIX 64
+#define WG_TCP_TEST_MAX_WRITE_DELAY_MS 1000
+
+static unsigned int wg_tcp_test_max_send_bytes;
+static unsigned int wg_tcp_test_garbage_prefix_bytes;
+static unsigned int wg_tcp_test_queue_limit;
+static unsigned int wg_tcp_test_write_delay_ms;
+static atomic64_t wg_tcp_test_short_writes = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_injected_prefixes = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_resyncs = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_queue_drops = ATOMIC64_INIT(0);
+
+module_param_named(tcp_test_max_send_bytes, wg_tcp_test_max_send_bytes,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_max_send_bytes,
+		 "DEBUG only: cap each TCP sendmsg request to force short writes");
+module_param_named(tcp_test_garbage_prefix_bytes,
+		   wg_tcp_test_garbage_prefix_bytes, uint, 0600);
+MODULE_PARM_DESC(tcp_test_garbage_prefix_bytes,
+		 "DEBUG only: prepend bounded garbage to each TCP record");
+module_param_named(tcp_test_queue_limit, wg_tcp_test_queue_limit, uint, 0600);
+MODULE_PARM_DESC(tcp_test_queue_limit,
+		 "DEBUG only: lower the per-peer TCP frame queue limit");
+module_param_named(tcp_test_write_delay_ms, wg_tcp_test_write_delay_ms,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_write_delay_ms,
+		 "DEBUG only: delay the next serial TCP writer to force queue pressure");
+
+static int wg_tcp_test_counter_get(char *buffer,
+				   const struct kernel_param *parameter)
+{
+	const atomic64_t *counter = parameter->arg;
+
+	return scnprintf(buffer, PAGE_SIZE, "%lld\n",
+			 (long long)atomic64_read(counter));
+}
+
+static const struct kernel_param_ops wg_tcp_test_counter_ops = {
+	.get = wg_tcp_test_counter_get,
+};
+
+module_param_cb(tcp_test_short_writes, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_short_writes, 0400);
+MODULE_PARM_DESC(tcp_test_short_writes,
+		 "DEBUG only: number of observed partial TCP writes");
+module_param_cb(tcp_test_injected_prefixes, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_injected_prefixes, 0400);
+MODULE_PARM_DESC(tcp_test_injected_prefixes,
+		 "DEBUG only: number of TCP records prefixed with test garbage");
+module_param_cb(tcp_test_resyncs, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_resyncs, 0400);
+MODULE_PARM_DESC(tcp_test_resyncs,
+		 "DEBUG only: number of successful TCP parser resynchronizations");
+module_param_cb(tcp_test_queue_drops, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_queue_drops, 0400);
+MODULE_PARM_DESC(tcp_test_queue_drops,
+		 "DEBUG only: number of frames rejected by TCP queue pressure");
+
+static size_t wg_tcp_test_send_len(size_t frame_len)
+{
+	unsigned int configured = READ_ONCE(wg_tcp_test_max_send_bytes);
+
+	return configured ? min_t(size_t, configured, frame_len) : frame_len;
+}
+
+static size_t wg_tcp_test_prefix_len(void)
+{
+	return min_t(size_t, READ_ONCE(wg_tcp_test_garbage_prefix_bytes),
+		     WG_TCP_TEST_MAX_GARBAGE_PREFIX);
+}
+
+static unsigned int wg_tcp_test_effective_queue_limit(void)
+{
+	unsigned int configured = READ_ONCE(wg_tcp_test_queue_limit);
+
+	return configured && configured < MAX_QUEUED_PACKETS ?
+		configured : MAX_QUEUED_PACKETS;
+}
+
+static unsigned int wg_tcp_test_take_write_delay_ms(void)
+{
+	return min_t(unsigned int, xchg(&wg_tcp_test_write_delay_ms, 0U),
+		     WG_TCP_TEST_MAX_WRITE_DELAY_MS);
+}
+#else
+static size_t wg_tcp_test_send_len(size_t frame_len)
+{
+	return frame_len;
+}
+
+static size_t wg_tcp_test_prefix_len(void)
+{
+	return 0;
+}
+
+static unsigned int wg_tcp_test_effective_queue_limit(void)
+{
+	return MAX_QUEUED_PACKETS;
+}
+
+static unsigned int wg_tcp_test_take_write_delay_ms(void)
+{
+	return 0;
+}
+#endif
 
 
 
@@ -1151,6 +1261,7 @@ static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
 	struct sk_buff *frame;
 	bool fragmented = PACKET_CB(payload)->frag_off != 0;
 	size_t header_len = WG_TCP_ENCAP_HDR_LEN;
+	size_t prefix_len = wg_tcp_test_prefix_len();
 	size_t total_len;
 
 	if (payload->len < MESSAGE_MINIMUM_LENGTH)
@@ -1167,10 +1278,20 @@ static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
 	total_len = header_len + payload->len;
 	encap_header.length = htonl(total_len);
 	encap_header.checksum = wg_header_checksum(&encap_header);
-	frame = alloc_skb(total_len, GFP_ATOMIC);
+	frame = alloc_skb(prefix_len + total_len, GFP_ATOMIC);
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
 
+	if (prefix_len) {
+		/* Any candidate beginning in this prefix has 0xa5 as the high byte
+		 * of its network-order length, so it cannot pass the bounded header
+		 * validator even when the candidate overlaps the real header.
+		 */
+		memset(skb_put(frame, prefix_len), 0xa5, prefix_len);
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+		atomic64_inc(&wg_tcp_test_injected_prefixes);
+#endif
+	}
 	skb_put_data(frame, &encap_header, WG_TCP_ENCAP_HDR_LEN);
 	if (fragmented)
 		skb_put_data(frame, &frag_header, WG_TCP_FRAG_HDR_LEN);
@@ -1216,6 +1337,7 @@ static void wg_tcp_schedule_write(struct wg_peer *peer)
 
 static int wg_tcp_enqueue_frame(struct wg_peer *peer, struct sk_buff *frame)
 {
+	unsigned int queue_limit = wg_tcp_test_effective_queue_limit();
 	int ret = 0;
 
 	/* The queue and writer claim share the peer lifetime lock. Once stop sets
@@ -1237,10 +1359,14 @@ static int wg_tcp_enqueue_frame(struct wg_peer *peer, struct sk_buff *frame)
 	/* Preserve stream order. In particular, the head can contain the
 	 * unconsumed suffix of a frame whose prefix is already on the wire.
 	 */
-	if (skb_queue_len(&peer->send_queue) >= MAX_QUEUED_PACKETS)
+	if (skb_queue_len(&peer->send_queue) >= queue_limit) {
 		ret = -ENOBUFS;
-	else
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+		atomic64_inc(&wg_tcp_test_queue_drops);
+#endif
+	} else {
 		__skb_queue_tail(&peer->send_queue, frame);
+	}
 	spin_unlock(&peer->send_queue_lock);
 	if (!ret)
 		wg_tcp_schedule_write_locked(peer);
@@ -3856,17 +3982,22 @@ static bool wg_validate_header_checksum(const struct wg_tcp_encap_header *hdr)
 
 static int wg_tcp_send_frame(struct socket *sock, const struct sk_buff *frame)
 {
+	size_t send_len = wg_tcp_test_send_len(frame->len);
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL };
 	struct kvec vec = {
 		.iov_base = (void *)frame->data,
-		.iov_len = frame->len
+		.iov_len = send_len
 	};
 	int sent;
 
 #if WG_TCP_DIAG_ENABLED
 	wg_tcp_diag_dump_sock(sock->sk, "tx:frame:pre", 0, frame->len);
 #endif
-	sent = kernel_sendmsg(sock, &msg, &vec, 1, frame->len);
+	sent = kernel_sendmsg(sock, &msg, &vec, 1, send_len);
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+	if (sent > 0 && (unsigned int)sent < frame->len)
+		atomic64_inc(&wg_tcp_test_short_writes);
+#endif
 #if WG_TCP_DIAG_ENABLED
 	wg_tcp_diag_dump_sock(sock->sk, "tx:frame:post", sent, frame->len);
 	if (sent > 0)
@@ -3886,6 +4017,7 @@ void wg_tcp_write_worker(struct work_struct *work)
 	struct socket *socket = NULL;
 	struct sock *sk = NULL;
     	struct sk_buff *skb;
+	unsigned int write_delay_ms;
     	int sent;
 
 	wg_dbg("Entering function wg_tcp_write_worker\n");
@@ -3925,6 +4057,25 @@ void wg_tcp_write_worker(struct work_struct *work)
 		wg_tcp_diag_pressure(sk, peer->internal_id);
 #endif
         	goto out;
+	}
+	/* A single bounded DEBUG delay lets the fully counted queue fill without
+	 * making teardown wait once per queued frame. Recheck ownership after the
+	 * sleep because a remover can publish its stop flag while waiting for this
+	 * worker to return.
+	 */
+	write_delay_ms = wg_tcp_test_take_write_delay_ms();
+	if (write_delay_ms) {
+		msleep(write_delay_ms);
+		spin_lock_bh(&peer->tcp_lock);
+		if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+		    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+		    peer->tcp_outbound_remove_scheduled ||
+		    peer->tcp_inbound_remove_scheduled ||
+		    peer->peer_socket != socket || !peer->tcp_established)
+			socket = NULL;
+		spin_unlock_bh(&peer->tcp_lock);
+		if (!socket)
+			goto out;
 	}
 
 	/* BUG FIX: dequeue under lock, send outside lock.
@@ -4576,6 +4727,9 @@ void wg_tcp_read_worker(struct work_struct *work)
 					wg_peer_discard_partial_read(peer);
 					break;
 				}
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+				atomic64_inc(&wg_tcp_test_resyncs);
+#endif
 				/* Resynchronization can pull, free, or replace partial_skb.
 				 * Copy and validate the selected candidate again before use.
 				 */
