@@ -12,6 +12,7 @@ Module.symvers
 __pycache__/
 *.pyc
 tests/hyperv/results/
+perf-test/meltdown/results/*/cells/
 
 # Tools binary
 tools/wg

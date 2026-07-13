@@ -214,10 +214,13 @@ WireGuard message receives cryptographic authentication.
 4. Only the per-peer write worker calls nonblocking `kernel_sendmsg`. It advances
    the same queued byte sequence after a short write and requeues the exact
    suffix; it never emits a second header or retransmits an emitted prefix.
-5. A full socket buffer returns `EAGAIN`; `sk_write_space` schedules the worker
-   to continue draining queued records when the TCP stack has room. A full
-   1024-frame queue rejects the newest record so a partially emitted head is
-   never discarded.
+5. The worker attempts the nonblocking send instead of stopping on a pre-send
+   writeability hint. A full socket buffer returns `EAGAIN`; the exact retained
+   frame is requeued before `SOCK_NOSPACE` is armed. A memory barrier plus the
+   final scheduler/lifetime-lock writeability recheck prevents a transition from
+   being missed, and `sk_write_space` schedules later draining without busy
+   looping. A full 1024-frame queue rejects the newest record so a partially
+   emitted head is never discarded.
 6. `TCP_NODELAY` is enabled on accepted and outbound sockets to avoid Nagle and
    delayed-ACK latency amplification.
 

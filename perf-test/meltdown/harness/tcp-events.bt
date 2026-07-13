@@ -12,21 +12,21 @@ BEGIN
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 5201 || args->dport == 5201 || args->sport == 8080 || args->dport == 8080/
 {
-	@inner_retrans = @inner_retrans + 1;
+	@inner_retrans++;
 	printf("%llu,retrans,inner,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
 }
 
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 51821 || args->dport == 51821/
 {
-	@outer_retrans = @outer_retrans + 1;
+	@outer_retrans++;
 	printf("%llu,retrans,outer,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
 }
 
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 5202 || args->dport == 5202/
 {
-	@competitor_retrans = @competitor_retrans + 1;
+	@competitor_retrans++;
 	printf("%llu,retrans,competitor,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
 }
 
@@ -37,15 +37,15 @@ kprobe:tcp_retransmit_timer
 	$raw_dport = (uint16)$sk->__sk_common.skc_dport;
 	$dport = (($raw_dport & 0xff) << 8) | (($raw_dport >> 8) & 0xff);
 	if ($sport == 5201 || $dport == 5201 || $sport == 8080 || $dport == 8080) {
-		@inner_rto = @inner_rto + 1;
+		@inner_rto++;
 		printf("%llu,rto,inner,%u,%u,0,0,0\n", nsecs, $sport, $dport);
 	}
 	if ($sport == 51821 || $dport == 51821) {
-		@outer_rto = @outer_rto + 1;
+		@outer_rto++;
 		printf("%llu,rto,outer,%u,%u,0,0,0\n", nsecs, $sport, $dport);
 	}
 	if ($sport == 5202 || $dport == 5202) {
-		@competitor_rto = @competitor_rto + 1;
+		@competitor_rto++;
 		printf("%llu,rto,competitor,%u,%u,0,0,0\n", nsecs, $sport, $dport);
 	}
 }

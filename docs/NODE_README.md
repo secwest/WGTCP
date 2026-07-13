@@ -75,7 +75,7 @@ lsmod | grep wireguard
 ```bash
 sudo ip link add wg0 type wireguard
 sudo ip addr add 10.0.3.1/24 dev wg0
-echo 'ggggggggggggggggggggggggggggggggggggggggggg=' | sudo ~/wg set wg0 private-key /dev/stdin
+sudo ~/wg set wg0 private-key /etc/wireguard/private.key
 sudo ~/wg set wg0 listen-port 51820 transport tcp
 sudo ip link set up dev wg0
 sudo ~/wg set wg0 peer BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng= \
@@ -87,7 +87,7 @@ sudo ip route add 10.0.3.2/32 dev wg0 2>/dev/null
 ```bash
 sudo ip link add wg0 type wireguard
 sudo ip addr add 10.0.3.2/24 dev wg0
-echo 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=' | sudo ~/wg set wg0 private-key /dev/stdin
+sudo ~/wg set wg0 private-key /etc/wireguard/private.key
 sudo ~/wg set wg0 listen-port 51820 transport tcp
 sudo ip link set up dev wg0
 sudo ~/wg set wg0 peer I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4= \
@@ -237,7 +237,8 @@ ping -c 1 10.20.20.102  # Network check
 - Branch: `tcp`
 - Latest fixes: #1 listener bug, #2 temp_peer, #3 outbound connect, #4 TCP_NODELAY
 
-## Sudo Password
+## Credential Handling
 
-The sudo password on all VMs is: `kyxi7kyxi7`
-(The poller uses `virtualuser` for sudo — update if different on your node)
+Do not store passwords or private keys in this guide or in the repository.
+Provision node-specific WireGuard keys at `/etc/wireguard/private.key` with
+root-only permissions, and configure sudo access outside source control.

@@ -19,14 +19,17 @@ All notable changes to this repository are documented here.
 - Added source, runtime build, matrix-axis, repetition, cell, and campaign
   fingerprints so resumed evidence cannot cross implementation or test-plan
   boundaries.
-- Added explicit socket-sampler completion records and six BPF event summaries
-  whose RTO/retransmission counts must reconcile with emitted events.
+- Added explicit socket-sampler completion records and six BPF event summaries.
+  Summaries must not exceed emitted events and may trail by at most one final
+  event racing tracer shutdown.
 - Added focused analysis tests for BOM-prefixed JSON, diagnostic-prefixed iperf
   output, interface delivery, carrier stability, and matched UDP controls.
 - Added lifecycle, roaming, and stream contracts for accepted-stream
   provenance, authenticated carrier deadlines, listener handoff, and buffered
   record draining.
 - Added the interim investigation report and design decision log.
+- Added compact reviewable evidence for the 14-cell clean calibration and
+  68-cell initial finite-queue/RTT screening.
 
 ### Changed
 
@@ -51,12 +54,21 @@ All notable changes to this repository are documented here.
   now requires a complete manifest with every expected cell and fingerprint.
 - Changed BPF collection to use a bounded traced child process, allowing END
   summaries to flush without accepting interrupted telemetry.
+- Changed BPF RTO/retransmission summaries to use atomic map increments so
+  concurrent CPUs cannot lose counter updates.
 - Changed framing resynchronization to retain a possible seven-byte split-header
   suffix for the ordinary reader instead of issuing a separate one-shot read.
+- Changed the TCP writer to drive nonblocking sends until empty, partial, or
+  `EAGAIN`, then arm write-space notification for the retained exact frame.
 - Changed orchestration to use pinned, identity-only workstation SSH with no
   host-to-host controller key.
+- Changed orchestration to support exact `-Cell` reruns and extended sampler
+  lifetime to cover ARM BPF attachment and high-RTT setup without replacing
+  already-qualified cells.
 - Updated the TCP transport design for authenticated temporary carriers and
   buffered-record drain ordering.
+- Removed plaintext VM passwords and private keys from legacy node
+  documentation and its generated patch artifact.
 
 ### Fixed
 
@@ -79,18 +91,30 @@ All notable changes to this repository are documented here.
 - Fixed resynchronization discarding a valid record header split across TCP
   reads while preserving captured-socket tuple reconstruction and exact
   leftover-buffer sizing from the parallel ARM lifetime work.
+- Fixed qdisc time-series records being split across lines, shaped-queue
+  accounting selecting the bypass queue, and samplers ending before the scored
+  workload window.
+- Fixed a TCP writer lost wakeup that stranded exactly 1,024 serialized frames
+  under concurrent flows because a pre-send writeability gate prevented
+  `EAGAIN` from arming `SOCK_NOSPACE`.
+- Fixed concurrent BPF summary updates disagreeing with their emitted raw events.
+- Completed 14/14 valid/stable clean calibration cells and all 68 initial
+  screening executions. The formal screening inventory is 61 valid/stable and
+  seven invalid, with no degraded, near-meltdown, or meltdown cells.
 
 ### Known limitations
 
-- Fresh TCP tunnel setup can still exhibit a repeatable one-packet lag,
-  approximately 104 ms RTT at 100 ms probe spacing, and final-packet loss.
-- Current BPF evidence localizes that lag after successful decryption and
-  endpoint reconstruction but before `napi_gro_receive()`; the exact rejecting
-  branch is still under investigation.
-- The endogenous impairment and endurance campaign remains gated on repeatable
-  zero-loss, sub-millisecond clean TCP controls.
-- No result collected so far proves or rules out classical TCP-over-TCP
-  meltdown. Existing severe TCP results occurred without outer loss,
-  retransmission, RTO, or recovery and are implementation-failure evidence.
+- Seven screening repetitions remain invalid because evidence windows ended
+  early or one final BPF event raced summary shutdown; exact-cell reruns are
+  required before the screening inventory is final.
+- Most 50 Mb/s queue cells did not overflow because observed TCP delivery was
+  about 47 Mb/s. Lower-rate/contention, burst, dynamics, workload, and endurance
+  stages remain; no interim result should be presented as the final meltdown
+  conclusion.
+- At high concurrency the bounded internal writer queue can still reject new
+  frames during sustained overload. This is distinct from the repaired stranded
+  queue and must be reported separately from outer TCP meltdown.
+- The earlier one-packet lag did not reproduce after recreating stale tunnels;
+  its exact stale Noise/carrier trigger remains an endurance concern.
 - TCP responder-only operation, automatic socket promotion, and automatic TCP
   roaming remain unsupported.

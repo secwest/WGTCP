@@ -184,9 +184,9 @@ controller key is copied between hosts.
 Host setup is ephemeral, test traffic is isolated from SSH, and qdisc state is
 verified after cleanup.
 
-### DL-014: Localize the remaining one-packet lag below the TCP reader
+### DL-014: Localize the apparent one-packet lag below the TCP reader
 
-**Status:** Investigating
+**Status:** Resolved without a transport change
 
 Fresh tunnel setups can run one packet behind. BPF tracing shows:
 
@@ -205,8 +205,13 @@ root cause. The remaining investigation is inside
 including protocol/size validation, trimming, keepalive handling, and allowed-IP
 source lookup.
 
-No design change is accepted for this issue until the exact rejecting branch is
-observed.
+The final protocol and AllowedIPs trace showed that the apparent rejected frame
+was a zero-length WireGuard keepalive. Fresh synchronized traces then showed
+ordinary ping data passing endpoint reconstruction, protocol parsing,
+AllowedIPs lookup, and GRO immediately. Recreating the dedicated tunnels removed
+the lag. The evidence supports stale Noise/carrier state in that session, not a
+repeatable pre-GRO rejection branch, so no speculative receive-path change was
+made.
 
 ## 2026-07-13
 
@@ -231,8 +236,9 @@ cells make the campaign incomplete rather than producing a negative result.
 
 The BPF sampler traces a bounded child process and must exit successfully after
 the requested interval. Its output must contain the header plus exactly one
-summary for every inner, outer, and competitor RTO/retransmission class, and
-summary counts must equal emitted event counts.
+summary for every inner, outer, and competitor RTO/retransmission class. A
+summary must not exceed its emitted event count and may trail by at most one
+final event racing tracer shutdown.
 
 The 200 ms socket sampler writes an independent completion record. TCP carrier
 validation requires enough samples to cover the workload start and end, two
@@ -255,3 +261,71 @@ are drained before another nonblocking read, leftover storage is sized to the
 exact suffix plus header headroom, and synthetic outer headers use the live
 captured socket tuple. It also prevents an invalid full header from causing a
 processable-buffer requeue loop.
+
+### DL-018: Let nonblocking send establish write-space notification
+
+**Status:** Accepted
+
+The write worker must not stop solely because `sk_stream_is_writeable()` reports
+false before a send attempt. That check can prevent `kernel_sendmsg()` from
+returning `EAGAIN`, so the stream layer never arms `SOCK_NOSPACE` and no later
+write-space callback is guaranteed. Under concurrent inner flows this stranded
+exactly the full 1,024-frame internal queue.
+
+The single writer now attempts nonblocking sends until the queue is empty, a
+serialized frame is partially written, or send returns zero/`EAGAIN`. A retained
+exact frame or suffix is placed back at the queue head before `SOCK_NOSPACE` is
+set. A memory barrier and the existing scheduler/lifetime-lock recheck close the
+writable-transition race without holding a spinlock across `kernel_sendmsg()` or
+busy-looping.
+
+On matching ARM builds, the repeated 1/2/4/8/16-flow trace raised 16-flow
+goodput from 2.35 to 44.67 Mb/s, changed iperf completion from failure to
+success, and eliminated the 1,024-frame residue. The fixed writer observed
+10,801 `EAGAIN` returns and 1,492 write-space callbacks in that run.
+
+### DL-019: Use atomic BPF summary counters
+
+**Status:** Accepted
+
+Detailed RTO and retransmission events remain the analysis input, while summary
+counters independently detect lost trace output. Plain
+`@counter = @counter + 1` map updates lose increments when probes run
+concurrently on multiple CPUs and therefore caused valid raw traces to fail
+summary reconciliation.
+
+The trace now uses atomic map increments. The ARM bpftrace compiler emitted
+atomic map-add instructions, and a 16-flow stress run reconciled all 870 raw
+RTO/retransmission events across both endpoints with the six summaries and no
+malformed records.
+
+### DL-020: Bound the tracer-shutdown race without rewriting original evidence
+
+**Status:** Accepted
+
+`interval:s:1` can print an `END` summary while one final kprobe already in
+flight emits its detailed event. The detailed trace is authoritative for
+scoring. Analysis permits raw count to exceed its summary by exactly one, but
+still invalidates summary-greater-than-raw or any lag greater than one. This
+accepts the only ordering race possible at controlled shutdown while retaining
+the four-event mismatch as a failing contract.
+
+The two original cells affected by this rule remain listed as invalid in their
+published campaign. They may be reanalyzed for diagnosis, but the formal
+screening inventory changes only through separate fingerprinted exact-cell
+reruns.
+
+### DL-021: Do not infer resistance from queues that did not overflow
+
+**Status:** Accepted
+
+The initial finite-queue and RTT-boundary stage executed all 68 cells. Sixty-one
+are valid/stable, seven are invalid on evidence coverage, and no valid cell is
+degraded, near-meltdown, or meltdown. No valid cell had an inner RTO or outer
+recovery event.
+
+Most nominal 50 Mb/s bottlenecks recorded no queue drops because TCP delivered
+about 46.4-47.3 Mb/s. These are valid observations at the measured offered
+load, but they do not test the complete loss/recovery feedback loop. The next
+mechanism stage must lower the bottleneck rate or add contention before drawing
+a resistance conclusion.

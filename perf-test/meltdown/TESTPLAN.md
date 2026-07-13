@@ -52,7 +52,9 @@ A cell is invalid rather than negative evidence if any of these apply:
 - either expected TCP carrier tuple changed or disappeared, or 200 ms socket
   samples do not cover the complete workload interval;
 - either endpoint sampler did not complete, BPF output lacks any of its six
-  required summaries, or summary counts do not reconcile with emitted events;
+  required summaries, a summary exceeds its detailed emitted-event count, or
+  it trails that count by more than the one final event allowed at tracer
+  shutdown;
 - the shaped class saw no packets;
 - configured rate, delay, queue kind, or queue bytes do not match the manifest;
 - source, runtime build, matrix-axis, repetition, cell, or campaign

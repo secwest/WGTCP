@@ -23,6 +23,7 @@ param(
     [string] $RemoteResultsDir = "/home/azureuser/wgtcp-meltdown-results",
     [string] $MatrixFile = "",
     [string[]] $Stage = @("calibration", "queue", "boundary"),
+    [string[]] $Cell = @(),
     [switch] $PrepareOnly,
     [switch] $SkipPrepare,
     [switch] $DownloadRaw
@@ -294,7 +295,9 @@ function Invoke-Cell {
     $serverUnit = "wgtcp-sample-$safeId-a"
     $clientUnit = "wgtcp-sample-$safeId-b"
     $competitorUnit = "wgtcp-competitor-$safeId"
-    $sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 8
+    # bpftrace attachment takes 10-15 seconds on the ARM hosts. Keep the qdisc,
+    # interface, and socket samplers alive beyond that startup interval.
+    $sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 30
     $shape = "/opt/wgtcp-meltdown/harness/shape-link.sh"
     $sample = "/opt/wgtcp-meltdown/harness/sample-endpoint.sh"
     $serverShaped = $false
@@ -351,6 +354,11 @@ function Invoke-Cell {
         ) | Out-Null
 
         Invoke-Remote $HostA $PortA (
+            "sudo systemctl restart wgtcp-meltdown-iperf-inner.service; " +
+            "systemctl is-active --quiet wgtcp-meltdown-iperf-inner.service"
+        ) | Out-Null
+
+        Invoke-Remote $HostA $PortA (
             "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverUnit) --collect --quiet " +
             "$sample --out $(ConvertTo-ShellQuoted $remoteCellA) --duration $sampleDuration " +
             "--tunnel-iface $tunnelInterface --owner $AdminUser"
@@ -362,10 +370,6 @@ function Invoke-Cell {
         ) | Out-Null
 
         Wait-RemoteFiles "$remoteCellA/ready" "$remoteCellB/client/ready" 15
-        Invoke-Remote $HostA $PortA (
-            "sudo systemctl restart wgtcp-meltdown-iperf-inner.service; " +
-            "systemctl is-active --quiet wgtcp-meltdown-iperf-inner.service"
-        ) | Out-Null
 
         if ([int]$Row.competitor -eq 1) {
             $competitorDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 5
@@ -618,6 +622,10 @@ try {
         [string[]]$Stage,
         [StringComparer]::OrdinalIgnoreCase
     )
+    $selectedCells = [Collections.Generic.HashSet[string]]::new(
+        [string[]]$Cell,
+        [StringComparer]::Ordinal
+    )
     $selectedRows = @(
         Import-Csv $MatrixFile | Where-Object {
             $_.enabled -eq "1" -and
@@ -630,12 +638,21 @@ try {
         $repetitions = [int]$row.repetitions
         for ($rep = 1; $rep -le $repetitions; $rep++) {
             $cellId = "$($row.stage)-$($row.name)-$($row.tunnel)-r$rep"
+            if ($selectedCells.Count -gt 0 -and -not $selectedCells.Contains($cellId)) {
+                continue
+            }
             $expectedCells.Add($cellId)
             $cellFingerprints[$cellId] = Get-CellFingerprint $row $rep $campaignFingerprint
         }
     }
     if ($expectedCells.Count -eq 0) {
         throw "no enabled matrix cells matched the selected stages"
+    }
+    if ($selectedCells.Count -gt 0 -and $expectedCells.Count -ne $selectedCells.Count) {
+        $missingSelection = @(
+            $selectedCells | Where-Object { -not $expectedCells.Contains($_) }
+        )
+        throw "requested cells not found in enabled selected stages: $($missingSelection -join ', ')"
     }
 
     $failedCells = [Collections.Generic.List[string]]::new()
@@ -645,6 +662,9 @@ try {
         $repetitions = [int]$row.repetitions
         for ($rep = 1; $rep -le $repetitions; $rep++) {
             $cellId = "$($row.stage)-$($row.name)-$($row.tunnel)-r$rep"
+            if ($selectedCells.Count -gt 0 -and -not $selectedCells.Contains($cellId)) {
+                continue
+            }
             $cellJsonPath = Join-Path (Join-Path (Join-Path $ResultsDir "cells") $cellId) "cell.json"
             $cellCompletePath = Join-Path (Split-Path $cellJsonPath) "cell.complete"
             $cellFingerprintPath = Join-Path (Split-Path $cellJsonPath) "cell.fingerprint"

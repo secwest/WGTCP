@@ -24,6 +24,7 @@ RTO_THRESHOLD = 1.0
 DELIVERY_BIN_NS = 100_000_000
 MAX_COUNTER_ALIGNMENT_NS = 75_000_000
 TCP_EVENTS_HEADER = "timestamp_ns,event,layer,sport,dport,value1,value2,value3"
+MAX_TRACE_SUMMARY_LAG = 1
 TCP_EVENT_SUMMARIES = {
     (event, layer)
     for event in ("rto", "retrans")
@@ -462,7 +463,9 @@ def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
     if set(summaries) != TCP_EVENT_SUMMARIES:
         issues.append("events_summary")
     elif any(
-        summaries[key] != event_counts[key] for key in TCP_EVENT_SUMMARIES
+        summaries[key] > event_counts[key]
+        or event_counts[key] - summaries[key] > MAX_TRACE_SUMMARY_LAG
+        for key in TCP_EVENT_SUMMARIES
     ):
         issues.append("events_summary_mismatch")
     if clock_boot_epoch_ns(endpoint) is None:
@@ -627,7 +630,7 @@ def qdisc_window_delta(
         except json.JSONDecodeError:
             continue
         timestamp_ns = parse_timestamp_ns(str(row.get("timestamp", "")))
-        qdisc = find_qdisc_in(row.get("qdisc"), kind)
+        qdisc = find_qdisc_in(row.get("qdisc"), kind, handle_prefix="20:")
         if timestamp_ns is not None and qdisc is not None:
             samples.append((timestamp_ns, qdisc_metric(qdisc, key)))
     if not samples:
@@ -722,7 +725,7 @@ def impairment_configuration_issues(
     qdiscs = load_json(endpoint / "qdisc-pre.json", [])
     root = find_qdisc_in(qdiscs, "htb", "1:")
     queue_kind = axes.get("queue_kind", "bfifo")
-    queue = find_qdisc_in(qdiscs, queue_kind)
+    queue = find_qdisc_in(qdiscs, queue_kind, handle_prefix="20:")
     if not root or not root.get("root"):
         issues.append("htb_root")
     if not queue or queue.get("parent") != "1:10":
