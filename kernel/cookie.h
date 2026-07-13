@@ -38,6 +38,24 @@ enum cookie_mac_state {
 	VALID_MAC_WITH_COOKIE
 };
 
+enum cookie_validation_action {
+	WG_COOKIE_DROP,
+	WG_COOKIE_ACCEPT,
+	WG_COOKIE_CHALLENGE
+};
+
+static inline enum cookie_validation_action
+wg_cookie_validation_action(bool under_load, enum cookie_mac_state mac_state)
+{
+	if (under_load && mac_state == VALID_MAC_WITH_COOKIE)
+		return WG_COOKIE_ACCEPT;
+	if (!under_load && mac_state == VALID_MAC_BUT_NO_COOKIE)
+		return WG_COOKIE_ACCEPT;
+	if (under_load && mac_state == VALID_MAC_BUT_NO_COOKIE)
+		return WG_COOKIE_CHALLENGE;
+	return WG_COOKIE_DROP;
+}
+
 void wg_cookie_checker_init(struct cookie_checker *checker,
 			    struct wg_device *wg);
 void wg_cookie_checker_precompute_device_keys(struct cookie_checker *checker);
@@ -55,5 +73,9 @@ void wg_cookie_message_create(struct message_handshake_cookie *src,
 			      struct cookie_checker *checker);
 void wg_cookie_message_consume(struct message_handshake_cookie *src,
 			       struct wg_device *wg);
+
+#ifdef DEBUG
+bool wg_cookie_policy_selftest(void);
+#endif
 
 #endif /* _WG_COOKIE_H */

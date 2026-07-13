@@ -218,7 +218,7 @@ void wg_noise_keypair_put(struct noise_keypair *keypair, bool unreference_now)
 	       keypair, unreference_now);
 
 	if (unlikely(!keypair)) {
-		printk(KERN_ERR "wg_noise_keypair_put: keypair is NULL\n");
+		wg_dbg("wg_noise_keypair_put: keypair is NULL\n");
 		return;
 	}
 
@@ -237,15 +237,15 @@ void wg_noise_keypair_put(struct noise_keypair *keypair, bool unreference_now)
 							->index_hashtable,
 						&keypair->entry);
 				} else {
-					printk(KERN_ERR
+					wg_dbg(
 					       "wg_noise_keypair_put: index_hashtable is NULL\n");
 				}
 			} else {
-				printk(KERN_ERR
+				wg_dbg(
 				       "wg_noise_keypair_put: device is NULL\n");
 			}
 		} else {
-			printk(KERN_ERR "wg_noise_keypair_put: peer is NULL\n");
+			wg_dbg("wg_noise_keypair_put: peer is NULL\n");
 		}
 	}
 
@@ -931,8 +931,8 @@ wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
 	dst->sender_index = wg_index_hashtable_insert(
 		handshake->entry.peer->device->index_hashtable,
 		&handshake->entry);
-	pr_info("wireguard: create_initiation: registered sender_index=%u\n",
-		le32_to_cpu(dst->sender_index));
+	wg_dbg("wireguard: create_initiation: registered sender_index=%u\n",
+	       le32_to_cpu(dst->sender_index));
 	wg_dbg("Sender index inserted into hashtable: %u\n",
 	       dst->sender_index);
 
@@ -1032,19 +1032,21 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	 * the node with the lexicographically lower public key wins the
 	 * right to be initiator.  If we win, drop the incoming initiation.
 	 */
-	down_read(&handshake->lock);
-	if (handshake->state == HANDSHAKE_CREATED_INITIATION) {
-		int cmp = memcmp(wg->static_identity.static_public,
+	if (wg->transport == WG_TRANSPORT_TCP) {
+		down_read(&handshake->lock);
+		if (handshake->state == HANDSHAKE_CREATED_INITIATION) {
+			int cmp = memcmp(wg->static_identity.static_public,
 				 handshake->remote_static,
 				 NOISE_PUBLIC_KEY_LEN);
-		up_read(&handshake->lock);
-		if (cmp < 0) {
-			pr_info("wireguard: dropping incoming initiation: we have priority (pending outbound)\n");
-			goto out;
+			up_read(&handshake->lock);
+			if (cmp < 0) {
+				wg_dbg("wireguard: dropping incoming initiation: we have priority (pending outbound)\n");
+				goto out;
+			}
+			wg_dbg("wireguard: yielding to incoming initiation (peer has priority)\n");
+		} else {
+			up_read(&handshake->lock);
 		}
-		pr_info("wireguard: yielding to incoming initiation (peer has priority)\n");
-	} else {
-		up_read(&handshake->lock);
 	}
 
 	/* Success! Copy everything to peer */
@@ -1137,8 +1139,8 @@ bool wg_noise_handshake_create_response(struct message_handshake_response *dst,
 	dst->sender_index = wg_index_hashtable_insert(
 		handshake->entry.peer->device->index_hashtable,
 		&handshake->entry);
-	pr_info("wireguard: create_response: replaced entry, new sender_index=%u\n",
-		le32_to_cpu(dst->sender_index));
+	wg_dbg("wireguard: create_response: replaced entry, new sender_index=%u\n",
+	       le32_to_cpu(dst->sender_index));
 
 	handshake->state = HANDSHAKE_CREATED_RESPONSE;
 	ret = true;
@@ -1236,8 +1238,8 @@ wg_noise_handshake_create_response(struct message_handshake_response *dst,
 	dst->sender_index = wg_index_hashtable_insert(
 		handshake->entry.peer->device->index_hashtable,
 		&handshake->entry);
-	pr_info("wireguard: create_response: replaced entry, new sender_index=%u\n",
-		le32_to_cpu(dst->sender_index));
+	wg_dbg("wireguard: create_response: replaced entry, new sender_index=%u\n",
+	       le32_to_cpu(dst->sender_index));
 	wg_dbg("Sender index inserted into hashtable: %u\n",
 	       dst->sender_index);
 
@@ -1275,7 +1277,7 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	down_read(&wg->static_identity.lock);
 
 	if (unlikely(!wg->static_identity.has_identity)) {
-		pr_err("consume_response: FAIL no identity\n");
+		wg_dbg("consume_response: FAIL no identity\n");
 		goto out;
 	}
 
@@ -1283,7 +1285,7 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 		wg->index_hashtable, INDEX_HASHTABLE_HANDSHAKE,
 		src->receiver_index, &peer);
 	if (unlikely(!handshake)) {
-		pr_err("consume_response: FAIL hashtable lookup receiver_index=%u\n",
+		wg_dbg("consume_response: FAIL hashtable lookup receiver_index=%u\n",
 		       le32_to_cpu(src->receiver_index));
 		goto out;
 	}
@@ -1299,7 +1301,7 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	up_read(&handshake->lock);
 
 	if (state != HANDSHAKE_CREATED_INITIATION) {
-		pr_err("consume_response: FAIL wrong state=%d (expected %d)\n",
+		wg_dbg("consume_response: FAIL wrong state=%d (expected %d)\n",
 		       state, HANDSHAKE_CREATED_INITIATION);
 		goto fail;
 	}
@@ -1321,7 +1323,7 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	/* {} */
 	if (!message_decrypt(NULL, src->encrypted_nothing,
 			     sizeof(src->encrypted_nothing), key, hash)) {
-		pr_err("consume_response: FAIL message_decrypt\n");
+		wg_dbg("consume_response: FAIL message_decrypt\n");
 		goto fail;
 	}
 
@@ -1331,7 +1333,7 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	 * have an exclusive lock.
 	 */
 	if (handshake->state != state) {
-		pr_err("consume_response: FAIL state race (now=%d, was=%d)\n",
+		wg_dbg("consume_response: FAIL state race (now=%d, was=%d)\n",
 		       handshake->state, state);
 		up_write(&handshake->lock);
 		goto fail;
@@ -1402,8 +1404,8 @@ bool wg_noise_handshake_begin_session(struct noise_handshake *handshake,
 		ret = wg_index_hashtable_replace(
 			handshake->entry.peer->device->index_hashtable,
 			&handshake->entry, &new_keypair->entry);
-		pr_info("wireguard: begin_session: replaced handshake entry with keypair entry (i_am_initiator=%d ret=%d)\n",
-			new_keypair->i_am_the_initiator, ret);
+		wg_dbg("wireguard: begin_session: replaced handshake entry with keypair entry (i_am_initiator=%d ret=%d)\n",
+		       new_keypair->i_am_the_initiator, ret);
 	} else {
 		kfree_sensitive(new_keypair);
 	}

@@ -13,11 +13,7 @@
 #include "ipc.h"
 #include "subcommands.h"
 
-#ifdef DEBUG
-#define DEBUG_PRINT(fmt, args...) fprintf(stderr, fmt, ##args)
-#else
-#define DEBUG_PRINT(fmt, args...) /* Don't do anything in release builds */
-#endif
+#define DEBUG_PRINT(fmt, args...) do { } while (0)
 
 struct pubkey_origin {
 	uint8_t *pubkey;

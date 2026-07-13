@@ -24,11 +24,7 @@
 #include "encoding.h"
 #include "subcommands.h"
 
-#ifdef DEBUG
-#define DEBUG_PRINT(fmt, args...) fprintf(stderr, fmt, ##args)
-#else
-#define DEBUG_PRINT(fmt, args...) /* Don't do anything in release builds */
-#endif
+#define DEBUG_PRINT(fmt, args...) do { } while (0)
 
 static int peer_cmp(const void *first, const void *second)
 {
@@ -266,7 +262,7 @@ static const char *COMMAND_NAME;
 static void show_usage(void)
 {
 	DEBUG_PRINT("Entering show_usage\n");
-	fprintf(stderr, "Usage: %s %s { <interface> | all | interfaces } [public-key | private-key | listen-port | fwmark | peers | preshared-keys | endpoints | allowed-ips | latest-handshakes | transfer | persistent-keepalive | dump]\n", PROG_NAME, COMMAND_NAME);
+	fprintf(stderr, "Usage: %s %s { <interface> | all | interfaces } [public-key | private-key | listen-port | fwmark | transport | peers | preshared-keys | endpoints | allowed-ips | latest-handshakes | transfer | persistent-keepalive | dump]\n", PROG_NAME, COMMAND_NAME);
 	DEBUG_PRINT("Exiting show_usage\n");
 }
 
@@ -287,7 +283,8 @@ static void pretty_print(struct wgdevice *device)
 		terminal_printf("  " TERMINAL_BOLD "listening port" TERMINAL_RESET ": %u\n", device->listen_port);
 	if (device->fwmark)
 		terminal_printf("  " TERMINAL_BOLD "fwmark" TERMINAL_RESET ": 0x%x\n", device->fwmark);
-	terminal_printf("  " TERMINAL_BOLD "transport" TERMINAL_RESET ": %s\n", transport(device->transport));
+	if (device->transport == WG_TRANSPORT_TCP)
+		terminal_printf("  " TERMINAL_BOLD "transport" TERMINAL_RESET ": %s\n", transport(device->transport));
 	if (device->first_peer) {
 		sort_peers(device);
 		terminal_printf("\n");
@@ -387,6 +384,10 @@ static bool ugly_print(struct wgdevice *device, const char *param, bool with_int
 			printf("0x%x\n", device->fwmark);
 		else
 			printf("off\n");
+	} else if (!strcmp(param, "transport")) {
+		if (with_interface)
+			printf("%s\t", device->name);
+		printf("%s\n", transport(device->transport));
 	} else if (!strcmp(param, "endpoints")) {
 		for_each_wgpeer(device, peer) {
 			if (with_interface)

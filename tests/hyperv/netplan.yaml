@@ -1,0 +1,21 @@
+network:
+  version: 2
+  ethernets:
+    path0:
+      match:
+        macaddress: "__PATH0_MAC__"
+      set-name: path0
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - __PATH0_ADDRESS__/24
+      optional: true
+    path1:
+      match:
+        macaddress: "__PATH1_MAC__"
+      set-name: path1
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - __PATH1_ADDRESS__/24
+      optional: true

@@ -14,7 +14,6 @@
 #include <linux/types.h>
 #include <linux/netfilter.h>
 #include <linux/spinlock.h>
-#include <linux/mutex.h>
 #include <linux/kref.h>
 #include <net/dst_cache.h>
 
@@ -85,6 +84,7 @@ struct wg_peer {
 
 	struct delayed_work tcp_outbound_remove_work;	// Work for removing outbound peer TCP connection
 	bool tcp_outbound_remove_scheduled;		// Flag to track outbound peer removal scheduling
+	bool tcp_reconnect_requested;		// Reconnect after the current outbound socket is quiesced
 	struct delayed_work tcp_inbound_remove_work;	// Work for removing inbound peer TCP connection
 	bool tcp_inbound_remove_scheduled;		// Flag to track inbound peer removal scheduling
 
@@ -93,6 +93,7 @@ struct wg_peer {
 
 	bool tcp_established;			// Flag to track TCP connection status
 	bool tcp_pending;			// Flag to track outbount pending TCP connection status
+	bool tcp_connecting;			// Synchronous connect setup owns outbound cleanup
 	bool inbound_connected;			// peer connected to us
 	bool outbound_connected;		// we connected to them
 	bool clean_outbound;			// release outbound at next cleanup
@@ -102,8 +103,6 @@ struct wg_peer {
 
 	struct sk_buff_head send_queue;		// TX queue
         spinlock_t send_queue_lock;		// TX lock
-	struct mutex tcp_write_mutex;		// Serializes TCP senders with socket retirement
-	struct mutex tcp_cleanup_mutex;	// Grants exclusive TCP socket retirement ownership
 
 	struct list_head pending_connection_list;	//peers pending connection handshake
 	spinlock_t tcp_lock;			// Protects TCP-related state
@@ -112,13 +111,11 @@ struct wg_peer {
 	struct workqueue_struct *tcp_read_wq;	// Workqueue for handling TCP data processing
 	spinlock_t tcp_read_lock;		// Spinlock to protect access to the socket data
 	bool tcp_read_worker_scheduled;		// Flag to indicate if the TCP read worker is scheduled
-	bool tcp_read_worker_recheck;		// Data arrived while the read worker was running
 
 	struct work_struct tcp_write_work;      // Work struct for scheduling the worker
 	struct workqueue_struct *tcp_write_wq;	// Workqueue for handling TCP data processing
 	spinlock_t tcp_write_lock;              // Spinlock to protect access to the socket data
 	bool tcp_write_worker_scheduled; 	// Flag to indicate if the TCP write worker is scheduled
-	bool tcp_write_worker_recheck;		// Write space changed while the write worker was running
 
 };
 
