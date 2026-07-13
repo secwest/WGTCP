@@ -581,11 +581,6 @@ meltdown resilience nor locates those boundary conditions.
   socket memory, and queue pressure. See
   [`socket.c`](../kernel/socket.c#L73-L337).
 
-The module does **not** implement a custom adaptive congestion controller,
-four-zone tuning, custom DSACK logic, or coordination between inner and outer
-TCP timers. References to such features in the historical test plan are not
-backed by symbols in this source snapshot.
-
 ### Required controls for bounded behavior
 
 1. **Record-safe backpressure:** the queued skb is the byte cursor across short
