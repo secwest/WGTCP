@@ -476,6 +476,9 @@ nocookie:
 			wg_dbg("Exiting wg_receive_handshake_packet\n");
 			return;
 		}
+		if (wg->transport == WG_TRANSPORT_TCP)
+			wg_tcp_mark_pending_authenticated(
+				wg, PACKET_CB(skb)->tcp_stream_id);
 		print_peer_socket_info(peer);
 		if (wg->transport == WG_TRANSPORT_UDP)
 			wg_socket_set_peer_endpoint_from_skb(peer, skb);
@@ -501,6 +504,9 @@ nocookie:
 			wg_dbg("Exiting wg_receive_handshake_packet\n");
 			return;
 		}
+		if (wg->transport == WG_TRANSPORT_TCP)
+			wg_tcp_mark_pending_authenticated(
+				wg, PACKET_CB(skb)->tcp_stream_id);
 
 		print_peer_socket_info(peer);
 		if (peer->device->transport == WG_TRANSPORT_UDP) {

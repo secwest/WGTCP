@@ -1,0 +1,257 @@
+# Design Log
+
+This log records design decisions made while building and qualifying the
+WireguardTCP TCP-over-TCP meltdown campaign. The transport architecture remains
+described in [`TCP_TRANSPORT_DESIGN.md`](TCP_TRANSPORT_DESIGN.md); this file
+captures why the investigation and its supporting changes took their current
+form.
+
+## 2026-07-12
+
+### DL-001: Test the feedback mechanism, not random loss alone
+
+**Status:** Accepted
+
+The prior performance matrix primarily injected exogenous random loss. A fixed
+drop probability does not rise with offered load, so it cannot by itself close
+the feedback loop required for classical TCP-over-TCP meltdown.
+
+The new campaign uses a rate-limited bottleneck and an explicit finite queue.
+Offered load can therefore create queue growth, delay, overflow, outer TCP
+recovery, and subsequent inner TCP congestion responses.
+
+### DL-002: Use matched UDP WireGuard controls in every scored cell
+
+**Status:** Accepted
+
+Every scored WireguardTCP cell is paired with the stock UDP branch from the same
+module, host state, workload, bottleneck, and named repetition. TCP degradation
+below 50% of a valid exact UDP match is reported, but does not by itself prove
+the meltdown mechanism.
+
+This controls for VM capacity, WireGuard encryption cost, workload behavior,
+queue construction, and unrelated path impairment.
+
+### DL-003: Predeclare operational meltdown thresholds
+
+**Status:** Accepted
+
+A run is operational meltdown only when all three conditions hold:
+
+1. at least 20% of 100 ms receiver-delivery bins have zero inner bytes;
+2. fitted end-to-start goodput declines by at least 20%, with slope
+   t-statistic at or below -2.0;
+3. the inner RTO rate reaches one event per logical flow-minute.
+
+Thresholds are fixed in
+[`perf-test/meltdown/TESTPLAN.md`](../perf-test/meltdown/TESTPLAN.md) and must
+not be changed after examining a campaign.
+
+### DL-004: Require mechanistic attribution in addition to classification
+
+**Status:** Accepted
+
+Operational thresholds alone can be triggered by implementation defects.
+Classical TCP-over-TCP meltdown attribution additionally requires outer
+retransmission or RTO recovery and temporal coupling to inner RTO or congestion
+window collapse.
+
+Clean-path failures without outer recovery are implementation defects and are
+not counted as meltdown evidence.
+
+### DL-005: Score delivery from the receiving tunnel interface
+
+**Status:** Accepted
+
+Iperf interval records are retained as a cross-check, but are not the
+authoritative stall signal. Multi-flow iperf can report synchronized
+block-completion bursts that create false zero-delivery intervals even when
+traffic is continuous.
+
+The harness samples cumulative receive bytes on the selected tunnel interface
+at 100 ms and resamples them onto exact measurement boundaries. Direction
+selects the receiver:
+
+- reverse: client receive interface;
+- forward: server receive interface;
+- bidirectional: both receive interfaces.
+
+### DL-006: Separate the finite queue from propagation impairment
+
+**Status:** Accepted
+
+The selected egress class uses HTB for rate and a direct byte-limited `bfifo` or
+`fq_codel` child for queue behavior. Selective ingress redirection to an IFB
+applies half-RTT netem delay and optional exogenous loss.
+
+This avoids a netem internal queue masking the finite bottleneck queue. Filters
+select only the WireGuard carriers and optional competitor, keeping SSH and
+host-control traffic outside the impairment path.
+
+Queue size is defined in BDP units:
+
+```text
+BDP bytes = rate_mbps * RTT_ms * 125
+queue bytes = BDP bytes * queue_bdp
+```
+
+### DL-007: Treat impairment and carrier verification as validity gates
+
+**Status:** Accepted
+
+A configured test is not evidence until runtime state is verified. The analyzer
+invalidates a cell when the workload, expected sampling coverage, preflight
+path, HTB rate, delay, queue kind or limit, traffic filters, clock state, kernel
+health, or TCP carrier stability fails validation.
+
+Queue overflow is reported separately. A valid run with no queue drops does not
+exercise the complete loss-driven feedback loop.
+
+### DL-008: Use the implementation's supported dual-endpoint TCP topology
+
+**Status:** Accepted with limitation
+
+The current implementation does not promote an accepted provisional socket into
+the configured peer, so responder-only static operation is unsupported. Both
+peers receive configured endpoints, normally creating two outer TCP streams.
+
+The harness records both tuples and invalidates a TCP cell if either changes or
+disappears. Results from this topology must not be generalized to a
+single-carrier TCP tunnel.
+
+### DL-009: Authenticate accepted carriers by exact stream provenance
+
+**Status:** Accepted
+
+Accepted TCP streams begin as bounded provisional objects. Endpoint-only
+matching is insufficient because a replacement TCP connection or companion UDP
+packet could otherwise authenticate the wrong provisional entry.
+
+Each accepted stream receives a nonzero monotonic ID. TCP-derived packets carry
+that ID through asynchronous handshake processing. Only successful Noise
+processing can mark that exact stream authenticated.
+
+### DL-010: Extend authenticated temporary-carrier lifetime without promotion
+
+**Status:** Accepted
+
+Pre-authentication controls remain:
+
+- five-second idle deadline;
+- 30-second absolute deadline;
+- 128 provisional entries per device.
+
+After the exact stream carries a valid Noise handshake, it remains a temporary
+receive carrier with a 180-second activity-based idle deadline and no
+pre-authentication absolute cap. Authentication does not promote or transfer
+the socket.
+
+This repairs five-second carrier rotation while preserving bounded
+pre-authentication exposure and avoiding an unsynchronized ownership transfer.
+
+### DL-011: Drain complete buffered records before another socket read
+
+**Status:** Accepted
+
+A bulk `recvmsg()` can contain multiple framed records. Once the first record is
+delivered, a complete leftover record must be processed before another
+nonblocking receive. Otherwise `EAGAIN` can strand already-buffered data until a
+later callback.
+
+The reader processes complete leftovers first and reschedules bounded work while
+processable buffered records remain.
+
+### DL-012: Gate the impairment campaign on repeatable clean controls
+
+**Status:** Accepted
+
+The campaign must not proceed from a single warmed-stream success. Multiple
+fresh interface setups must produce zero-loss, sub-millisecond unshaped TCP
+controls before throughput or impairment cells can be scored.
+
+This gate separates transport correctness from congestion behavior and prevents
+implementation stalls from being mislabeled as meltdown.
+
+### DL-013: Keep campaign control on the operator workstation
+
+**Status:** Accepted
+
+The workstation directly coordinates both private test hosts through restricted
+SSH forwarding. It uses one explicit key, pinned host keys, identity-only
+authentication, and no agent or password fallback. No private or secondary
+controller key is copied between hosts.
+
+Host setup is ephemeral, test traffic is isolated from SSH, and qdisc state is
+verified after cleanup.
+
+### DL-014: Localize the remaining one-packet lag below the TCP reader
+
+**Status:** Investigating
+
+Fresh tunnel setups can run one packet behind. BPF tracing shows:
+
+- every `wg_tcp_data_ready()` callback promptly starts
+  `wg_tcp_read_worker()`;
+- `kernel_recvmsg()` reads a complete 136-byte frame and then returns
+  `-EAGAIN`;
+- decryption succeeds;
+- endpoint reconstruction succeeds;
+- the first correlated frame does not call `napi_gro_receive()`;
+- the next frame reaches GRO and immediately triggers a reply.
+
+The current evidence does not support a TCP callback or read-worker lost-wakeup
+root cause. The remaining investigation is inside
+`wg_packet_consume_data_done()` between endpoint reconstruction and GRO,
+including protocol/size validation, trimming, keepalive handling, and allowed-IP
+source lookup.
+
+No design change is accepted for this issue until the exact rejecting branch is
+observed.
+
+## 2026-07-13
+
+### DL-015: Bind resumed evidence to source, runtime, and matrix identity
+
+**Status:** Accepted
+
+A cell is reusable only when `cell.json`, `cell.complete`, and
+`cell.fingerprint` all exist and the fingerprint matches the current campaign.
+The campaign fingerprint covers the orchestrator, analyzer and harness sources,
+test plan, matrix, loaded module srcversion and hash, and `wg` tool hash. The
+cell fingerprint also covers every matrix axis and repetition.
+
+`cell.json` is published only after analysis succeeds and both endpoints verify
+qdisc restoration. Campaign aggregation requires a manifest enumerating every
+expected cell and fingerprint. Missing, stale, failed, or partially published
+cells make the campaign incomplete rather than producing a negative result.
+
+### DL-016: Treat interval-complete telemetry as a validity requirement
+
+**Status:** Accepted
+
+The BPF sampler traces a bounded child process and must exit successfully after
+the requested interval. Its output must contain the header plus exactly one
+summary for every inner, outer, and competitor RTO/retransmission class, and
+summary counts must equal emitted event counts.
+
+The 200 ms socket sampler writes an independent completion record. TCP carrier
+validation requires enough samples to cover the workload start and end, two
+unchanged carrier tuples, and no missing interval. Missing receiver-interface
+samples remain missing; they are never converted into artificial zero-delivery
+bins.
+
+### DL-017: Resynchronize through the ordinary captured-socket reader
+
+**Status:** Accepted
+
+When buffered bytes contain no complete valid record header, the parser keeps
+at most the final seven bytes that could begin a header split across TCP reads.
+It then returns so the ordinary read worker can append later bytes through the
+socket it captured at entry. Resynchronization does not issue a separate
+one-shot `recvmsg()`.
+
+This preserves the parallel ARM lifetime integration: complete retained records
+are drained before another nonblocking read, leftover storage is sized to the
+exact suffix plus header headroom, and synthetic outer headers use the live
+captured socket tuple. It also prevents an invalid full header from causing a
+processable-buffer requeue loop.

@@ -48,13 +48,15 @@ interfaces.
 The code contains a bounded foundation for endpoint roaming: it accepts an
 inbound TCP connection before its peer identity is known and processes the
 normal WireGuard handshake. Provisional entries are capped per device and have
-idle and absolute pre-authentication deadlines. The old receive-side promotion
-block has been removed; no current path transfers a provisional socket to the
-authenticated peer. Responder-only and automatic TCP roaming are therefore
-unsupported. Explicitly configured reconnect targeting is separated from
-learned endpoints and passed the two-underlay migration and interface-restart
-case. Authenticated roaming targets, asymmetric ports, local route changes,
-IPv6 validation, and connection-collision handling require additional work.
+idle and absolute pre-authentication deadlines. Once the exact accepted stream
+carries a Noise-authenticated handshake, it remains a temporary receive carrier
+under a longer activity-based idle deadline; it is not promoted into the
+configured peer. The old receive-side promotion block has been removed.
+Responder-only and automatic TCP roaming are therefore unsupported. Explicitly
+configured reconnect targeting is separated from learned endpoints and passed
+the two-underlay migration and interface-restart case. Authenticated roaming
+targets, asymmetric ports, local route changes, IPv6 validation, and
+connection-collision handling require additional work.
 
 TCP listeners and outbound sockets use the WireGuard device's retained creation
 namespace. New and reconnected outbound streams use route-selected source
@@ -233,9 +235,15 @@ The record write path is in
 3. It checks the framing checksum, rejects unknown type or flag values, enforces
    the WireGuard-message minimum and `WG_MAX_PACKET_SIZE`, handles an optional
    fragment header, and preserves leftover bytes when one receive contains
-   multiple records. The same validation is used while resynchronizing.
-4. It reconstructs synthetic IP and UDP headers from the TCP socket's endpoints.
-   This lets the existing WireGuard receive code obtain endpoint metadata and
+   multiple records. Complete buffered leftovers are drained before another
+   nonblocking socket read, and bounded worker batches reschedule themselves
+   while buffered records remain. Resynchronization uses the same validation,
+   retains at most seven bytes that could prefix a header split across reads,
+   and lets the ordinary reader append later bytes instead of issuing a second
+   one-shot socket read.
+4. It reconstructs synthetic IP and UDP headers from the live socket captured by
+   the read worker. This preserves connected source ports and IPv6 tuples while
+   letting the existing WireGuard receive code obtain endpoint metadata and
    reuse the normal handshake/data dispatch.
 5. The standard WireGuard pipeline authenticates the handshake or AEAD data,
    performs replay checks, applies AllowedIPs, updates timers, and only then
@@ -255,7 +263,9 @@ stateDiagram-v2
     Dialing --> RetryWait: timeout or error
     RetryWait --> Dialing: retry timer
     Idle --> Provisional: inbound TCP accept
+    Provisional --> AuthenticatedCarrier: valid Noise handshake on this stream
     Provisional --> Closed: idle or absolute authentication deadline
+    AuthenticatedCarrier --> Closed: 180-second inactivity or socket close
     Established --> Established: data, keepalive, rekey
     Established --> RetryWait: close or fatal error
     Established --> Closed: interface or peer teardown
@@ -266,7 +276,11 @@ entries. Activity refreshes a five-second idle deadline, while a separate
 30-second maximum lifetime prevents a trickle sender from retaining a slot
 forever. A one-second sweep claims an expired list entry under the device lock,
 waits for RCU readers, quiesces its callbacks and workers, and then releases the
-socket. Authentication does not currently promote that socket.
+socket. Every accepted stream receives a nonzero identity that follows its
+packets through asynchronous handshake processing. Successful Noise processing
+marks only that stream authenticated. It remains temporary rather than being
+promoted, uses a 180-second activity-based idle deadline, and has no
+pre-authentication absolute cap.
 
 ### Outbound connections
 
@@ -285,13 +299,14 @@ and only then releases the socket. See [`socket.c`](../kernel/socket.c#L2471-L26
 An address is not a WireGuard identity. The listener therefore accepts a TCP
 connection from an unknown source into a temporary peer object. That object has
 only the stream parser, queues, callbacks, and enough device context to process
-a WireGuard handshake. The receive path deliberately does not own or delete
-provisional list entries and does not adopt an arbitrary `skb->sk` socket.
-During TCP handshake processing, only a socket already owned by the configured
-peer can refresh that peer's activity; received TCP metadata does not invoke
-the UDP endpoint-learning hook. A future responder-only design needs a new,
-explicitly synchronized transfer protocol before NAT or automatic TCP roaming
-can be supported.
+a WireGuard handshake. Stable stream provenance prevents a companion UDP packet
+or replacement TCP connection from authenticating the wrong temporary entry.
+The receive path deliberately does not own or delete provisional list entries
+and does not adopt an arbitrary `skb->sk` socket. During TCP handshake
+processing, only a socket already owned by the configured peer can refresh that
+peer's activity; received TCP metadata does not invoke the UDP endpoint-learning
+hook. A future responder-only design needs a new, explicitly synchronized
+transfer protocol before NAT or automatic TCP roaming can be supported.
 
 The provisional accept and cleanup paths are in
 [`socket.c`](../kernel/socket.c). The transport-gated handshake endpoint logic
@@ -412,8 +427,9 @@ the address itself never authenticates the peer.
 - Unknown inbound TCP addresses are admitted provisionally under a 128-entry
   per-device cap, a five-second idle deadline, and a 30-second absolute
   pre-authentication lifetime.
-- TCP handshake receive can refresh activity only for an inbound or outbound
-  socket already owned by the authenticated peer. Socket promotion is absent.
+- A successful Noise handshake marks only its exact accepted stream
+  authenticated, extending that temporary carrier to a 180-second
+  activity-based idle lifetime. Socket promotion is absent.
 - Route cache state is reset when an endpoint changes.
 - Existing keepalive and rekey timers operate above the transport selector.
 
@@ -509,7 +525,8 @@ Implemented controls include:
 - Cap each peer send queue at 1024 maximum-sized records and reject the newest
   record under pressure, preserving a partially emitted head.
 - Cap provisional objects at 128 per device, expire them after five idle
-  seconds or 30 total pre-authentication seconds, and retain one
+  seconds or 30 total pre-authentication seconds, retain authenticated temporary
+  carriers only while active within 180 seconds, and retain one
   claim/remove/destroy owner.
 
 Remaining controls include:

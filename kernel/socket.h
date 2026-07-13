@@ -26,6 +26,7 @@ int wg_socket_send_buffer_as_reply_to_skb(struct wg_device *wg,
 
 int wg_socket_endpoint_from_skb(struct endpoint *endpoint,
 				const struct sk_buff *skb);
+bool wg_tcp_mark_pending_authenticated(struct wg_device *wg, u64 stream_id);
 void wg_socket_set_peer_endpoint(struct wg_peer *peer,
 				 const struct endpoint *endpoint);
 void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer,

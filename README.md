@@ -23,7 +23,9 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 > condition. TCP mode is not ready for production deployment or a claim of
 > complete WireGuard feature parity. See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
-> [design document](docs/TCP_TRANSPORT_DESIGN.md).
+> [design document](docs/TCP_TRANSPORT_DESIGN.md). Investigation decisions and
+> repository changes are tracked in the [design log](docs/DESIGN_LOG.md) and
+> [changelog](CHANGELOG.md).
 
 ## Design summary
 

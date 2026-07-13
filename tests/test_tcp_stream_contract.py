@@ -134,17 +134,40 @@ class TcpStreamContract(unittest.TestCase):
     def test_resynchronization_uses_the_full_header_validator(self) -> None:
         sync = section(
             self.socket,
-            "bool wg_sync_header(struct wg_peer *peer, struct socket *socket)\n{",
+            "bool wg_sync_header(struct wg_peer *peer)\n{",
             "bool wg_check_potential_header_validity(",
         )
 
         self.assertGreaterEqual(
-            sync.count("wg_check_potential_header_validity("), 2
+            sync.count("wg_check_potential_header_validity("), 1
         )
         self.assertNotIn("wg_validate_header_checksum(potential_hdr)", sync)
-        self.assertIn("WG_MAX_PACKET_SIZE +", sync)
-        self.assertIn("WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN", sync)
-        self.assertIn("kernel_recvmsg(socket,", sync)
+
+    def test_resynchronization_preserves_a_split_header_suffix(self) -> None:
+        sync = section(
+            self.socket,
+            "bool wg_sync_header(struct wg_peer *peer)\n{",
+            "bool wg_check_potential_header_validity(",
+        )
+
+        self.assertIn(
+            "suffix_len = min_t(size_t, peer->received_len,", sync
+        )
+        self.assertIn("memmove(peer->partial_skb->data,", sync)
+        self.assertIn("skb_trim(peer->partial_skb, suffix_len);", sync)
+        self.assertIn("peer->received_len = suffix_len;", sync)
+        self.assertNotIn("kernel_recvmsg(", sync)
+
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+        wait = reader.index("if (!wg_sync_header(peer))")
+        self.assertNotIn(
+            "wg_peer_discard_partial_read(peer);",
+            reader[wait : reader.index("}", wait) + 1],
+        )
 
     def test_reader_rebinds_and_revalidates_after_resynchronization(self) -> None:
         reader = section(
@@ -152,7 +175,7 @@ class TcpStreamContract(unittest.TestCase):
             "void wg_tcp_read_worker(",
             "void wg_tcp_data_ready(",
         )
-        resync = reader.index("if (!wg_sync_header(peer, socket))")
+        resync = reader.index("if (!wg_sync_header(peer))")
         rebind = reader.index("memcpy(&header, peer->partial_skb->data", resync)
         revalidate = reader.index(
             "wg_check_potential_header_validity(", rebind
@@ -164,19 +187,6 @@ class TcpStreamContract(unittest.TestCase):
         self.assertLess(revalidate, resize)
         self.assertIn("needed = peer->expected_len - peer->received_len", reader)
         self.assertIn("skb_headroom(peer->partial_skb)", reader)
-
-    def test_reader_drains_complete_leftovers_before_receiving_more(self) -> None:
-        reader = section(
-            self.socket,
-            "void wg_tcp_read_worker(",
-            "void wg_tcp_data_ready(",
-        )
-
-        guard = "if (((!peer->expected_len &&"
-        receive = "read_bytes = kernel_recvmsg("
-        self.assertIn("Consume it before a nonblocking recvmsg()", reader)
-        self.assertIn("peer->received_len < peer->expected_len", reader)
-        self.assertLess(reader.index(guard), reader.index(receive))
 
     def test_leftover_storage_matches_the_retained_suffix(self) -> None:
         reader = section(
@@ -214,6 +224,28 @@ class TcpStreamContract(unittest.TestCase):
         self.assertIn(
             "wg_tcp_build_fake_headers(peer->partial_skb, peer, socket)",
             reader,
+        )
+
+    def test_reader_drains_complete_bulk_read_leftovers_before_recvmsg(self) -> None:
+        processable = section(
+            self.socket,
+            "static bool wg_tcp_partial_buffer_processable(",
+            "static int wg_tcp_build_fake_headers(",
+        )
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+
+        self.assertIn(
+            "peer->received_len >= ntohl(header.length)", processable
+        )
+        drain = "if (!wg_tcp_partial_buffer_processable(peer)) {"
+        recv = "read_bytes = kernel_recvmsg("
+        self.assertLess(reader.index(drain), reader.index(recv))
+        self.assertIn(
+            "(wg_tcp_partial_buffer_processable(peer) ||", reader
         )
 
 
