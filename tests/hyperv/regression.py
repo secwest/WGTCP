@@ -673,6 +673,34 @@ class Suite:
             "initialization_selftests": "pass",
         }
 
+    def tcp_fault_injection_case(self) -> dict[str, object]:
+        case_id = "tcp-fault-injection"
+        details: dict[str, object] = {"guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-parity-netns",
+                    self.run_id,
+                    case_id,
+                    "fault-injection",
+                    self.args.repo,
+                    label="tcp-fault-injection",
+                    timeout=max(self.args.timeout, 240),
+                )
+                fields = parse_fields(output)
+                if fields.get("restored_kernel_variant") != "fork":
+                    raise Failure(
+                        f"{vm} did not confirm production-module restoration"
+                    )
+                guest_details[vm] = fields
+            details["guests"] = guest_details
+            details["kernel_variant"] = "fork-fault"
+            details["restored_kernel_variant"] = "fork"
+            return details
+
     def stock_capability_case(self) -> dict[str, object]:
         case_id = "stock-capability"
         iface = "wgstockcap"
@@ -869,6 +897,10 @@ class Suite:
                 ("tcp-smoke", self.tcp_case),
                 ("tcp-asymmetric-listen-ports", self.tcp_asymmetric_ports_case),
                 ("tcp-stock-tool-management", self.tcp_stock_management_case),
+                (
+                    "tcp-config-roundtrip",
+                    lambda: self.tcp_parity_netns_case("config-roundtrip"),
+                ),
                 ("tcp-configured-path-change", self.tcp_configured_path_change_case),
                 (
                     "tcp-full-tunnel-live-fwmark",
@@ -887,9 +919,14 @@ class Suite:
                     lambda: self.tcp_parity_netns_case("ipv6"),
                 ),
                 (
+                    "tcp-ipv6-link-local-scope",
+                    lambda: self.tcp_parity_netns_case("ipv6-link-local"),
+                ),
+                (
                     "tcp-authenticated-carrier-lifetime",
                     lambda: self.tcp_parity_netns_case("carrier-lifetime"),
                 ),
+                ("tcp-debug-hostile-stream", self.tcp_fault_injection_case),
             ]
         )
 

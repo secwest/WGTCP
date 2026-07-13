@@ -124,8 +124,14 @@ class TcpStreamContract(unittest.TestCase):
             "static int wg_tcp_enqueue_frame(",
             "int wg_socket_send_skb_to_peer(",
         )
+        queue_limit = section(
+            self.socket,
+            "static unsigned int wg_tcp_test_effective_queue_limit(void)",
+            "struct wg_tcp_socket_list_entry",
+        )
 
-        self.assertIn("MAX_QUEUED_PACKETS", enqueue)
+        self.assertIn("wg_tcp_test_effective_queue_limit()", enqueue)
+        self.assertGreaterEqual(queue_limit.count("MAX_QUEUED_PACKETS"), 2)
         self.assertIn("ret = -ENOBUFS;", enqueue)
         self.assertIn("__skb_queue_tail(&peer->send_queue, frame);", enqueue)
         self.assertNotIn("__skb_dequeue", enqueue)

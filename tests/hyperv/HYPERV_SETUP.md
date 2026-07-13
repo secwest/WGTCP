@@ -14,11 +14,11 @@ The recorded campaign used Windows 11 Pro, Hyper-V, Multipass 1.16.3 with the
 `hyperv` driver, and two Ubuntu 24.04 guests running kernel
 `6.8.0-124-generic`.
 
-The final run `wg20260713T185138Z` used source base
-`e827d5f93f088dba4499e7f59d5f18c79600cc94`, base archive SHA-256
-`dc743a6f917fb61aff39bdb58bfdb428d67c9788bfc78a4885c720c2b7f6d3d1`, and
+The final full campaign `wg20260713T221904Z` used source HEAD
+`7c398d543158b5ef77d8c822b64f90bb99229a44`, base archive SHA-256
+`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`, and
 Git-visible overlay SHA-256
-`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
+`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
 
 | Component | `wgtcp-a` | `wgtcp-b` |
 |---|---|---|
@@ -186,8 +186,8 @@ the `multipassd` service and VMs remain healthy. After the two excluded
 2026-07-13 runs, seven such clients were consuming CPU. Each was inspected by
 exact PID, creation time, executable path, and complete command line before
 only those seven exact client PIDs were terminated. `multipassd`, `vmwp.exe`,
-and both managed VMs were left untouched; the next clean run passed all 32
-cases.
+and both managed VMs were left untouched; the next clean 32-case run passed,
+and the later expanded final campaign passed all 35 cases.
 
 First inventory clients and correlate their age and CPU use:
 
@@ -396,8 +396,9 @@ The provisioner executes the following sequence:
 10. Installs the verified snapshot into `/home/ubuntu/WireguardTCP` on each
     guest without losing Git symlinks.
 11. Installs dependencies, verifies the stock driver is a removable module,
-    builds the fork tool, copies the stock tool, and builds production and
-    DEBUG fork modules with `W=1`.
+    builds the fork tool, copies the stock tool, and builds production, DEBUG,
+    and isolated fault-injection fork modules with `W=1`. It verifies their
+    parameter isolation with `modinfo`.
 12. Records a schema-2 `Ready` state with exact Hyper-V VM and switch IDs,
     source base, host Git status, and archive hashes.
 
@@ -476,7 +477,19 @@ outputs. It produces:
 /var/lib/wireguardtcp/artifacts/bin/wg-fork
 /var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork.ko
 /var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork-debug.ko
+/var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork-fault.ko
 ```
+
+`wireguard-fork.ko` is the production artifact. `wireguard-fork-debug.ko`
+enables the ordinary DEBUG initialization selftests but does not expose stream
+fault controls. `wireguard-fork-fault.ko` additionally defines the explicit
+`WG_TCP_FAULT_INJECTION` build guard and is used only by the isolated
+`hostile-stream` case. After cleanly building each variant, `guest-build.sh`
+uses `modinfo` to prove that all `tcp_test_*` parameters are absent from the
+production and ordinary DEBUG artifacts and present in the fault artifact.
+Reuse-only verification recomputes that metadata, compares it with the saved
+manifests, repeats the isolation checks, and rejects a manifest for a different
+running kernel.
 
 Secure Boot was disabled because these local test modules are unsigned.
 Dynamic Memory was disabled so each build and regression case has predictable
@@ -515,7 +528,7 @@ does not replace the snapshot manifest or host `provision-state.json`.
 | Interrupted tests left interfaces or an underlay down. | Each case writes ownership state before mutation; cleanup restores only that case's interfaces, namespaces, and underlay. A later run refuses abandoned ownership. |
 | Failure logs were too narrow to diagnose TCP state. | Capture public WireGuard selectors, listening sockets, established TCP details, and kernel messages after a per-case log reset; never collect private keys. |
 | Host Python discovery could select the Windows Store alias or hang. | The wrapper probes real `python.exe`/`py.exe -3` applications with a 10-second process timeout. |
-| A single failing case prevented useful independent coverage. | The runner supports `-KeepGoing`, repeatable `--only-case`, production/DEBUG TCP variants, and always performs best-effort owned cleanup. Bounded command probes run first, and loss of all guest command execution is classified as infrastructure failure and aborts even with `-KeepGoing`. |
+| A single failing case prevented useful independent coverage. | The runner supports `-KeepGoing`, repeatable `--only-case`, production/DEBUG TCP variants, a dedicated isolated fault-module case, and always performs best-effort owned cleanup. Bounded command probes run first, and loss of all guest command execution is classified as infrastructure failure and aborts even with `-KeepGoing`. |
 
 The one-off recovery scripts, diagnostic cloud-init, and raw logs created
 during diagnosis remain under the ignored `tests/hyperv/results/` tree. They
@@ -559,10 +572,34 @@ replace that provenance step. Machine-readable results and command logs remain
 under the ignored `tests/hyperv/results/<run-id>/` directory. The curated,
 committed outcome is [`RESULTS.md`](RESULTS.md).
 
-The valid brokered-host campaign `wg20260713T185138Z` started at
-2026-07-13 18:51:38 UTC and passed all 32 cases with no failures or skips in
-376.109 seconds across 503 recorded commands. Its preflight passed all 89 local
-source-contract checks on both guests.
+The valid brokered-host campaign `wg20260713T221904Z` started at
+2026-07-13 22:19:04 UTC and passed all 35 cases with no failures or skips in
+452.476 seconds across 533 recorded commands. Its preflight passed all 100
+local source-contract checks on both Ubuntu 24.04 guests running kernel
+`6.8.0-124-generic`.
+
+The expanded cases completed live configuration round trips through `showconf`,
+`setconf`, and `syncconf`, plus `wg-quick` SaveConfig serialization, while
+keeping secret-bearing files guest-local and mode 0600. They also preserved
+scoped link-local IPv6 endpoint zones and carried tunnel traffic over link-local
+outer TCP connections. The
+isolated fault artifact produced per-guest deltas of `80/4/4/2380` on
+`wgtcp-a` and `80/4/4/2378` on `wgtcp-b` for short
+writes/prefixes/resynchronizations/queue drops, followed by successful traffic
+recovery after clearing the controls.
+
+The remaining validation boundary covers authenticated carrier promotion for
+arbitrary NAT ephemeral-port roaming, a cookie-equivalent TCP pre-authentication
+cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
+coverage, long-duration multi-flow soak testing, and wider kernel-version and
+distribution breadth.
+
+Focused hardening run `wg20260713T225629Z` used overlay SHA-256
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7` and
+passed the real `wg-quick` save/down/up reload plus the guest-owned one-shot
+hostile case: **2 PASS, 0 FAIL, 0 SKIP** in 134.149 seconds. Reuse-only artifact
+verification and all 103 source contracts then passed independently on both
+guests.
 
 Two immediately preceding runs are excluded from product evidence.
 `wg20260713T183821Z` completed 12 passing cases before a `wgtcp-a` collection
@@ -570,9 +607,10 @@ client reached its 180-second host timeout. `wg20260713T184512Z` completed nine
 passing cases before the same failure pattern. Seven orphaned `multipass.exe`
 clients were verified and stopped by exact PID as described above, while the
 service and VMs remained running; exact ownership cleanup used `m13` and `m10`
-from the respective logged `prepare` commands. The clean final run then passed
-all 32 cases. These aborts were control-client infrastructure failures, not
-product regressions or partial release results.
+from the respective logged `prepare` commands. The next clean 32-case campaign
+passed, and the later expanded final run passed all 35 cases. These aborts were
+control-client infrastructure failures, not product regressions or partial
+release results.
 
 A much earlier sandboxed attempt, `wg20260712T200006Z`, could not reach TCP
 port 22 on either management address and no guest command succeeded; it was a

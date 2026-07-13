@@ -10,6 +10,61 @@ affects design and externally visible behavior.
 ### Added
 
 - Established project design and change logs as required release artifacts.
+- Added complete TCP configuration round-trip coverage for `showconf`,
+  `setconf`, `syncconf`, and a real `wg-quick` save/down/up reload, with all
+  key-bearing files retained guest-locally at mode 0600.
+- Added scoped link-local IPv6 endpoint, `showconf`, outer-carrier, and
+  bidirectional tunnel validation.
+- Added a separate `wireguard-fork-fault.ko` test artifact with root-only,
+  DEBUG-gated controls and read-only counters for forced short writes,
+  deterministic malformed prefixes, parser resynchronization, and queue
+  pressure. Production and ordinary DEBUG artifacts reject those parameters.
+
+### Changed
+
+- Refined the remaining roaming design around an atomic authenticated
+  carrier-to-peer binding and promotion state machine instead of transferring
+  temporary-peer state in place.
+- Refined the TCP cookie design to require exact-carrier replies, MAC1
+  validation before Noise work, cookie-response consumption, and a staged
+  rollout before enforcing under-load MAC2 challenges.
+- Moved fault-module load, test, and production restore into one guest-side
+  command with `EXIT`/signal cleanup; the host requires an explicit restore
+  acknowledgement from both guests.
+- Made the writer-delay fault control one-shot so combining it with forced
+  short writes cannot multiply the configured pause across suffix retries.
+- Strengthened artifact reuse checks to compare live and saved `modinfo` and
+  parameter manifests, recheck fault-parameter isolation, and validate the
+  artifact manifest's kernel release.
+- Defined carrier collision ordering around static-key direction preference
+  and a future shared authenticated token; device-local connection IDs are
+  only local locators and stale-work generations.
+
+### Validated
+
+- Passed 103 source contracts locally and on both Ubuntu guests. The recorded
+  full campaign passed its then-current 100-contract preflight on both guests.
+- Built production, ordinary DEBUG, and isolated fault-injection modules with
+  kernel warnings enabled; `modinfo` verified fault-parameter isolation.
+- Passed Hyper-V run `wg20260713T221904Z`: 35 PASS, 0 FAIL, 0 SKIP in
+  452.476 seconds across 533 recorded commands with no kernel-log failures.
+- On each guest, forced 80 short writes, injected and recovered from four
+  malformed prefixes, forced more than 2,300 queue drops, and restored
+  bidirectional traffic without stream corruption.
+- Passed focused follow-up run `wg20260713T225629Z`: 2 PASS, 0 FAIL, 0 SKIP in
+  134.149 seconds. Both guests completed a real `wg-quick` down/up reload; the
+  one-shot hostile case recorded 80 short writes and four prefix recoveries on
+  each guest, plus 434/441 queue drops, then acknowledged production-module
+  restoration.
+
+### Known limitations
+
+- Authenticated carrier binding/promotion and general responder-only or NAT
+  ephemeral-port roaming are not implemented.
+- TCP handshakes still lack an enforced cookie-equivalent pre-authentication
+  cost defense; accept caps do not prevent Noise CPU work.
+- VRF and namespace move/teardown behavior, MTU accounting, physical-carrier
+  loss, longer multi-flow soak, and broader kernel/topology coverage remain.
 
 ## 2026-07-13
 

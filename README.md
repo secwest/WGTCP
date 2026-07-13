@@ -15,15 +15,19 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
-> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260713T185138Z` passed
-> every recorded UDP and TCP case: **32 PASS, 0 FAIL, 0 SKIP** in 376.109
-> seconds across 503 logged commands. TCP coverage included asymmetric listen
+> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260713T221904Z` passed
+> every recorded UDP and TCP case: **35 PASS, 0 FAIL, 0 SKIP** in 452.476
+> seconds across 533 logged commands. TCP coverage included asymmetric listen
 > ports, configured migration, authenticated target learning, live route,
 > source-address, uplink, and `FwMark` reconnects, full-tunnel recursion
-> avoidance, IPv6/dual-stack listeners, and a 40-second authenticated-carrier
-> lifetime. That evidence covers the tested combinations and scenarios, not
+> avoidance, IPv6/dual-stack and scoped link-local carriers, live configuration
+> application and SaveConfig serialization, a 40-second authenticated-carrier lifetime, and
+> isolated forced short-write/parser/queue-pressure recovery. That evidence
+> covers the tested combinations and scenarios, not
 > every kernel release, controller, NAT, or hostile stream condition. TCP mode
 > remains experimental and is not a claim of complete WireGuard feature parity.
+> Focused follow-up `wg20260713T225629Z` then passed a real `wg-quick` down/up
+> reload and the guest-owned fault-module lifecycle on both VMs.
 > See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
 > [design document](docs/TCP_TRANSPORT_DESIGN.md).
@@ -41,7 +45,8 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 | Provisional inbound path | Accepts unknown TCP connections before identity is known with device/per-source caps, per-source throttling, and authentication deadlines; authenticated carriers are retained, but socket promotion is not implemented |
 | Endpoint mobility | Keeps the configured peer listen port separate from an observed ephemeral source port, learns a future dial IP only from authenticated traffic, and reconnects after relevant endpoint, route, address, uplink, and `FwMark` changes |
 | Connection collision | Uses a deterministic public-key tie-break when simultaneous TCP Noise initiations collide |
-| Diagnostics | Optional TCP socket metrics include cwnd, RTT/RTO, retransmission state, and queue pressure |
+| Configuration persistence | Canonical TCP state round-trips through `showconf`, `setconf`, and `syncconf`; the tested Ubuntu `wg-quick` also serializes it through SaveConfig |
+| Diagnostics | Optional TCP metrics include cwnd, RTT/RTO, retransmission state, and queue pressure; destructive stream faults exist only in a separate lab module |
 
 The transport is selected below WireGuard's encryption layer:
 
@@ -176,23 +181,25 @@ and address notifications reconnect affected established streams, and a live
 route, source-address, uplink, and mark changes, plus a full-tunnel policy test
 whose unmarked endpoint lookup hit a recursion guard while marked TCP sockets
 used the physical path. Independent IPv4/IPv6 TCP and companion UDP listeners
-and bidirectional IPv6 TCP tunnel traffic also passed.
+and bidirectional ULA and scoped link-local IPv6 TCP tunnel traffic also
+passed. Canonical TCP configuration survived `showconf`, live `setconf`,
+drift-removing `syncconf`, and `wg-quick SaveConfig` on both guests.
+Focused follow-up `wg20260713T225629Z` removed and recreated `wga` in each
+guest's isolated pair from the saved file, recovered bidirectional traffic, and
+reproduced the exact canonical WireGuard configuration.
 
 Important remaining TCP parity work includes:
 
-- designing authenticated socket promotion and general NAT ephemeral-port
-  handling for responder-only roaming;
-- adding a cookie-equivalent pre-authentication cost defense, because TCP-mode
-  handshakes bypass WireGuard's inexpensive cookie/MAC screen even though Noise
-  authentication remains authoritative;
-- forcing hostile short writes, parser resynchronization, malformed-stream, and
-  queue-exhaustion conditions instead of relying only on source contracts;
-- completing `showconf`/`setconf`/`syncconf`/`wg-quick SaveConfig` round trips;
-- validating link-local IPv6 at runtime even though scope propagation is
-  implemented, plus namespace teardown/move and VRF behavior;
+- implementing atomic authenticated carrier-to-peer binding and promotion,
+  duplicate-carrier retirement, and general responder-only/NAT ephemeral-port
+  roaming;
+- adding exact-stream handshake/cookie replies, TCP cookie-response
+  consumption, MAC1 validation, and a staged MAC2 challenge rollout so
+  pre-Noise cost defense does not break older TCP peers under load;
+- validating namespace teardown/move and VRF behavior;
 - completing MTU accounting, longer hostile-network soaks, and broader kernel,
-  controller, and topology coverage before claiming production or all-modes
-  parity.
+  controller, topology, physical-carrier impairment, malformed-stream, and
+  multi-flow coverage before claiming production or all-modes parity.
 
 The full roaming state model and acceptance checklist are in the
 [design document](docs/TCP_TRANSPORT_DESIGN.md#roaming-and-endpoint-mobility).
@@ -207,7 +214,7 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Potentially useful on TCP-friendly policy paths | Current reverse-dial behavior needs bidirectional reachability; no authenticated socket promotion or arbitrary ephemeral-port parity exists |
+| Stateful firewall/NAT friendliness | Potentially useful on TCP-friendly policy paths | Current reverse-dial behavior needs bidirectional reachability; authenticated carrier binding/promotion and arbitrary ephemeral-port parity remain design work |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are
@@ -216,7 +223,8 @@ tradeoffs are acceptable. Highly multiplexed, roaming, and long-duration
 production workloads should wait for the parity checklist in the design
 document. Namespace-isolated IPv4/IPv6 tunnels, full-tunnel policy routing, and
 live route, source, uplink, and mark reconnects passed the recorded topology;
-deployment-specific policy and link-local IPv6 still require validation.
+deployment-specific firewall, connmark, namespace, and VRF policy still require
+validation.
 
 ## Performance and TCP-over-TCP behavior
 
@@ -325,18 +333,27 @@ For the full stock/fork cross-host matrix, use the repeatable two-VM Ubuntu
 24.04 Hyper-V lab. The complete creation and recovery record is in
 [`tests/hyperv/HYPERV_SETUP.md`](tests/hyperv/HYPERV_SETUP.md), with the shorter
 operating guide in [`tests/hyperv/README.md`](tests/hyperv/README.md). The lab
-provisions isolated outer paths, builds production and DEBUG modules, and
-records timestamped JSON, Markdown, and per-command logs. The latest committed
+provisions isolated outer paths, builds production, DEBUG, and isolated
+fault-injection modules, and records timestamped JSON, Markdown, and per-command
+logs. The latest committed
 summary is in [`tests/hyperv/RESULTS.md`](tests/hyperv/RESULTS.md); run
-`wg20260713T185138Z` passed all 32 cases with no failures or skips in 376.109
-seconds across 503 logged commands. Its tested source snapshot used base commit
-`e827d5f93f088dba4499e7f59d5f18c79600cc94` and provisioned overlay SHA-256
-`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
-Both Ubuntu 24.04 guests ran Linux 6.8, built production and DEBUG modules, and
-passed all 89 local source-contract checks during preflight.
-Source-contract checks cover framing and lifecycle invariants, but this campaign
-did not inject malformed streams or force short writes, parser loss of sync, or
-queue exhaustion under hostile network pressure.
+`wg20260713T221904Z` passed all 35 cases with no failures or skips in 452.476
+seconds across 533 logged commands. Its tested snapshot used base archive
+SHA-256 `5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`
+and overlay SHA-256
+`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
+Both Ubuntu 24.04 guests ran Linux 6.8 and passed all 100 local source contracts
+during preflight. The isolated fault case forced 80 short writes, four malformed
+prefixes, four successful parser resynchronizations, more than 2,300 drop-newest
+queue rejections, and clean bidirectional recovery on each guest. Build-time
+`modinfo` checks prove the `tcp_test_*` controls are absent from production and
+ordinary DEBUG modules.
+Focused follow-up `wg20260713T225629Z` passed the actual `wg-quick` reload and
+the hardened one-shot fault case for **2 PASS, 0 FAIL, 0 SKIP** in 134.149
+seconds. The exact follow-up overlay was
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`;
+all 103 source contracts and reuse-only artifact verification passed on both
+guests.
 
 ## Diagnostics
 
@@ -356,6 +373,12 @@ retransmissions, and queue pressure, so enabling it can perturb a benchmark.
 for isolated lab debugging only. The userspace tool no longer contains raw
 netlink payload dumps, and its debug trace macro is disabled so normal and
 machine-readable output retain stock behavior.
+
+Deterministic destructive tests use the separately built
+`wireguard-fork-fault.ko`. Its root-only `tcp_test_*` parameters are an unstable
+lab interface, module-global across namespaces, and absent from production and
+ordinary DEBUG artifacts. The committed runner serializes those tests, compares
+counter deltas, resets every control, and verifies post-pressure traffic.
 
 ## Documentation
 
