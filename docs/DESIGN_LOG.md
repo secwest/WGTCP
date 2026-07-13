@@ -357,3 +357,18 @@ Instead, `merge_campaigns.py` builds a composite that:
 This yields a qualified 68/68 stable screening inventory while preserving the
 audit trail from the initial 61-valid/7-invalid campaign and the separate
 seven-cell rerun.
+
+### DL-023: Require observed overflow before broader mechanism testing
+
+**Status:** Accepted
+
+The 50 Mb/s screening bottleneck usually exceeded the transport's
+46.4-47.3 Mb/s delivery and therefore did not overflow. The next matrix is
+predeclared separately rather than changing the completed screening matrix.
+
+The gate is two matched TCP/UDP repetitions at 35 Mb/s, 200 ms, and 0.25x BDP.
+Broader mechanism rows add 0.5x BDP at 35 Mb/s, 0.25x BDP at 25 Mb/s, and
+0.25x BDP at 35 Mb/s/400 ms. All use 16 inner flows, 60-second measurements,
+no exogenous loss, and the same runtime build. The broader rows run only after
+the smoke records finite-queue overflow with complete evidence and verified
+cleanup.

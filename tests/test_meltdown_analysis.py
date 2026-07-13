@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import importlib.util
 import io
 import json
@@ -30,9 +31,50 @@ SAMPLER = (
 TCP_EVENTS = (
     ROOT / "perf-test" / "meltdown" / "harness" / "tcp-events.bt"
 ).read_text(encoding="utf-8")
+MECHANISM_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism.csv"
+)
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
+    def test_mechanism_matrix_is_paired_and_predeclared(self) -> None:
+        with MECHANISM_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 8)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"none"})
+
+        pairs: dict[tuple[str, str, str, str], set[str]] = {}
+        for row in rows:
+            key = (
+                row["rate_mbps"],
+                row["rtt_ms"],
+                row["queue_bdp"],
+                row["name"],
+            )
+            pairs.setdefault(key, set()).add(row["tunnel"])
+        self.assertEqual(
+            set(pairs),
+            {
+                ("35", "200", "0.25", "r35-q025-r200-16f"),
+                ("35", "200", "0.5", "r35-q05-r200-16f"),
+                ("25", "200", "0.25", "r25-q025-r200-16f"),
+                ("35", "400", "0.25", "r35-q025-r400-16f"),
+            },
+        )
+        self.assertTrue(all(tunnels == {"tcp", "udp"} for tunnels in pairs.values()))
+        self.assertEqual(
+            {row["stage"] for row in rows[:2]},
+            {"mechanism-smoke"},
+        )
+        self.assertEqual({row["stage"] for row in rows[2:]}, {"mechanism"})
+
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "cell.json"

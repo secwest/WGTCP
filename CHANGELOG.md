@@ -12,6 +12,9 @@ All notable changes to this repository are documented here.
   propagation delay and optional loss isolated from SSH and control traffic.
 - Added matched TCP and UDP WireGuard cells covering calibration, BDP queue
   depth, and RTT-boundary screening.
+- Added a predeclared lower-rate mechanism matrix that gates broader testing on
+  observed finite-queue overflow in matched 35 Mb/s/200 ms/0.25x-BDP smoke
+  cells.
 - Added 100 ms receiver tunnel-interface sampling, layered BPF
   retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
   carrier-tuple tracking, and cross-layer coupling metrics.
