@@ -20,6 +20,28 @@ class UdpCompatibilityContract(unittest.TestCase):
         self.assertNotIn("WG_INCOMING_PORT", device)
         self.assertNotRegex(device, r"incoming_port\s*=\s*51820")
 
+    def test_udp_device_creation_does_not_allocate_tcp_workqueues(self) -> None:
+        device = source("kernel/device.c")
+        newlink = device[
+            device.index("static int wg_newlink(") : device.index(
+                "static struct rtnl_link_ops"
+            )
+        ]
+        open_device = device[
+            device.index("static int wg_open(") : device.index(
+                "static int wg_pm_notification("
+            )
+        ]
+
+        self.assertNotIn('alloc_workqueue("wg-tcp-auth-%s"', newlink)
+        tcp_gate = open_device.index(
+            "if (wg->transport == WG_TRANSPORT_TCP) {"
+        )
+        allocation = open_device.index(
+            'alloc_workqueue("wg-tcp-auth-%s"', tcp_gate
+        )
+        self.assertLess(tcp_gate, allocation)
+
     def test_cookie_truth_table_challenges_uncookied_load(self) -> None:
         cookie = source("kernel/cookie.h")
         receive = source("kernel/receive.c")

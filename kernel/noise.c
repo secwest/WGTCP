@@ -1025,32 +1025,26 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	if (replay_attack || flood_attack)
 		goto out;
 
-	/* Simultaneous initiation tiebreaker: if we already have a pending
-	 * outgoing initiation, processing this incoming one will destroy our
-	 * hashtable entry (via create_response → index_hashtable_insert on the
-	 * same handshake->entry).  Use pubkey comparison as tiebreaker:
-	 * the node with the lexicographically lower public key wins the
-	 * right to be initiator.  If we win, drop the incoming initiation.
+	/* Success! Copy everything to peer */
+	down_write(&handshake->lock);
+	/* Decide and commit simultaneous TCP initiation ownership under the same
+	 * lock. The lower static public key remains the initiator, and no local
+	 * initiation can appear between this decision and the state transition.
 	 */
 	if (wg->transport == WG_TRANSPORT_TCP) {
-		down_read(&handshake->lock);
 		if (handshake->state == HANDSHAKE_CREATED_INITIATION) {
 			int cmp = memcmp(wg->static_identity.static_public,
-				 handshake->remote_static,
-				 NOISE_PUBLIC_KEY_LEN);
-			up_read(&handshake->lock);
+					 handshake->remote_static,
+					 NOISE_PUBLIC_KEY_LEN);
+
 			if (cmp < 0) {
 				wg_dbg("wireguard: dropping incoming initiation: we have priority (pending outbound)\n");
+				up_write(&handshake->lock);
 				goto out;
 			}
 			wg_dbg("wireguard: yielding to incoming initiation (peer has priority)\n");
-		} else {
-			up_read(&handshake->lock);
 		}
 	}
-
-	/* Success! Copy everything to peer */
-	down_write(&handshake->lock);
 	memcpy(handshake->remote_ephemeral, e, NOISE_PUBLIC_KEY_LEN);
 	if (memcmp(t, handshake->latest_timestamp, NOISE_TIMESTAMP_LEN) > 0)
 		memcpy(handshake->latest_timestamp, t, NOISE_TIMESTAMP_LEN);

@@ -479,6 +479,8 @@ nocookie:
 		print_peer_socket_info(peer);
 		if (wg->transport == WG_TRANSPORT_UDP)
 			wg_socket_set_peer_endpoint_from_skb(peer, skb);
+		else if (PACKET_CB(skb)->outer_ipproto == IPPROTO_TCP)
+			wg_socket_set_peer_endpoint_authenticated_from_skb(peer, skb);
 		net_dbg_ratelimited("%s: Receiving handshake initiation from peer %llu (%pISpfsc)\n", wg->dev->name, peer->internal_id, &peer->endpoint.addr);
 		wg_packet_send_handshake_response(peer);
 		break;
@@ -505,15 +507,8 @@ nocookie:
 		print_peer_socket_info(peer);
 		if (peer->device->transport == WG_TRANSPORT_UDP) {
 			wg_socket_set_peer_endpoint_from_skb(peer, skb);
-		} else if (skb->sk && skb->sk->sk_socket) {
-			/* TCP endpoint promotion is intentionally disabled. Only a socket
-			 * already owned by this authenticated peer may refresh activity.
-			 * In particular, never adopt the companion UDP socket here.
-			 */
-			if (skb->sk->sk_socket == peer->inbound_socket)
-				peer->inbound_timestamp = ktime_get();
-			else if (skb->sk->sk_socket == peer->outbound_socket)
-				peer->outbound_timestamp = ktime_get();
+		} else if (PACKET_CB(skb)->outer_ipproto == IPPROTO_TCP) {
+			wg_socket_set_peer_endpoint_authenticated_from_skb(peer, skb);
 		}
 		net_dbg_ratelimited("%s: Receiving handshake response from peer %llu (%pISpfsc)\n", wg->dev->name, peer->internal_id, &peer->endpoint.addr);
 
@@ -796,7 +791,8 @@ out:
 
 static void wg_packet_consume_data_done(struct wg_peer *peer,
 					struct sk_buff *skb,
-					struct endpoint *endpoint)
+					struct endpoint *endpoint,
+					bool authenticated_over_tcp)
 {
 	wg_dbg("Entering wg_packet_consume_data_done: peer=%px, skb=%px, endpoint=%px\n",
 	       peer, skb, endpoint);
@@ -810,7 +806,12 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 	}
 
 	
-	wg_socket_set_peer_endpoint(peer, endpoint);
+	if (peer->device->transport == WG_TRANSPORT_TCP &&
+	    authenticated_over_tcp)
+		wg_socket_set_peer_endpoint_authenticated(
+			peer, endpoint, PACKET_CB(skb)->tcp_connection_id);
+	else
+		wg_socket_set_peer_endpoint(peer, endpoint);
 
 	if (unlikely(wg_noise_received_with_keypair(&peer->keypairs,
 						    PACKET_CB(skb)->keypair))) {
@@ -926,6 +927,7 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 	struct sk_buff *skb;
 	int work_done = 0;
 	bool free;
+	bool authenticated_over_tcp;
 
 	if (unlikely(budget <= 0)) {
 		wg_dbg("Exiting wg_packet_rx_poll with 0\n");
@@ -954,8 +956,11 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 		if (unlikely(wg_socket_endpoint_from_skb(&endpoint, skb)))
 			goto next;
 
+		authenticated_over_tcp =
+			PACKET_CB(skb)->outer_ipproto == IPPROTO_TCP;
 		wg_reset_packet(skb, false);
-		wg_packet_consume_data_done(peer, skb, &endpoint);
+		wg_packet_consume_data_done(peer, skb, &endpoint,
+					    authenticated_over_tcp);
 		free = false;
 
 next:

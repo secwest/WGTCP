@@ -91,7 +91,7 @@ class TcpNamespaceContract(unittest.TestCase):
         )
 
         acquire = "net = rcu_dereference(peer->device->creating_net);"
-        create = "ret = sock_create_kern(net, peer->peer_endpoint.addr.sa_family,"
+        create = "ret = sock_create_kern(net, family,"
         release = "put_net(net);"
         mark = "WRITE_ONCE(socket->sk->sk_mark, peer->device->fwmark);"
         initiate = "ret = kernel_connect(socket, addr,"
@@ -102,6 +102,23 @@ class TcpNamespaceContract(unittest.TestCase):
         self.assertLess(connect.index(release), connect.index(mark))
         self.assertLess(connect.index(mark), connect.index(initiate))
         self.assertNotIn("sock_create_kern(&init_net", connect)
+
+    def test_synthetic_ipv6_receive_preserves_link_local_scope(self) -> None:
+        build = section(
+            self.socket,
+            "static int wg_tcp_build_fake_headers(",
+            "void wg_tcp_read_worker(",
+        )
+        endpoint = section(
+            self.socket,
+            "int wg_socket_endpoint_from_skb(",
+            "bool endpoint_eq(",
+        )
+
+        self.assertIn("skb->skb_iif = source6->sin6_scope_id;", build)
+        self.assertIn("sk->sk_bound_dev_if", build)
+        self.assertIn("ipv6_iface_scope_id", endpoint)
+        self.assertIn("skb->skb_iif", endpoint)
 
     def test_creation_namespace_exit_quiesces_tcp_before_pointer_clear(self) -> None:
         pre_exit = section(
@@ -128,11 +145,80 @@ class TcpNamespaceContract(unittest.TestCase):
         ):
             self.assertIn(operation, pre_exit)
         self.assertLess(pre_exit.index(disable), pre_exit.index(listener))
+        self.assertLess(pre_exit.index(disable), pre_exit.index(peer))
+        self.assertLess(pre_exit.index(peer), pre_exit.index(listener))
         self.assertLess(pre_exit.index(listener), pre_exit.index(cancel))
         self.assertLess(pre_exit.index(cancel), pre_exit.index(provisional))
-        self.assertLess(pre_exit.index(provisional), pre_exit.index(peer))
-        self.assertLess(pre_exit.index(peer), pre_exit.index(clear))
+        self.assertGreaterEqual(pre_exit.count(cancel), 2)
+        self.assertLess(pre_exit.index(provisional), pre_exit.rindex(cancel))
+        self.assertLess(pre_exit.rindex(cancel), pre_exit.index(clear))
         self.assertLess(pre_exit.index(clear), pre_exit.index(udp))
+
+    def test_live_mark_and_local_network_events_request_reconnect(self) -> None:
+        netlink = source("kernel/netlink.c")
+        fwmark = section(
+            netlink,
+            "if (info->attrs[WGDEVICE_A_FWMARK]) {",
+            "if (info->attrs[WGDEVICE_A_LISTEN_PORT]) {",
+        )
+        worker = section(
+            self.device,
+            "static void wg_tcp_route_change_worker(",
+            "static void wg_tcp_schedule_route_change(",
+        )
+
+        self.assertIn("const bool changed = fwmark != wg->fwmark;", fwmark)
+        self.assertIn("wg_tcp_peer_request_reconnect(peer);", fwmark)
+        self.assertIn("wg_tcp_peer_request_reconnect(peer);", worker)
+        self.assertIn("register_netdevice_notifier(&netdevice_notifier)", self.device)
+        self.assertIn("register_inetaddr_notifier(&inetaddr_notifier)", self.device)
+        self.assertIn("register_inet6addr_notifier(&inet6addr_notifier)", self.device)
+        self.assertIn("rcu_access_pointer(wg->creating_net) != dev_net(changed_dev)", self.device)
+
+    def test_fib_events_dispatch_reconnects_from_pernet_context(self) -> None:
+        net_init = section(
+            self.device,
+            "static int wg_netns_init(struct net *net)",
+            "static void wg_netns_pre_exit(struct net *net)",
+        )
+        pre_exit = section(
+            self.device,
+            "static void wg_netns_pre_exit(struct net *net)",
+            "static struct pernet_operations pernet_ops",
+        )
+        fib_callback = section(
+            self.device,
+            "static int wg_tcp_fib_notification(",
+            "/* Address and link notifiers",
+        )
+        dispatch = section(
+            self.device,
+            "static void wg_tcp_fib_dispatch_worker(",
+            "static int wg_tcp_fib_notification(",
+        )
+
+        self.assertIn(
+            "register_fib_notifier(net, &wn->fib_notifier, NULL, NULL)",
+            net_init,
+        )
+        self.assertIn("FIB_EVENT_ENTRY_REPLACE", fib_callback)
+        self.assertIn("FIB_EVENT_RULE_ADD", fib_callback)
+        self.assertIn("FIB_EVENT_NH_DEL", fib_callback)
+        self.assertIn("mod_delayed_work(system_wq, &wn->fib_dispatch_work, 0)", fib_callback)
+        self.assertIn("rtnl_lock();", dispatch)
+        self.assertIn("wg->transport != WG_TRANSPORT_TCP", dispatch)
+        self.assertIn("mod_delayed_work(system_wq, &wg->tcp_route_work", dispatch)
+
+        unregister = pre_exit.index("unregister_fib_notifier(net, &wn->fib_notifier);")
+        cancel_dispatch = pre_exit.index(
+            "cancel_delayed_work_sync(&wn->fib_dispatch_work);"
+        )
+        lock_devices = pre_exit.index("rtnl_lock();")
+        self.assertLess(unregister, cancel_dispatch)
+        self.assertLess(cancel_dispatch, lock_devices)
+        self.assertIn(".init = wg_netns_init,", self.device)
+        self.assertIn(".id = &wg_net_id,", self.device)
+        self.assertIn(".size = sizeof(struct wg_net),", self.device)
 
 
 if __name__ == "__main__":

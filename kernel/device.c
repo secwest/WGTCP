@@ -28,11 +28,21 @@
 #include <net/rtnetlink.h>
 #include <net/ip_tunnels.h>
 #include <net/addrconf.h>
+#include <net/fib_notifier.h>
+#include <net/netns/generic.h>
 #include "wg_tcp_debug.h"
 
 void wg_tcp_listener_socket_release(struct wg_device *wg);
 
 static LIST_HEAD(device_list);
+static unsigned int wg_net_id;
+
+struct wg_net {
+	struct net *net;
+	struct notifier_block fib_notifier;
+	struct delayed_work fib_dispatch_work;
+	bool fib_registered;
+};
 
 static int wg_open(struct net_device *dev)
 {
@@ -69,30 +79,35 @@ static int wg_open(struct net_device *dev)
 		return ret;
 	}
 	if (wg->transport == WG_TRANSPORT_TCP) {
-		ret = wg_tcp_listener_socket_init(wg, wg->incoming_port);
-		if (ret < 0) {
-			WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
-			wg_tcp_listener_socket_release(wg);
-			cancel_delayed_work_sync(&wg->tcp_cleanup_work);
-			wg_destruct_tcp_connection_list(wg);
-			wg_socket_reinit(wg, NULL, NULL);
-			wg->incoming_port = requested_port;
-			return ret;
+		if (!wg->tcp_auth_wq) {
+			wg->tcp_auth_wq = alloc_workqueue("wg-tcp-auth-%s",
+						  WQ_UNBOUND | WQ_MEM_RECLAIM,
+						  0, dev->name);
+			if (!wg->tcp_auth_wq) {
+				ret = -ENOMEM;
+				goto err_tcp_open;
+			}
 		}
+		ret = wg_tcp_listener_socket_init(wg, wg->incoming_port);
+		if (ret < 0)
+			goto err_tcp_open;
 	}
 	mutex_lock(&wg->device_update_lock);
 	list_for_each_entry(peer, &wg->peer_list, peer_list) {
 		bool queue_tcp_retry = false;
 
-		if (wg->transport == WG_TRANSPORT_TCP && peer->peer_endpoint_set) {
+		if (wg->transport == WG_TRANSPORT_TCP) {
 			spin_lock_bh(&peer->tcp_lock);
-			if (!peer->tcp_retry_scheduled) {
+			peer->tcp_stopping = false;
+			if (peer->peer_endpoint_set &&
+			    !peer->tcp_retry_scheduled &&
+			    !peer->tcp_outbound_remove_scheduled) {
 				peer->tcp_retry_scheduled = true;
 				queue_tcp_retry = true;
 			}
-			spin_unlock_bh(&peer->tcp_lock);
 			if (queue_tcp_retry)
 				mod_delayed_work(system_wq, &peer->tcp_retry_work, 0);
+			spin_unlock_bh(&peer->tcp_lock);
 		}
 		wg_packet_send_staged_packets(peer);
 		if (peer->persistent_keepalive_interval)
@@ -100,6 +115,16 @@ static int wg_open(struct net_device *dev)
 	}
 	mutex_unlock(&wg->device_update_lock);
 	wg_dbg("Exiting wg_open: dev=%px, ret=%d\n", dev, ret);
+	return ret;
+
+err_tcp_open:
+	WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+	wg_tcp_listener_socket_release(wg);
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+	wg_destruct_tcp_connection_list(wg);
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+	wg_socket_reinit(wg, NULL, NULL);
+	wg->incoming_port = requested_port;
 	return ret;
 }
 
@@ -164,6 +189,142 @@ static int wg_vm_notification(struct notifier_block *nb, unsigned long action, v
 
 static struct notifier_block vm_notifier = { .notifier_call = wg_vm_notification };
 
+static void wg_tcp_route_change_worker(struct work_struct *work)
+{
+	struct wg_device *wg = container_of(work, struct wg_device,
+					    tcp_route_work.work);
+	struct wg_peer *peer;
+
+	mutex_lock(&wg->device_update_lock);
+	if (wg->transport == WG_TRANSPORT_TCP &&
+	    READ_ONCE(wg->tcp_cleanup_scheduled) && netif_running(wg->dev) &&
+	    rcu_access_pointer(wg->creating_net)) {
+		list_for_each_entry(peer, &wg->peer_list, peer_list) {
+			wg_socket_clear_peer_endpoint_src(peer);
+			wg_tcp_peer_request_reconnect(peer);
+		}
+	}
+	mutex_unlock(&wg->device_update_lock);
+}
+
+static void wg_tcp_fib_dispatch_worker(struct work_struct *work)
+{
+	struct wg_net *wn = container_of(work, struct wg_net,
+					 fib_dispatch_work.work);
+	struct wg_device *wg;
+
+	rtnl_lock();
+	list_for_each_entry(wg, &device_list, device_list) {
+		if (rcu_access_pointer(wg->creating_net) != wn->net ||
+		    wg->transport != WG_TRANSPORT_TCP ||
+		    !READ_ONCE(wg->tcp_cleanup_scheduled) ||
+		    !netif_running(wg->dev))
+			continue;
+		mod_delayed_work(system_wq, &wg->tcp_route_work,
+				 msecs_to_jiffies(100));
+	}
+	rtnl_unlock();
+}
+
+static int wg_tcp_fib_notification(struct notifier_block *nb,
+				   unsigned long action, void *data)
+{
+	struct wg_net *wn = container_of(nb, struct wg_net, fib_notifier);
+	const struct fib_notifier_info *info = data;
+
+	if (!READ_ONCE(wn->fib_registered) || !info ||
+	    (info->family != AF_INET && info->family != AF_INET6))
+		return NOTIFY_DONE;
+	switch (action) {
+	case FIB_EVENT_ENTRY_REPLACE:
+	case FIB_EVENT_ENTRY_APPEND:
+	case FIB_EVENT_ENTRY_ADD:
+	case FIB_EVENT_ENTRY_DEL:
+	case FIB_EVENT_RULE_ADD:
+	case FIB_EVENT_RULE_DEL:
+	case FIB_EVENT_NH_ADD:
+	case FIB_EVENT_NH_DEL:
+		mod_delayed_work(system_wq, &wn->fib_dispatch_work, 0);
+		break;
+	default:
+		break;
+	}
+	return NOTIFY_DONE;
+}
+
+/* Address and link notifiers run under RTNL, which also protects device_list.
+ * Queueing keeps socket shutdown and reconnect work out of notifier context and
+ * coalesces the event bursts emitted by one administrative change.
+ */
+static void wg_tcp_schedule_route_change(struct net_device *changed_dev)
+{
+	struct wg_device *wg;
+
+	if (!changed_dev)
+		return;
+	list_for_each_entry(wg, &device_list, device_list) {
+		if (wg->dev == changed_dev ||
+		    rcu_access_pointer(wg->creating_net) != dev_net(changed_dev) ||
+		    wg->transport != WG_TRANSPORT_TCP)
+			continue;
+		mod_delayed_work(system_wq, &wg->tcp_route_work,
+				 msecs_to_jiffies(100));
+	}
+}
+
+static int wg_netdevice_notification(struct notifier_block *nb,
+				     unsigned long action, void *data)
+{
+	struct net_device *changed_dev = netdev_notifier_info_to_dev(data);
+
+	switch (action) {
+	case NETDEV_UP:
+	case NETDEV_DOWN:
+	case NETDEV_CHANGE:
+	case NETDEV_CHANGEADDR:
+	case NETDEV_UNREGISTER:
+		wg_tcp_schedule_route_change(changed_dev);
+		break;
+	default:
+		break;
+	}
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block netdevice_notifier = {
+	.notifier_call = wg_netdevice_notification
+};
+
+static int wg_inetaddr_notification(struct notifier_block *nb,
+				    unsigned long action, void *data)
+{
+	const struct in_ifaddr *ifa = data;
+
+	if (ifa && ifa->ifa_dev)
+		wg_tcp_schedule_route_change(ifa->ifa_dev->dev);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block inetaddr_notifier = {
+	.notifier_call = wg_inetaddr_notification
+};
+
+#if IS_ENABLED(CONFIG_IPV6)
+static int wg_inet6addr_notification(struct notifier_block *nb,
+				     unsigned long action, void *data)
+{
+	const struct inet6_ifaddr *ifa = data;
+
+	if (ifa && ifa->idev)
+		wg_tcp_schedule_route_change(ifa->idev->dev);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block inet6addr_notifier = {
+	.notifier_call = wg_inet6addr_notification
+};
+#endif
+
 static int wg_stop(struct net_device *dev)
 {
 	struct wg_device *wg = netdev_priv(dev);
@@ -172,15 +333,26 @@ static int wg_stop(struct net_device *dev)
 
 	wg_dbg("Entering wg_stop: dev=%px\n", dev);
 	WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
-	if (wg->transport == WG_TRANSPORT_TCP)
+	cancel_delayed_work_sync(&wg->tcp_route_work);
+	mutex_lock(&wg->device_update_lock);
+	if (wg->transport == WG_TRANSPORT_TCP) {
+		/* Quiesce every connect/removal owner before releasing the shared
+		 * listeners. Otherwise an in-flight connect can republish listener or
+		 * peer socket state after the device teardown pass.
+		 */
+		list_for_each_entry(peer, &wg->peer_list, peer_list)
+			wg_tcp_peer_stop(peer);
 		wg_tcp_listener_socket_release(wg);
+	}
 	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
 	wg_destruct_tcp_connection_list(wg);
+	/* Destruction drains temp-peer callbacks that may have passed their
+	 * cleanup flag check before shutdown. Catch any device work queued by
+	 * such a callback after the first cancellation pass.
+	 */
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
 
-	mutex_lock(&wg->device_update_lock);
 	list_for_each_entry(peer, &wg->peer_list, peer_list) {
-		if (wg->transport == WG_TRANSPORT_TCP)
-			wg_tcp_peer_stop(peer);
 		wg_packet_purge_staged_packets(peer);
 		wg_timers_stop(peer);
 		wg_noise_handshake_clear(&peer->handshake);
@@ -318,12 +490,23 @@ static void wg_destruct(struct net_device *dev)
 	rtnl_lock();
 	list_del(&wg->device_list);
 	rtnl_unlock();
+	cancel_delayed_work_sync(&wg->tcp_route_work);
 	mutex_lock(&wg->device_update_lock);
 	WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
-	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
-	if (wg->transport == WG_TRANSPORT_TCP)
+	if (wg->transport == WG_TRANSPORT_TCP) {
+		struct wg_peer *peer;
+
+		list_for_each_entry(peer, &wg->peer_list, peer_list)
+			wg_tcp_peer_stop(peer);
 		wg_tcp_listener_socket_release(wg);
+	}
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
 	wg_destruct_tcp_connection_list(wg);
+	cancel_delayed_work_sync(&wg->tcp_cleanup_work);
+	if (wg->tcp_auth_wq) {
+		destroy_workqueue(wg->tcp_auth_wq);
+		wg->tcp_auth_wq = NULL;
+	}
 	rcu_assign_pointer(wg->creating_net, NULL);
 	wg->incoming_port = 0;
 	wg_socket_reinit(wg, NULL, NULL);
@@ -413,6 +596,7 @@ static int wg_newlink(struct net *src_net, struct net_device *dev,
 
 	// Initialize the work for tcp_cleanup_worker
 	INIT_DELAYED_WORK(&wg->tcp_cleanup_work, wg_tcp_cleanup_worker);
+	INIT_DELAYED_WORK(&wg->tcp_route_work, wg_tcp_route_change_worker);
 
 	wg->peer_hashtable = wg_pubkey_hashtable_alloc();
 	if (!wg->peer_hashtable)
@@ -468,6 +652,8 @@ static int wg_newlink(struct net *src_net, struct net_device *dev,
 
 	INIT_LIST_HEAD(&wg->tcp_connection_list);
 	spin_lock_init(&wg->tcp_connection_list_lock);
+	spin_lock_init(&wg->tcp_accept_lock);
+	atomic64_set(&wg->tcp_connection_sequence, 0);
 	wg->tcp_socket4_ready = false;
 	wg->tcp_socket6_ready = false;
 
@@ -480,7 +666,6 @@ static int wg_newlink(struct net *src_net, struct net_device *dev,
 
 	wg_dbg("Exiting wg_newlink: src_net=%px, dev=%px, ret=%d\n", src_net, dev, ret);
 	return ret;
-
 err_uninit_ratelimiter:
 	wg_ratelimiter_uninit();
 err_free_handshake_queue:
@@ -512,29 +697,56 @@ static struct rtnl_link_ops link_ops __read_mostly = {
 	.newlink		= wg_newlink,
 };
 
+static int wg_netns_init(struct net *net)
+{
+	struct wg_net *wn = net_generic(net, wg_net_id);
+	int ret;
+
+	wn->net = net;
+	wn->fib_notifier.notifier_call = wg_tcp_fib_notification;
+	INIT_DELAYED_WORK(&wn->fib_dispatch_work,
+			  wg_tcp_fib_dispatch_worker);
+	ret = register_fib_notifier(net, &wn->fib_notifier, NULL, NULL);
+	if (ret) {
+		pr_warn("wireguard: TCP route notifications unavailable in netns %u: %d\n",
+			net->ns.inum, ret);
+		return 0;
+	}
+	WRITE_ONCE(wn->fib_registered, true);
+	return 0;
+}
+
 static void wg_netns_pre_exit(struct net *net)
 {
+	struct wg_net *wn = net_generic(net, wg_net_id);
 	struct wg_device *wg;
 	struct wg_peer *peer;
 
 	wg_dbg("Entering wg_netns_pre_exit: net=%px\n", net);
+	if (READ_ONCE(wn->fib_registered)) {
+		WRITE_ONCE(wn->fib_registered, false);
+		unregister_fib_notifier(net, &wn->fib_notifier);
+	}
+	cancel_delayed_work_sync(&wn->fib_dispatch_work);
 
 	rtnl_lock();
 	list_for_each_entry(wg, &device_list, device_list) {
 		if (rcu_access_pointer(wg->creating_net) == net) {
 			pr_debug("%s: Creating namespace exiting\n", wg->dev->name);
 			netif_carrier_off(wg->dev);
+			cancel_delayed_work_sync(&wg->tcp_route_work);
 			mutex_lock(&wg->device_update_lock);
 			if (wg->transport == WG_TRANSPORT_TCP) {
 				/* Stop every user of sockets created in this namespace
 				 * before publishing that the namespace is gone.
 				 */
 				WRITE_ONCE(wg->tcp_cleanup_scheduled, false);
+				list_for_each_entry(peer, &wg->peer_list, peer_list)
+					wg_tcp_peer_stop(peer);
 				wg_tcp_listener_socket_release(wg);
 				cancel_delayed_work_sync(&wg->tcp_cleanup_work);
 				wg_destruct_tcp_connection_list(wg);
-				list_for_each_entry(peer, &wg->peer_list, peer_list)
-					wg_tcp_peer_stop(peer);
+				cancel_delayed_work_sync(&wg->tcp_cleanup_work);
 			}
 			rcu_assign_pointer(wg->creating_net, NULL);
 			wg_socket_reinit(wg, NULL, NULL);
@@ -549,7 +761,10 @@ static void wg_netns_pre_exit(struct net *net)
 }
 
 static struct pernet_operations pernet_ops = {
-	.pre_exit = wg_netns_pre_exit
+	.init = wg_netns_init,
+	.pre_exit = wg_netns_pre_exit,
+	.id = &wg_net_id,
+	.size = sizeof(struct wg_net),
 };
 
 int __init wg_device_init(void)
@@ -570,13 +785,35 @@ int __init wg_device_init(void)
 	if (ret)
 		goto error_vm;
 
-	ret = rtnl_link_register(&link_ops);
+	ret = register_netdevice_notifier(&netdevice_notifier);
 	if (ret)
 		goto error_pernet;
+
+	ret = register_inetaddr_notifier(&inetaddr_notifier);
+	if (ret)
+		goto error_netdevice;
+
+#if IS_ENABLED(CONFIG_IPV6)
+	ret = register_inet6addr_notifier(&inet6addr_notifier);
+	if (ret)
+		goto error_inetaddr;
+#endif
+
+	ret = rtnl_link_register(&link_ops);
+	if (ret)
+		goto error_inet6addr;
 
 	wg_dbg("Exiting wg_device_init: ret=0\n");
 	return 0;
 
+error_inet6addr:
+#if IS_ENABLED(CONFIG_IPV6)
+	unregister_inet6addr_notifier(&inet6addr_notifier);
+error_inetaddr:
+#endif
+	unregister_inetaddr_notifier(&inetaddr_notifier);
+error_netdevice:
+	unregister_netdevice_notifier(&netdevice_notifier);
 error_pernet:
 	unregister_pernet_device(&pernet_ops);
 error_vm:
@@ -593,6 +830,11 @@ void wg_device_uninit(void)
 	wg_dbg("Entering wg_device_uninit\n");
 
 	rtnl_link_unregister(&link_ops);
+#if IS_ENABLED(CONFIG_IPV6)
+	unregister_inet6addr_notifier(&inet6addr_notifier);
+#endif
+	unregister_inetaddr_notifier(&inetaddr_notifier);
+	unregister_netdevice_notifier(&netdevice_notifier);
 	unregister_pernet_device(&pernet_ops);
 	unregister_random_vmfork_notifier(&vm_notifier);
 	unregister_pm_notifier(&pm_notifier);

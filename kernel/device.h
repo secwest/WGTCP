@@ -57,6 +57,20 @@ struct endpoint {
 	};
 };
 
+#define WG_TCP_ACCEPT_SOURCE_SLOTS 128
+
+struct wg_tcp_accept_source {
+	union {
+		__be32 addr4;
+		struct in6_addr addr6;
+	} address;
+	unsigned long window_started;
+	unsigned long last_seen;
+	u32 scope_id;
+	u16 accepts;
+	sa_family_t family;
+};
+
 struct wg_device {
 	struct net_device *dev;
 	struct crypt_queue encrypt_queue, decrypt_queue, handshake_queue;
@@ -65,6 +79,7 @@ struct wg_device {
 	struct net __rcu *creating_net;
 	struct noise_static_identity static_identity;
 	struct workqueue_struct *packet_crypt_wq,*handshake_receive_wq, *handshake_send_wq;
+	struct workqueue_struct *tcp_auth_wq;
 	struct cookie_checker cookie_checker;
 	struct pubkey_hashtable *peer_hashtable;
 	struct index_hashtable *index_hashtable;
@@ -74,6 +89,7 @@ struct wg_device {
 	struct list_head device_list, peer_list, tcp_connection_list;
 	struct task_struct *tcp_listener4_thread, *tcp_listener6_thread;
 	struct delayed_work tcp_cleanup_work;
+	struct delayed_work tcp_route_work;
         spinlock_t tcp_cleanup_lock; // Add a spinlock to protect the flag
 	bool tcp_cleanup_scheduled;
 	bool tcp_socket4_ready;
@@ -81,6 +97,10 @@ struct wg_device {
 	bool listener_active;
 	spinlock_t tcp_connection_list_lock;
 	unsigned int tcp_pending_connections;
+	unsigned int tcp_tracked_connections;
+	atomic64_t tcp_connection_sequence;
+	spinlock_t tcp_accept_lock;
+	struct wg_tcp_accept_source tcp_accept_sources[WG_TCP_ACCEPT_SOURCE_SLOTS];
 	atomic_t handshake_queue_len;
 	unsigned int num_peers, device_update_gen;
 	u32 fwmark;

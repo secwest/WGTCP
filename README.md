@@ -15,13 +15,16 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
-> The brokered two-VM Ubuntu 24.04 run `wg20260712T212739Z` passed all 16
-> stock/fork kernel/tool UDP combinations, every focused UDP case, and all three
-> TCP cases: **26 PASS, 0 FAIL, 0 SKIP** overall in 208.713 seconds and 433
-> logged commands. That evidence covers the tested combinations and TCP
-> scenarios, not every kernel release, third-party controller, or hostile stream
-> condition. TCP mode is not ready for production deployment or a claim of
-> complete WireGuard feature parity. See the
+> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260713T185138Z` passed
+> every recorded UDP and TCP case: **32 PASS, 0 FAIL, 0 SKIP** in 376.109
+> seconds across 503 logged commands. TCP coverage included asymmetric listen
+> ports, configured migration, authenticated target learning, live route,
+> source-address, uplink, and `FwMark` reconnects, full-tunnel recursion
+> avoidance, IPv6/dual-stack listeners, and a 40-second authenticated-carrier
+> lifetime. That evidence covers the tested combinations and scenarios, not
+> every kernel release, controller, NAT, or hostile stream condition. TCP mode
+> remains experimental and is not a claim of complete WireGuard feature parity.
+> See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
 > [design document](docs/TCP_TRANSPORT_DESIGN.md).
 
@@ -35,7 +38,9 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 | Cryptography | Reuses the standard WireGuard Noise handshake, AEAD data messages, replay checks, and key rotation |
 | TCP lifecycle | Adds listeners, nonblocking outbound connect, socket callbacks, per-peer read/write workers, cleanup, and retry |
 | Receive integration | Reconstructs endpoint metadata and feeds decoded records into the existing WireGuard receive pipeline |
-| Provisional inbound path | Accepts unknown TCP connections before identity is known with a device cap and authentication deadlines; socket promotion is structurally disabled, so responder-only roaming is unsupported |
+| Provisional inbound path | Accepts unknown TCP connections before identity is known with device/per-source caps, per-source throttling, and authentication deadlines; authenticated carriers are retained, but socket promotion is not implemented |
+| Endpoint mobility | Keeps the configured peer listen port separate from an observed ephemeral source port, learns a future dial IP only from authenticated traffic, and reconnects after relevant endpoint, route, address, uplink, and `FwMark` changes |
+| Connection collision | Uses a deterministic public-key tie-break when simultaneous TCP Noise initiations collide |
 | Diagnostics | Optional TCP socket metrics include cwnd, RTT/RTO, retransmission state, and queue pressure |
 
 The transport is selected below WireGuard's encryption layer:
@@ -66,10 +71,11 @@ when the interface comes up. For TCP, the companion UDP socket selects the
 concrete port first and the TCP listener binds the same number; configure the
 peer endpoint with that selected port.
 
-For the current static topology, give both peers bidirectional inbound TCP
-reachability or port forwarding on their matching configured ports. The
-handshake path can attempt a reverse TCP connection, so ordinary one-sided
-client-behind-NAT responder behavior is not yet established.
+Give both peers bidirectional inbound TCP reachability or port forwarding on
+each peer's configured listen port. The ports may differ; the recorded
+asymmetric-listen-port case passed. The handshake path can still attempt a
+reverse TCP connection, so ordinary one-sided client-behind-NAT responder
+behavior and arbitrary NAT source-port changes are not yet established.
 
 TCP mode currently binds a TCP listener and the normal WireGuard UDP sockets on
 the same numeric `ListenPort`. A TCP-only deployment must block that UDP port at
@@ -139,50 +145,54 @@ snapshots can be recovered.
 
 ## Roaming and WireGuard parity
 
-The intended identity rule is the same as WireGuard's: an authenticated public
-key identifies a peer, not its IP address or TCP source port. The listener can
-hold an unknown inbound connection in provisional state and process its normal
-WireGuard handshake. Provisional entries are capped at 128 per device, expire
-after five seconds without activity, and have a 30-second absolute
-pre-authentication lifetime. The receive path does not contain socket-transfer
-or list-destruction ownership: TCP activity can refresh only a socket already
-owned by the authenticated peer, and UDP alone uses the stock endpoint-learning
-hook during handshake receive. Automatic socket promotion has not been
-designed, so responder-only and automatic TCP roaming remain unsupported.
+The identity rule remains WireGuard's: an authenticated public key identifies a
+peer, not its address or TCP source port. An unknown inbound connection starts
+in provisional state under a 128-entry device cap, an eight-entry per-source
+cap, and a 32-accept-per-second source throttle. It has five-second idle and
+30-second absolute pre-authentication deadlines. Once the stream carries valid
+Noise traffic, it is removed from pre-authentication accounting and no longer
+expires under those deadlines; the campaign retained the same authenticated
+carrier tuples while carrying traffic for 40 seconds.
 
-The dated Hyper-V campaign passed static IPv4 TCP connectivity, stock-tool
-management, and operator-configured migration to a second underlay. The
-migration case changed both configured endpoints, disabled the original path,
-cycled both WireGuard interfaces down and up, and recovered bidirectional
-traffic on the replacement path. Explicit netlink configuration replaces the
-TCP `peer_endpoint` dial target and shuts down an active outbound stream so its
-normal retry path can reconnect; authenticated endpoint learning from received
-packets does not rewrite that configured target. This validates the tested
-configured migration and interface-restart sequence, not responder-only
-promotion or automatic authenticated TCP roaming.
+Authenticated TCP metadata may update the IP used for a future dial, but the
+observed ephemeral source port never replaces the peer's configured listen
+port. Device-monotonic accepted-connection IDs prevent an older retained
+carrier from reverting a newer target, and a material authenticated address
+change queues a reconnect outside receive/NAPI context. Explicit netlink
+endpoint changes remain authoritative and also reconnect through the normal
+cleanup/retry path. These mechanisms passed authenticated address learning,
+asymmetric listen ports, source-address migration, and uplink migration in the
+recorded topology.
 
-TCP listeners and outbound sockets are created in the WireGuard device's
-retained creation namespace. New and reconnected outbound streams use
-route-selected source addressing there and inherit the device `FwMark`. The
-namespace-only runtime test passes; changing `FwMark`, routes, or addresses
-does not yet force an already-established TCP stream to reconnect.
+No path atomically promotes a provisional accepted socket into the configured
+peer. The current model therefore does not provide general responder-only
+roaming or NAT ephemeral-port parity; it can learn an authenticated remote IP
+only when the separately configured peer listen port remains reachable.
+
+TCP listeners, accepted sockets, and outbound sockets use the WireGuard
+device's retained creation namespace and carry its `FwMark`. Route, netdevice,
+and address notifications reconnect affected established streams, and a live
+`FwMark` change refreshes socket marks and reconnects. The campaign passed live
+route, source-address, uplink, and mark changes, plus a full-tunnel policy test
+whose unmarked endpoint lookup hit a recursion guard while marked TCP sockets
+used the physical path. Independent IPv4/IPv6 TCP and companion UDP listeners
+and bidirectional IPv6 TCP tunnel traffic also passed.
 
 Important remaining TCP parity work includes:
 
-- updating future reconnect targets after an authenticated address change;
-- separating a peer's configured listen port from an observed ephemeral TCP
-  source port;
-- validating asymmetric listen ports beyond the tested matching-port topology;
-- reacting to local route, address, and uplink changes;
-- validating full-tunnel policy routing and reconnecting an established stream
-  after a live `FwMark`, route, or source-address change;
-- deterministic handling of simultaneous inbound and outbound connections;
-- runtime IPv6 and dual-stack validation for the independent listeners;
-- per-source accept throttling and a cookie-equivalent pre-authentication cost
-  defense;
-- designing authenticated socket promotion and dial-target updates for roaming;
-- stress-testing short writes, parser resynchronization, queue pressure, and
-  configuration round trips before hostile-network use.
+- designing authenticated socket promotion and general NAT ephemeral-port
+  handling for responder-only roaming;
+- adding a cookie-equivalent pre-authentication cost defense, because TCP-mode
+  handshakes bypass WireGuard's inexpensive cookie/MAC screen even though Noise
+  authentication remains authoritative;
+- forcing hostile short writes, parser resynchronization, malformed-stream, and
+  queue-exhaustion conditions instead of relying only on source contracts;
+- completing `showconf`/`setconf`/`syncconf`/`wg-quick SaveConfig` round trips;
+- validating link-local IPv6 at runtime even though scope propagation is
+  implemented, plus namespace teardown/move and VRF behavior;
+- completing MTU accounting, longer hostile-network soaks, and broader kernel,
+  controller, and topology coverage before claiming production or all-modes
+  parity.
 
 The full roaming state model and acceptance checklist are in the
 [design document](docs/TCP_TRANSPORT_DESIGN.md#roaming-and-endpoint-mobility).
@@ -197,15 +207,16 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Potentially useful on TCP-friendly policy paths | Current reverse-dial behavior needs bidirectional reachability; ordinary one-sided NAT operation is unvalidated |
+| Stateful firewall/NAT friendliness | Potentially useful on TCP-friendly policy paths | Current reverse-dial behavior needs bidirectional reachability; no authenticated socket promotion or arbitrary ephemeral-port parity exists |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are
 the priority. Evaluate TCP where UDP is blocked or on a measured path where its
 tradeoffs are acceptable. Highly multiplexed, roaming, and long-duration
 production workloads should wait for the parity checklist in the design
-document. Namespace isolation now has an IPv4 runtime test; full-tunnel policy
-routing and live routing changes still require deployment-specific validation.
+document. Namespace-isolated IPv4/IPv6 tunnels, full-tunnel policy routing, and
+live route, source, uplink, and mark reconnects passed the recorded topology;
+deployment-specific policy and link-local IPv6 still require validation.
 
 ## Performance and TCP-over-TCP behavior
 
@@ -315,13 +326,15 @@ operating guide in [`tests/hyperv/README.md`](tests/hyperv/README.md). The lab
 provisions isolated outer paths, builds production and DEBUG modules, and
 records timestamped JSON, Markdown, and per-command logs. The latest committed
 summary is in [`tests/hyperv/RESULTS.md`](tests/hyperv/RESULTS.md); run
-`wg20260712T212739Z` passed all 26 cases with no failures or skips in 208.713
-seconds across 433 logged commands. Its tested source snapshot used base commit
-`35c9110cac0f10a6f6481d5d25d8cc6d5989918a` and provisioned overlay SHA-256
-`e19ba9759f2636849290a2773b2c5f764cd974437d94d745e837a69ee26e151c`.
+`wg20260713T185138Z` passed all 32 cases with no failures or skips in 376.109
+seconds across 503 logged commands. Its tested source snapshot used base commit
+`e827d5f93f088dba4499e7f59d5f18c79600cc94` and provisioned overlay SHA-256
+`a2bb58930392c060843a00b2125b9e5fcbcbd3e8b13ce14c17795bf64f3ec6de`.
+Both Ubuntu 24.04 guests ran Linux 6.8, built production and DEBUG modules, and
+passed all 89 local source-contract checks during preflight.
 Source-contract checks cover framing and lifecycle invariants, but this campaign
-did not inject malformed streams or force short writes and queue exhaustion
-under hostile network pressure.
+did not inject malformed streams or force short writes, parser loss of sync, or
+queue exhaustion under hostile network pressure.
 
 ## Diagnostics
 
