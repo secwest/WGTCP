@@ -85,6 +85,16 @@ No address or credential is stored in this repository.
 ```
 
 Use `-PrepareOnly` to build the control path and tunnels without running cells.
+Use one or more exact matrix cell names with `-Cell` to rerun only selected
+repetitions without replacing already-qualified evidence:
+
+```powershell
+.\orchestrator\run-campaign.ps1 <connection-and-topology-arguments> `
+  -SkipPrepare `
+  -Cell boundary-rtt300-16f-tcp-r2,boundary-rtt300-16f-udp-r2 `
+  -ResultsDir .\results\2026-07-13-targeted-rerun
+```
+
 Campaign execution is resume-safe only across identical evidence identities. A
 cell is skipped when `cell.json`, `cell.complete`, and a matching
 `cell.fingerprint` all exist. Changes to campaign sources, test plan, matrix

@@ -3477,6 +3477,15 @@ static int wg_tcp_send_frame(struct socket *sock, const struct sk_buff *frame)
 	return sent;
 }
 
+static void wg_tcp_arm_write_space(struct socket *socket)
+{
+	set_bit(SOCK_NOSPACE, &socket->flags);
+	/* Pair with the writeability recheck before the worker releases its
+	 * scheduled claim, as tcp_poll() does when arming EPOLLOUT.
+	 */
+	smp_mb__after_atomic();
+}
+
 void wg_print_wireguard_skb(const struct sk_buff *);
 
 void wg_tcp_write_worker(struct work_struct *work)
@@ -3517,20 +3526,15 @@ void wg_tcp_write_worker(struct work_struct *work)
 	wg_dbg("wg_tcp_write_worker: start peer=%llu send_queue_len=%u\n",
 				 peer->internal_id, skb_queue_len(&peer->send_queue));
 
-	if (!sk_stream_is_writeable(sk)) {
-        	// Socket is not ready for writing, exit and wait for sk_write_space activation
-		wg_dbg("wg_tcp_write_worker sk stream is NOT writeable\n");
-#if WG_TCP_DIAG_ENABLED
-		wg_tcp_diag_pressure(sk, peer->internal_id);
-#endif
-        	goto out;
-	}
-
 	/* BUG FIX: dequeue under lock, send outside lock.
 	 * kernel_sendmsg() calls lock_sock() which can sleep —
 	 * must NOT hold a spinlock across it.
+	 *
+	 * Do not gate the send on sk_stream_is_writeable(). A nonblocking send
+	 * that reaches EAGAIN arms SOCK_NOSPACE inside the stream layer, which is
+	 * what makes the later write-space callback reliable.
 	 */
-	while (sk_stream_is_writeable(sk)) {
+	while (true) {
 		spin_lock_bh(&peer->send_queue_lock);
 		skb = __skb_dequeue(&peer->send_queue);
 		spin_unlock_bh(&peer->send_queue_lock);
@@ -3558,6 +3562,7 @@ void wg_tcp_write_worker(struct work_struct *work)
 				spin_lock_bh(&peer->send_queue_lock);
 				__skb_queue_head(&peer->send_queue, skb);
 				spin_unlock_bh(&peer->send_queue_lock);
+				wg_tcp_arm_write_space(socket);
 				break;
 			}
 #if WG_TCP_DIAG_ENABLED
@@ -3573,6 +3578,7 @@ void wg_tcp_write_worker(struct work_struct *work)
 			spin_lock_bh(&peer->send_queue_lock);
 			__skb_queue_head(&peer->send_queue, skb);
 			spin_unlock_bh(&peer->send_queue_lock);
+			wg_tcp_arm_write_space(socket);
 			break;
 		} else {
 			pr_err("wg_tcp_write_worker: send error=%d peer=%llu frame_len=%u\n",

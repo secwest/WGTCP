@@ -7045,7 +7045,7 @@ index 0000000000000000000000000000000000000000..9b4051035afedae393a00786a939b46a
 +```bash
 +sudo ip link add wg0 type wireguard
 +sudo ip addr add 10.0.3.1/24 dev wg0
-+echo 'ggggggggggggggggggggggggggggggggggggggggggg=' | sudo ~/wg set wg0 private-key /dev/stdin
++sudo ~/wg set wg0 private-key /etc/wireguard/private.key
 +sudo ~/wg set wg0 listen-port 51820 transport tcp
 +sudo ip link set up dev wg0
 +sudo ~/wg set wg0 peer BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng= \
@@ -7057,7 +7057,7 @@ index 0000000000000000000000000000000000000000..9b4051035afedae393a00786a939b46a
 +```bash
 +sudo ip link add wg0 type wireguard
 +sudo ip addr add 10.0.3.2/24 dev wg0
-+echo 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=' | sudo ~/wg set wg0 private-key /dev/stdin
++sudo ~/wg set wg0 private-key /etc/wireguard/private.key
 +sudo ~/wg set wg0 listen-port 51820 transport tcp
 +sudo ip link set up dev wg0
 +sudo ~/wg set wg0 peer I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4= \
@@ -7209,7 +7209,7 @@ index 0000000000000000000000000000000000000000..9b4051035afedae393a00786a939b46a
 +
 +## Sudo Password
 +
-+The sudo password on all VMs is: `kyxi7kyxi7`
++The sudo password on all VMs is: `<removed-sudo-credential>`
 +(The poller uses `virtualuser` for sudo — update if different on your node)
 diff --git a/docs/TCP_TRANSPORT_DESIGN.md b/docs/TCP_TRANSPORT_DESIGN.md
 new file mode 100644
@@ -8057,11 +8057,11 @@ index 0000000000000000000000000000000000000000..3dfd423654dbf9268fc61cc308ddc9fe
 +# =============================================================================
 +#
 +# VM1 (Node 104):
-+#   Private: ggggggggggggggggggggggggggggggggggggggggggg=
++#   Private: <removed-vm1-private-key>
 +#   Public:  I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4=
 +#
 +# VM2 (Node 109):
-+#   Private: wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=
++#   Private: <removed-vm2-private-key>
 +#   Public:  BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng=
 +
 +# =============================================================================
@@ -8071,7 +8071,7 @@ index 0000000000000000000000000000000000000000..3dfd423654dbf9268fc61cc308ddc9fe
 +# --- vconf.bash for node 104 (VM1) ---
 +# Save this as ~/vconf.bash on node 104:
 +
-+VM1_PRIVATE_KEY="ggggggggggggggggggggggggggggggggggggggggggg="
++VM1_PRIVATE_KEY_FILE="/etc/wireguard/private.key"
 +VM1_PUBLIC_KEY="I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4="
 +VM2_PUBLIC_KEY="BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng="
 +VM1_TUNNEL_IP="10.0.3.1/24"
@@ -8090,7 +8090,7 @@ index 0000000000000000000000000000000000000000..3dfd423654dbf9268fc61cc308ddc9fe
 +sudo ip addr add 10.0.3.1/24 dev wg0
 +
 +# 3. Configure WireGuard
-+echo 'ggggggggggggggggggggggggggggggggggggggggggg=' | sudo ~/wg set wg0 private-key /dev/stdin
++sudo ~/wg set wg0 private-key "$VM1_PRIVATE_KEY_FILE"
 +sudo ~/wg set wg0 listen-port 51820 transport tcp
 +sudo ip link set up dev wg0
 +
@@ -8110,7 +8110,7 @@ index 0000000000000000000000000000000000000000..3dfd423654dbf9268fc61cc308ddc9fe
 +# --- vconf.bash for node 109 (VM2) ---
 +# Save this as ~/vconf.bash on node 109:
 +
-+VM2_PRIVATE_KEY="wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww="
++VM2_PRIVATE_KEY_FILE="/etc/wireguard/private.key"
 +VM2_PUBLIC_KEY="BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng="
 +VM1_PUBLIC_KEY="I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4="
 +VM2_TUNNEL_IP="10.0.3.2/24"
@@ -8129,7 +8129,7 @@ index 0000000000000000000000000000000000000000..3dfd423654dbf9268fc61cc308ddc9fe
 +sudo ip addr add 10.0.3.2/24 dev wg0
 +
 +# 3. Configure WireGuard
-+echo 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=' | sudo ~/wg set wg0 private-key /dev/stdin
++sudo ~/wg set wg0 private-key "$VM2_PRIVATE_KEY_FILE"
 +sudo ~/wg set wg0 listen-port 51820 transport tcp
 +sudo ip link set up dev wg0
 +

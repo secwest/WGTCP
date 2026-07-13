@@ -24,11 +24,11 @@
 # =============================================================================
 #
 # VM1 (Node 104):
-#   Private: ggggggggggggggggggggggggggggggggggggggggggg=
+#   Private: provisioned separately at /etc/wireguard/private.key
 #   Public:  I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4=
 #
 # VM2 (Node 109):
-#   Private: wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=
+#   Private: provisioned separately at /etc/wireguard/private.key
 #   Public:  BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng=
 
 # =============================================================================
@@ -38,7 +38,7 @@
 # --- vconf.bash for node 104 (VM1) ---
 # Save this as ~/vconf.bash on node 104:
 
-VM1_PRIVATE_KEY="ggggggggggggggggggggggggggggggggggggggggggg="
+VM1_PRIVATE_KEY_FILE="/etc/wireguard/private.key"
 VM1_PUBLIC_KEY="I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4="
 VM2_PUBLIC_KEY="BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng="
 VM1_TUNNEL_IP="10.0.3.1/24"
@@ -57,7 +57,7 @@ sudo ip link add wg0 type wireguard
 sudo ip addr add 10.0.3.1/24 dev wg0
 
 # 3. Configure WireGuard
-echo 'ggggggggggggggggggggggggggggggggggggggggggg=' | sudo ~/wg set wg0 private-key /dev/stdin
+sudo ~/wg set wg0 private-key "$VM1_PRIVATE_KEY_FILE"
 sudo ~/wg set wg0 listen-port 51820 transport tcp
 sudo ip link set up dev wg0
 
@@ -77,7 +77,7 @@ sudo ip route add 10.0.3.2/32 dev wg0
 # --- vconf.bash for node 109 (VM2) ---
 # Save this as ~/vconf.bash on node 109:
 
-VM2_PRIVATE_KEY="wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww="
+VM2_PRIVATE_KEY_FILE="/etc/wireguard/private.key"
 VM2_PUBLIC_KEY="BPSOiEG8+Yxizx/KOIiKuGIECIWckkFolZczyaR/Mng="
 VM1_PUBLIC_KEY="I610z8JCf9Wv24eQS/qJVSavi2M2/TRyf67l59n+Ym4="
 VM2_TUNNEL_IP="10.0.3.2/24"
@@ -96,7 +96,7 @@ sudo ip link add wg0 type wireguard
 sudo ip addr add 10.0.3.2/24 dev wg0
 
 # 3. Configure WireGuard
-echo 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=' | sudo ~/wg set wg0 private-key /dev/stdin
+sudo ~/wg set wg0 private-key "$VM2_PRIVATE_KEY_FILE"
 sudo ~/wg set wg0 listen-port 51820 transport tcp
 sudo ip link set up dev wg0
 

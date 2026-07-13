@@ -27,6 +27,9 @@ SHAPER = (
 SAMPLER = (
     ROOT / "perf-test" / "meltdown" / "harness" / "sample-endpoint.sh"
 ).read_text(encoding="utf-8")
+TCP_EVENTS = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "tcp-events.bt"
+).read_text(encoding="utf-8")
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -108,6 +111,50 @@ class MeltdownAnalysisTest(unittest.TestCase):
             )
             self.assertEqual(ANALYZE.htb_rate_mbps(path), 50.0)
 
+    def test_qdisc_window_uses_shaped_queue_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+            start_ns = 1_700_000_000_000_000_000
+            rows = [
+                {
+                    "timestamp": "2023-11-14T22:13:20.000000000Z",
+                    "qdisc": [
+                        {
+                            "kind": "fq_codel",
+                            "handle": "30:",
+                            "packets": 10_000,
+                        },
+                        {"kind": "fq_codel", "handle": "20:", "packets": 100},
+                    ],
+                },
+                {
+                    "timestamp": "2023-11-14T22:13:21.000000000Z",
+                    "qdisc": [
+                        {
+                            "kind": "fq_codel",
+                            "handle": "30:",
+                            "packets": 20_000,
+                        },
+                        {"kind": "fq_codel", "handle": "20:", "packets": 140},
+                    ],
+                },
+            ]
+            (endpoint / "qdisc-series.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="ascii",
+            )
+
+            self.assertEqual(
+                ANALYZE.qdisc_window_delta(
+                    endpoint,
+                    "fq_codel",
+                    "packets",
+                    start_ns,
+                    start_ns + 1_000_000_000,
+                ),
+                40,
+            )
+
     def test_tcp_event_telemetry_requires_complete_well_formed_trace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             endpoint = Path(temporary)
@@ -153,6 +200,52 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 "events_summary",
                 ANALYZE.tcp_event_telemetry_issues(endpoint),
             )
+
+    def test_tcp_event_summary_allows_one_late_raw_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+            (endpoint / "done").touch()
+            (endpoint / "clock.txt").write_text(
+                "EpochNs=1700000000000000000\nUptimeSeconds=100.0\n",
+                encoding="ascii",
+            )
+            (endpoint / "tcp-events.status").write_text(
+                "exit_code=0\nelapsed_ns=10000000000\ncomplete=yes\n",
+                encoding="ascii",
+            )
+            summaries = "".join(
+                f"summary,{event},{layer},0,0,0,0,0\n"
+                for event in ("rto", "retrans")
+                for layer in ("inner", "outer", "competitor")
+            )
+            event = "1700000000000000000,retrans,inner,5201,40000,0,0,0\n"
+            (endpoint / "tcp-events.csv").write_text(
+                ANALYZE.TCP_EVENTS_HEADER + "\n" + event + summaries,
+                encoding="ascii",
+            )
+
+            self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
+
+            (endpoint / "tcp-events.csv").write_text(
+                ANALYZE.TCP_EVENTS_HEADER + "\n" + event * 2 + summaries,
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_mismatch",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+    def test_tcp_event_summaries_use_atomic_aggregation(self) -> None:
+        for counter in (
+            "inner_rto",
+            "outer_rto",
+            "competitor_rto",
+            "inner_retrans",
+            "outer_retrans",
+            "competitor_retrans",
+        ):
+            self.assertIn(f"@{counter}++;", TCP_EVENTS)
+            self.assertNotIn(f"@{counter} = @{counter} + 1;", TCP_EVENTS)
 
     def test_kernel_anomalies_match_colon_terminated_signatures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -370,6 +463,30 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn('"cell.fingerprint"', ORCHESTRATOR)
         self.assertIn("loaded module or host build identities differ", ORCHESTRATOR)
         self.assertIn('-c "sleep $DURATION"', SAMPLER)
+        self.assertIn(
+            "$sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 30",
+            ORCHESTRATOR,
+        )
+        self.assertIn("[string[]] $Cell = @()", ORCHESTRATOR)
+        self.assertIn("$selectedCells.Contains($cellId)", ORCHESTRATOR)
+        restart_index = ORCHESTRATOR.index(
+            "sudo systemctl restart wgtcp-meltdown-iperf-inner.service"
+        )
+        sampler_index = ORCHESTRATOR.index(
+            "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverUnit)"
+        )
+        self.assertLess(restart_index, sampler_index)
+
+    def test_sampler_emits_one_json_object_per_qdisc_sample(self) -> None:
+        self.assertIn(
+            'qdisc_json="$(tc -s -j qdisc show dev "$IFACE" '
+            '2>/dev/null || printf \'[]\')"',
+            SAMPLER,
+        )
+        self.assertIn(
+            """printf '{"timestamp":"%s","qdisc":%s}\\n'""",
+            SAMPLER,
+        )
 
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')

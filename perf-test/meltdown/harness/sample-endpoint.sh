@@ -108,9 +108,10 @@ PIDS+=("$!")
 (
 	end=$((SECONDS + DURATION))
 	while ((SECONDS < end)); do
-		printf '{"timestamp":"%s","qdisc":' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
-		tc -s -j qdisc show dev "$IFACE" 2>/dev/null || printf '[]'
-		printf '}\n'
+		qdisc_json="$(tc -s -j qdisc show dev "$IFACE" 2>/dev/null || printf '[]')"
+		[[ -n "$qdisc_json" ]] || qdisc_json='[]'
+		printf '{"timestamp":"%s","qdisc":%s}\n' \
+			"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$qdisc_json"
 		sleep 0.2
 	done
 ) > "$OUT/qdisc-series.jsonl" &

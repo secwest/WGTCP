@@ -70,6 +70,22 @@ class TcpStreamContract(unittest.TestCase):
         self.assertNotIn("wg_tcp_build_frame", worker)
         self.assertNotIn("struct wg_tcp_encap_header", worker)
 
+    def test_writer_arms_write_space_instead_of_prechecking_it(self) -> None:
+        writer = section(
+            self.socket,
+            "static void wg_tcp_arm_write_space(",
+            "void wg_peer_discard_partial_read(",
+        )
+        send_loop = writer[: writer.index("\nout:")]
+
+        self.assertIn("set_bit(SOCK_NOSPACE, &socket->flags);", writer)
+        self.assertIn("smp_mb__after_atomic();", writer)
+        self.assertIn("while (true)", send_loop)
+        self.assertNotIn("if (!sk_stream_is_writeable(sk))", send_loop)
+        self.assertNotIn("while (sk_stream_is_writeable(sk))", send_loop)
+        self.assertEqual(send_loop.count("wg_tcp_arm_write_space(socket);"), 2)
+        self.assertIn("sk_stream_is_writeable(sk)", writer[writer.index("\nout:") :])
+
     def test_writer_claim_and_teardown_share_the_socket_lifetime_lock(self) -> None:
         schedule = section(
             self.socket,

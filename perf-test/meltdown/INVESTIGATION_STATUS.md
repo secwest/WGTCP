@@ -1,16 +1,19 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 01:57 PDT (2026-07-13 08:57 UTC)
+Status cutoff: 2026-07-13 15:30 PDT (2026-07-13 22:30 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
-conclusions reached so far. The impairment matrix is intentionally paused until
-the TCP tunnel passes repeatable clean-path controls.
+conclusions reached so far. Clean-path qualification and the initial finite
+queue/RTT screening matrix are complete; stronger congestion, mechanism, and
+endurance stages remain.
 
 ## 1. Executive summary
 
-The campaign is not yet in a position to claim either that WireguardTCP melts
-down or that it is resistant to meltdown.
+The patched transport passed clean qualification and all 14 calibration cells.
+The initial screening executed all 68 scheduled finite-queue and RTT-boundary
+cells: 61 are valid/stable and seven are invalid because their evidence windows
+failed closed. No valid cell is degraded, near-meltdown, or meltdown.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -18,37 +21,30 @@ outer TCP carrier, and inner delivery, congestion control, retransmission
 timers, and recovery are measured against an exact UDP WireGuard control.
 Meltdown thresholds and validity rules were declared before impairment results.
 
-Testing exposed several WireguardTCP implementation defects before that
+Testing exposed several WireguardTCP implementation defects before the
 mechanism could be evaluated:
 
 1. accepted TCP streams were reclaimed after five seconds because they remained
    provisional;
 2. complete records left in a bulk receive buffer could be stranded behind a
    subsequent nonblocking `recvmsg()` returning `EAGAIN`;
-3. fresh tunnel setups can still run one packet behind, producing approximately
-   104 ms ping RTT at 100 ms probe spacing and losing the final outstanding
-   packet.
+3. a stale Noise/carrier session produced an apparent one-packet receive lag;
+4. the TCP writer could strand a full 1,024-frame internal queue because a
+   pre-send writability check prevented `kernel_sendmsg()` from reaching
+   `EAGAIN` and arming `SOCK_NOSPACE`;
+5. BPF read/modify/write summary counters lost concurrent events across CPUs.
 
-The first two defects have local fixes and focused contract coverage. The
-patched build has demonstrated long clean intervals, including 0.322 ms mean
-RTT with 0/1780 packets lost over 370 seconds and successful Noise rekeys.
-However, that behavior is not repeatable after every fresh interface setup.
+The local repairs have focused contract coverage and matching ARM builds. Three
+fresh setups completed 600 bidirectional probes with zero loss and
+sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
+47 Mb/s over TCP and 48.59 Mb/s over UDP, including 16-flow TCP. The former
+1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
-The newest BPF evidence changes the diagnosis of the remaining one-packet lag.
-`wg_tcp_data_ready()`, `wg_tcp_read_worker()`, and `kernel_recvmsg()` all run
-promptly. A complete 136-byte frame is read, decrypted successfully, and has a
-valid reconstructed endpoint. The first correlated packet is then discarded
-before `napi_gro_receive()`. The next packet, approximately one probe interval
-later, reaches GRO and immediately triggers a reply. The immediate blocker is
-therefore later in the authenticated receive pipeline, not a demonstrated
-socket-callback or read-worker lost wakeup.
-
-No poor TCP result collected so far is valid evidence of classical
-TCP-over-TCP meltdown. The collapses occurred with no outer queue loss,
-retransmission, RTO, or recovery event. They are implementation failures on a
-clean path. Conversely, the successful clean-path soaks do not prove resistance
-to meltdown because the high-risk endogenous finite-queue and endurance matrix
-has not yet run on a repeatably correct build.
+The current valid evidence does not meet the predeclared meltdown definition.
+It also does not rule out meltdown: most nominal 50 Mb/s finite queues did not
+overflow because observed TCP delivery was only about 47 Mb/s. The next
+mechanism stage must use a lower bottleneck rate or additional contention, then
+force outer recovery and test temporal coupling to inner stalls and RTOs.
 
 ## 2. Objective and falsifiable definition
 
@@ -86,6 +82,7 @@ results.
 - Git author for this investigation checkpoint:
   `Dragos Ruiu <dr@secwest.net>`
 - Investigation commit policy: no Copilot tags or trailers
+- Campaign infrastructure baseline: `88b7173`
 - Pre-upstream experimental work is preserved in `stash@{0}` and session
   artifacts; it was not replayed blindly over the substantially changed
   upstream implementation.
@@ -242,8 +239,9 @@ Important analysis corrections made during live testing:
 10. Forward, reverse, and bidirectional receiver selection is explicit.
 11. Missing receiver-counter samples remain missing rather than becoming
     artificial zero-delivery stalls.
-12. BPF telemetry must complete and emit all six summaries, with counts matching
-    detailed RTO/retransmission events.
+12. BPF telemetry must complete and emit all six summaries. A summary may trail
+    detailed events by one final probe at tracer shutdown; it may never exceed
+    detailed events or trail by more than one.
 13. Resume skips require matching campaign and cell fingerprints; stale source,
     runtime, matrix, or repetition state reruns the cell.
 14. `cell.json` is not published until analysis and verified qdisc restoration
@@ -316,279 +314,257 @@ These semantics combine the campaign's split-header repair with the parallel
 ARM branch's captured-socket and exact-leftover fixes. Focused contracts guard
 the combined behavior.
 
-### 9.4 Remaining fresh-setup one-packet lag
+### 9.4 Apparent receive lag resolved as stale state
 
-After the prior fixes, a fresh strict preparation can still exhibit one-packet
-lag:
+The protocol/AllowedIPs trace showed that the first correlated post-idle frame
+was a legitimate zero-length WireGuard keepalive. Fresh synchronized traces
+showed ordinary ping data passing framing, decryption, endpoint reconstruction,
+protocol parsing, AllowedIPs lookup, and GRO immediately. Recreating the
+dedicated tunnels removed the approximately 104 ms one-packet lag. It did not
+reproduce across three fresh setups and is not treated as a remaining receive
+pipeline defect.
 
-- approximately 104 ms RTT with 100 ms probes;
-- the final outstanding ping is often lost, producing roughly 2-25% loss in
-  short probes;
-- two outer carriers remain established and stable;
-- no impairment qdisc is active.
+### 9.5 TCP writer lost wakeup
 
-This behavior originally looked like a receive-worker lost wakeup because the
-delay follows the next packet's arrival. BPF tracing now localizes it further
-downstream.
+The first calibrated 16-flow TCP runs collapsed to 0.07-0.17 Mb/s with 98-99%
+zero-delivery bins. Function-level 1/2/4/8/16-flow tracing showed:
 
-## 10. Measured results so far
+- successful enqueue count exceeded send count by exactly 1,024 frames;
+- the internal queue then rejected new frames with `-ENOBUFS`;
+- no physical-qdisc drops, outer retransmissions, or outer RTOs occurred;
+- no write-space callback arrived.
 
-Results from different implementation states are not pooled. The table is a
-diagnostic history, not a scored campaign summary.
+The writer checked `sk_stream_is_writeable()` before `kernel_sendmsg()`. That
+could bypass the `EAGAIN` path which retains the frame and arms
+`SOCK_NOSPACE`, leaving queued work with no future callback. The repair:
 
-| Build/context | Test | Observation | Interpretation |
-|---|---|---|---|
-| Upstream `74a68d7` | UDP, 50 Mb/s/40 ms calibration | about 45.7-45.9 Mb/s | Healthy control |
-| Upstream `74a68d7` | TCP, one flow | about 0.66 Mb/s | Carrier cleanup defect; not meltdown |
-| Upstream `74a68d7` | TCP, 16 flows | about 3.43 and 4.91 Mb/s in valid repetitions | No outer loss/RTO; not classical meltdown |
-| Earlier diagnostic build | TCP clean smoke | about 0.03-0.074 Mb/s, about 99% apparent stalls, repeated inner RTOs | Handshake/carrier/read defects; not meltdown |
-| Patched authenticated-carrier build | 45-second carrier check | unchanged carrier tuples; 0.303 ms mean ping | Former five-second rotation removed |
-| Patched reader build | 370-second ping/rekey soak | 0/1780 lost, 0.322 ms mean, three successful Noise rekeys | Strong clean-path success for one setup |
-| Patched reader build | 250-second idle/rekey check | 20/20 probes, 0.298 ms mean after rekey | Idle/rekey path succeeded once |
-| Same deployed build after fresh setup | 100 ms ping train | about 104 ms RTT and final-packet loss | Remaining deterministic one-packet pipeline lag |
+- keeps the write worker as the only `kernel_sendmsg()` caller;
+- attempts nonblocking sends until empty, partial, or `EAGAIN`;
+- retains the exact serialized frame or unsent suffix before notification
+  arming;
+- holds no spinlock across `kernel_sendmsg()`;
+- uses the existing memory barrier and scheduler/lifetime-lock recheck so a
+  concurrent writable transition cannot be missed.
 
-The module still loaded during the latest tracing is:
+The repeated concurrency trace delivered 44.25-44.67 Mb/s at 1/2/4/8/16 flows.
+At 16 flows, 10,801 sends returned `EAGAIN`, 1,492 write-space callbacks ran,
+all iperf workloads completed, and no 1,024-frame residue remained.
 
-- srcversion: `FA765AD5F9F65E0768CADA6`
-- SHA-256:
-  `ccf693af58eda5e109d80b51f5643b661824e47f2aad493f1f0cc3d54734843d`
+### 9.6 Concurrent BPF summary accounting
 
-The exact merged candidate was then built independently on both ARM hosts,
-without loading it:
+Plain BPF map read/modify/write summaries lost updates when probes ran on
+different CPUs. The trace now uses atomic increments. ARM compiler output
+contained atomic map additions, and a 16-flow stress trace reconciled all
+870 raw RTO/retransmission events.
 
-- kernel: `6.8.0-1062-azure`
-- srcversion: `2C69667F330A67B0D720BB8`
-- SHA-256:
-  `0be3a49888aa36f8a708bdba3f8e937a9d3e9c40a97629634dcb36e764d8bb6c`
+Tracer shutdown can still race one final detailed probe after an `END` summary.
+Analysis therefore permits a summary to trail raw events by exactly one. A
+summary greater than raw events, or a lag greater than one, remains invalid.
 
-Both hosts produced the same identity. Keeping the candidate unloaded preserves
-the traced failure state for the final protocol/allowed-IP discriminating run.
+## 10. Qualified measured results
 
-## 11. Latest BPF receive-pipeline evidence
+Results from superseded implementation states are not pooled with the current
+campaign.
 
-Tracing was performed on both the requester and responder with 100 ms ping
-spacing.
+### 10.1 Runtime identity
 
-### 11.1 TCP callback and read worker
+Both ARM endpoints independently produced and currently run:
 
-For each correlated arrival:
+- kernel: `6.8.0-1062-azure`;
+- module srcversion: `01DA86291E0FBD2CD3C940C`;
+- module SHA-256:
+  `05d0d5830adb04dfb16d80797b891a9cb1b45cc36bc6fd5eb82790aa372bbd6a`;
+- userspace tool SHA-256:
+  `80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3`.
 
-1. `wg_tcp_data_ready()` ran;
-2. `wg_tcp_read_worker()` began tens of microseconds later;
-3. `kernel_recvmsg()` returned one complete 136-byte frame;
-4. a second nonblocking `kernel_recvmsg()` returned `-EAGAIN`;
-5. the worker exited promptly.
+### 10.2 Clean calibration
 
-There was one worker invocation per callback. The observed 104 ms delay was not
-spent waiting for the callback, workqueue, or socket read.
+All 14 calibration cells are valid/stable:
 
-### 11.2 Decryption and NAPI delivery
+| Workload | Repetitions | Median authoritative goodput | Stalls | Scored inner/outer RTOs |
+|---|---:|---:|---:|---:|
+| TCP, one flow | 3 reverse plus 1 forward | 46.979 Mb/s | 0 | 0 |
+| TCP, 16 flows | 3 | 47.260 Mb/s | 0 | 0 |
+| UDP control, one flow | 3 reverse plus 1 forward | 48.594 Mb/s | 0 | not applicable |
+| UDP control, 16 flows | 3 | 48.594 Mb/s | 0 | not applicable |
 
-The first correlated post-idle frame followed this path:
+Every calibration cell had stable dual TCP carriers where applicable, complete
+telemetry, zero finite-queue drops, and verified qdisc restoration. The
+16-flow TCP repetitions recorded 1,118-1,205 inner retransmissions without
+timeout, stalls, or delivery collapse.
 
-```text
-wg_tcp_data_ready
-  -> wg_tcp_read_worker
-  -> wg_packet_receive
-  -> decrypt_packet returns success
-  -> wg_packet_rx_poll
-  -> wg_socket_endpoint_from_skb returns success
-  -> no napi_gro_receive
-  -> no immediate TCP reply
-```
+### 10.3 Initial finite-queue and RTT-boundary screening
 
-The next 136-byte frame arrived approximately 104 ms later and followed:
+All 68 scheduled cells executed without an execution failure. The formal
+published inventory is:
 
-```text
-wg_tcp_data_ready
-  -> wg_tcp_read_worker
-  -> wg_packet_receive
-  -> decrypt_packet returns success
-  -> wg_packet_rx_poll
-  -> wg_socket_endpoint_from_skb returns success
-  -> napi_gro_receive
-  -> reply queued and written within tens of microseconds
-```
+| Classification | Cells |
+|---|---:|
+| valid/stable | 61 |
+| valid/degraded | 0 |
+| valid/near-meltdown | 0 |
+| valid/meltdown | 0 |
+| invalid | 7 |
 
-This pattern repeated across short probes. It explains why reply `N` appears
-only after request `N+1`, while also showing that the earlier lost-wakeup
-hypothesis is not supported by the latest trace.
+Together with calibration, 82/82 scheduled screening cells executed: 75 are
+valid/stable and seven are invalid.
 
-The remaining candidate branches are inside
-`wg_packet_consume_data_done()` between endpoint reconstruction and
-`napi_gro_receive()`, including keepalive handling, inner network-header
-type/size validation, trimming, and allowed-IP source routing. A trace program
-has been extended to instrument `ip_tunnel_parse_protocol()` and
-`wg_allowedips_lookup_src()`, but that final discriminating run had not been
-executed at this status cutoff.
+Valid TCP cells generally delivered 46.4-47.3 Mb/s versus approximately
+48.59 Mb/s for UDP controls. No valid cell produced an inner RTO or an outer
+recovery event. One 250 ms TCP cell had a 0.9% stall fraction but remained
+stable. One 0.5x-BDP/40 ms TCP cell recorded 12 queue drops without stalls,
+RTOs, or recovery.
 
-## 12. What can be concluded about TCP meltdown now
+Most configured 50 Mb/s bottlenecks did not overflow because observed TCP
+delivery remained below the bottleneck rate. Those cells validate operation at
+their measured load but do not close the endogenous congestion feedback loop.
+
+### 10.4 Invalid evidence inventory
+
+The seven invalid repetitions are:
+
+- `boundary-rtt100-16f-tcp-r2` and
+  `boundary-rtt175-16f-tcp-r2`: one final raw BPF event beyond an `END`
+  summary;
+- `boundary-rtt300-16f-tcp-r2`: server carrier sampling ended before the full
+  workload boundary;
+- `boundary-rtt300-16f-udp-r2`: qdisc sampling ended before the full workload
+  boundary;
+- `boundary-rtt400-16f-tcp-r2`: both carrier and qdisc coverage ended early;
+- `boundary-rtt400-16f-udp-r1` and
+  `boundary-rtt400-16f-udp-r2`: qdisc coverage ended early, so the shaped-class
+  usage requirement also could not be proven.
+
+These are evidence-window failures, not observed transport collapse. The two
+one-event trace races reanalyze as valid/stable under the bounded shutdown
+rule. Formal screening remains 61 valid and seven invalid until a separate
+fingerprinted rerun replaces all seven with complete evidence. The orchestrator
+now supports exact `-Cell` selection and gives endpoint samplers a 30-second
+margin to cover ARM BPF attachment time and high-RTT setup.
+
+## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- The original random-loss results were not sufficient to test classical
-  meltdown because loss was exogenous and the harmed inner quantities and
-  cross-layer timing were not measured.
-- Several severe TCP results in this investigation are definitively
-  implementation defects, not congestion-induced meltdown.
-- Accepted-carrier lifetime and framed-stream receive ordering materially affect
-  apparent performance and can mimic meltdown metrics.
-- The patched transport can sustain sub-millisecond clean traffic and Noise
-  rekeys for several minutes in at least some fresh setups.
-- The current harness is substantially closer to a defensible mechanistic test:
-  finite queues, matched UDP controls, receiver delivery, timer separation,
-  carrier validity, and temporal coupling are all represented.
+- None of the 75 valid calibration/screening cells meets even one component of
+  the predeclared full-meltdown definition.
+- No valid cell has an inner RTO or outer recovery event, so there is no
+  cross-layer recovery coupling to attribute to classical TCP-over-TCP
+  meltdown.
+- The severe pre-fix 16-flow collapse was a deterministic writer-notification
+  defect with no outer loss or recovery, not classical meltdown.
+- The writer repair restores clean 16-flow throughput and remains responsive
+  through thousands of `EAGAIN`/write-space cycles.
+- The current dual-carrier build is stable across the qualified calibration and
+  screening evidence collected so far.
 
 ### Conclusions not yet supported
 
-- No valid high-risk endogenous-congestion cell has yet demonstrated full
-  meltdown under the predeclared definition.
-- No valid high-risk campaign has yet ruled meltdown out.
-- There is not yet enough repeatable clean-path stability to publish throughput,
-  queue-boundary, RTT-boundary, short-flow, or endurance comparisons.
-- The current dual-outer-stream topology should not be generalized to every
-  TCP tunnel design.
+- The campaign does not rule out meltdown under actual sustained finite-queue
+  overflow, outer RTO, bidirectional contention, AQM/ECN, or endurance load.
+- The current results should not be generalized from two outer streams to a
+  single-carrier or responder-only design.
+- Invalid repetitions cannot be used as positive or negative transport
+  evidence until their telemetry is complete.
 
-The honest current assessment is: **WireguardTCP is not yet being measured
-against meltdown; implementation correctness remains the gating issue.**
+The current assessment is: **no meltdown was observed in qualified screening,
+but most cells did not create enough congestion to test the full feedback
+mechanism.**
 
-## 13. Validation completed
+## 12. Validation completed
 
-For the merged checkpoint:
+- 84 repository source-contract and analysis tests pass;
+- Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
+  checks pass;
+- disposable-veth shaping produced parseable single-line qdisc JSON, accounted
+  only handle `20:`, rate-limited traffic, and restored the baseline;
+- the writer-fix module built independently on both ARM endpoints with matching
+  srcversion and SHA-256;
+- ARM BPF bytecode uses atomic counter updates;
+- 870/870 raw stress-trace events reconcile;
+- clean 1/2/4/8/16-flow writer traces completed without stranded frames;
+- all 14 calibration and 68 initial screening executions completed;
+- post-campaign cleanup restored physical qdiscs and left no sampler or
+  competitor unit running;
+- fresh TCP probes after cleanup had zero loss.
 
-- 79 repository tests passed;
-- Python compilation passed;
-- Bash syntax checks passed;
-- PowerShell parsing passed;
-- diff whitespace checks passed;
-- disposable-veth shaping apply/rollback restored the baseline;
-- the complete endpoint sampler ran on both ARM hosts;
-- each real sampler produced successful BPF and socket status records, the BPF
-  header and all six reconciled summaries, and a completion marker;
-- 22-23 socket samples per endpoint showed two unchanged carrier tuples;
-- the exact candidate built independently on both ARM hosts with matching
-  srcversion and module SHA-256;
-- the candidate was not loaded over the preserved tracing build;
-- isolated identity-only, pinned-host SSH authentication passed;
-- clean-path carrier stability and rekey soaks passed in selected setups.
-
-Additional protocol/allowed-IP trace programs remain session artifacts rather
-than repository sources.
-
-## 14. Repository changes in this investigation
+## 13. Repository changes in this investigation
 
 Major changed or added surfaces include:
 
-- `kernel/socket.c`
-  - accepted-stream identity and authenticated lifetime;
-  - listener initialization handoff protection;
-  - buffered-record drain ordering and bounded rescheduling;
-  - split-header suffix preservation;
-  - captured-socket tuple reconstruction and exact leftover allocation;
-  - reader/teardown scheduling coordination.
-- `kernel/socket.h`
-  - authenticated pending-stream API.
-- `kernel/queueing.h`
-  - TCP stream provenance in packet metadata.
-- `kernel/receive.c`
-  - exact-stream authentication after successful Noise processing.
-- `tests/test_tcp_lifecycle_contract.py`
-  - stream provenance, deadlines, and listener ownership.
-- `tests/test_tcp_roaming_contract.py`
-  - authentication ordering.
-- `tests/test_tcp_stream_contract.py`
-  - buffered-leftover drain, split-header resynchronization, and captured-socket
-    behavior.
-- `tests/test_meltdown_analysis.py`
-  - JSON tolerance, interface delivery, telemetry completion, carrier coverage,
-    campaign fingerprints/manifests, competitor validity, and matched-control
-    analysis.
-- `perf-test/meltdown/harness/analyze.py`
-  - fail-closed validity, timing, delivery, telemetry reconciliation, RTO,
-    queue, carrier, fingerprint, manifest, and coupling analysis.
-- `perf-test/meltdown/harness/sample-endpoint.sh`
-  - endpoint evidence, bounded BPF lifecycle, socket completion, and
-    tunnel-counter collection.
-- `perf-test/meltdown/harness/sample-interface.py`
-  - stable 100 ms interface sampling.
-- `perf-test/meltdown/harness/shape-link.sh`
-  - selective endogenous bottleneck construction and verified restoration.
-- `perf-test/meltdown/orchestrator/run-campaign.ps1`
-  - secure two-host deployment, strict controls, execution, retrieval, and
-    cleanup-gated publication with source/runtime/cell fingerprints.
-- `perf-test/meltdown/matrix-screening.csv`
-  - matched calibration, queue, and RTT-boundary cells.
-- `docs/TCP_TRANSPORT_DESIGN.md`
-  - authenticated temporary carriers and buffered-record draining.
+- `kernel/socket.c`: authenticated carrier lifetime, complete retained-record
+  draining, split-header preservation, captured-socket handling, exact
+  left-over storage, and writer notification repair;
+- `kernel/socket.h`, `kernel/queueing.h`, and `kernel/receive.c`: exact stream
+  provenance and post-Noise authentication;
+- `tests/test_tcp_*_contract.py`: stream lifetime, framing, captured-socket,
+  single-writer, suffix replay, and notification invariants;
+- `perf-test/meltdown/harness/`: selective shaping, endpoint/interface samples,
+  atomic TCP-event telemetry, and fail-closed analysis;
+- `perf-test/meltdown/orchestrator/run-campaign.ps1`: secure execution,
+  fingerprints, exact-cell reruns, and cleanup-gated publication;
+- `tests/test_meltdown_analysis.py`: 84-test campaign integrity suite;
+- `docs/TCP_TRANSPORT_DESIGN.md`, `docs/DESIGN_LOG.md`, and `CHANGELOG.md`:
+  implementation and evidence history;
+- `perf-test/meltdown/results/`: compact reviewable calibration and screening
+  inventories.
 
-## 15. Evidence retained outside Git
+## 14. Evidence retention
 
-Raw campaigns and diagnostic traces are intentionally not committed. Principal
-artifact groups include:
+Raw per-cell artifacts, diagnostic traces, synchronized host captures, and
+host-specific access files remain outside Git. They include:
 
-- upstream `74a68d7` calibration;
-- authenticated-carrier patched preparation;
-- patched clean baselines;
-- reader-fix preparation;
-- strict fresh-setup preparation;
-- smoke matrices and per-cell data;
-- BPF callback, read, decrypt, NAPI, and transmit traces.
-- final full-sampler evidence from both endpoints, including status, summary,
-  and carrier-coverage records.
+- writer concurrency traces and BPF atomic-validation evidence;
+- complete 14-cell calibration and 68-cell screening directories;
+- per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
+  evidence;
+- source/runtime/cell/campaign fingerprints and completion markers.
 
-Generated campaign cell directories remain gitignored. Final reviewable output
-will consist of compact summaries, plots, environment manifests, completed and
-invalid cell inventories, and the final dated report.
+Git contains the compact `cells.csv`, generated report, and campaign status for
+calibration and the initial screening. No credentials, private keys, or
+host-specific connection files are included.
 
-## 16. Current host state at cutoff
+## 15. Current host state at cutoff
 
-- Both dedicated test hosts are running.
-- The earlier tracing module is loaded on both.
-- The final merged candidate is built identically on both but is not loaded.
+- Both dedicated test hosts are running the matching writer-fix module.
 - UDP and TCP test interfaces are configured.
 - Two TCP carrier streams are established.
-- No campaign impairment qdisc was present in the latest clean-path checks.
-- Short-lived BPF and sampler processes completed normally.
-- Restricted SSH proxying, transient test services, and tunnel state still need
-  final cleanup after the campaign.
+- Physical qdiscs are restored; no campaign impairment is active.
+- No sampler or competitor unit is running.
+- Fresh TCP probes passed with zero loss.
+- Restricted test access/services and tunnel state still require final
+  closeout cleanup after the remaining campaign.
 
-## 17. Remaining work
+## 16. Remaining work
 
-Immediate correctness work:
+Immediate evidence qualification:
 
-1. run the prepared protocol/allowed-IP trace and identify the exact
-   pre-`napi_gro_receive()` branch;
-2. repair the root cause without weakening authentication, source validation,
-   provisional-stream limits, or teardown safety;
-3. reconcile any new upstream or parallel-debug changes before modifying the
-   shared transport code;
-4. rebuild and deploy identical modules;
-5. repeat multiple cold/fresh interface setup cycles;
-6. require zero loss and sub-millisecond unshaped TCP controls each time.
+1. rerun the seven invalid repetitions in a separate fingerprinted campaign;
+2. require complete BPF, qdisc, workload, and carrier evidence from all seven;
+3. publish a merged screening inventory without replacing valid original cells.
 
-Campaign qualification:
+Mechanism and breadth:
 
-1. run a matched TCP/UDP two-cell smoke;
-2. verify receiver timing, 100 ms bins, BPF filtering, qdisc-window deltas,
-   carrier stability, and exact qdisc restoration;
-3. run matched clean calibration;
-4. run finite-queue and RTT-boundary screening with repetitions;
-5. select and run burst, workload, dynamic, and endurance cells.
+1. lower the bottleneck below observed delivery or add contention so the finite
+   queue repeatedly overflows;
+2. run burst-loss and outer-RTO cells and measure temporal coupling;
+3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
+4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
+   dynamics, and selected 10-minute endurance tests.
 
 Closeout:
 
-1. generate compact result tables and plots from raw evidence;
-2. document every completed, invalid, and unrun cell;
-3. state whether the predeclared meltdown definition was met and whether outer
-   coupling supports attribution;
-4. restore host qdiscs and tunnel state;
-5. remove transient services and restricted proxies;
-6. deallocate idle Azure hosts.
+1. generate final compact tables and plots and document every completed,
+   invalid, and unrun cell;
+2. rotate credentials exposed by historical commits;
+3. verify qdisc/tunnel restoration, remove transient services/access state, and
+   deallocate both Azure hosts;
+4. restore private-repository authorization and push the investigation commits.
 
-## 18. Reading order
+## 17. Reading order
 
 1. [`README.md`](README.md) - campaign purpose, layout, and invocation
 2. [`TESTPLAN.md`](TESTPLAN.md) - immutable definitions and validity rules
 3. this document - interim engineering state and evidence
-4. generated `results/<campaign>/REPORT.md` - final scored results, when the
-   qualified campaign completes
+4. [`results/2026-07-13-wakeup-calibration/REPORT.md`](results/2026-07-13-wakeup-calibration/REPORT.md)
+5. [`results/2026-07-13-wakeup-screening-initial/REPORT.md`](results/2026-07-13-wakeup-screening-initial/REPORT.md)
