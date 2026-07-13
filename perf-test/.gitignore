@@ -9,3 +9,11 @@ results/*/raw/
 
 # Local backups.
 harness-hub-bak/
+
+# Python validation artifacts.
+__pycache__/
+*.pyc
+
+# Meltdown campaigns keep raw cells local; compact summaries are committed.
+meltdown/results/*/cells/
+meltdown/results/*/campaign.log

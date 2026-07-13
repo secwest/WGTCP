@@ -52,18 +52,28 @@ struct wg_tcp_socket_list_entry {
     struct list_head tcp_connection_ll;  // List pointer for the linked list
     ktime_t created_at;               // Absolute pre-authentication deadline base
     ktime_t timestamp;                // Most recent pre-authentication activity
+    u64 stream_id;                    // Stable identity across async WG processing
+    bool initializing;                // Listener still owns the handoff sequence
+    bool authenticated;               // Exact stream carried a valid WG handshake
 };
 
 #define WG_TCP_MAX_PENDING_CONNECTIONS 128
 #define WG_TCP_AUTH_IDLE_TIMEOUT_MS 5000
 #define WG_TCP_AUTH_MAX_LIFETIME_MS 30000
+#define WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS 180000
 #define WG_TCP_CLEANUP_INTERVAL_MS 1000
 
 struct wg_socket_data {
 	struct wg_device *device;
 	struct wg_peer *peer;
+	u64 stream_id;
 	bool inbound;
 };
+
+static atomic64_t wg_tcp_stream_id = ATOMIC64_INIT(0);
+
+static void wg_finish_tcp_connection_init(struct wg_device *wg,
+					  struct socket *socket);
 
 static void wg_destroy_temp_peer(struct wg_peer *peer);
 static void wg_touch_tcp_connection(struct wg_peer *peer);
@@ -1552,6 +1562,7 @@ static int wg_receive(struct sock *sk, struct sk_buff *skb)
 {
 	wg_dbg("Entering function wg_receive\n");
 	struct wg_device *wg;
+	u64 tcp_stream_id = 0;
 	
 	if (unlikely(!sk))
 		goto err;
@@ -1561,11 +1572,13 @@ static int wg_receive(struct sock *sk, struct sk_buff *skb)
 		if (unlikely(!socket_data))
 			goto err;
 		wg = socket_data->device;
+		tcp_stream_id = READ_ONCE(socket_data->stream_id);
 	} else {
 		wg = READ_ONCE(sk->sk_user_data);
 	}
 	if (unlikely(!wg))
 		goto err;
+	PACKET_CB(skb)->tcp_stream_id = tcp_stream_id;
 	skb_mark_not_on_list(skb);
 	wg_packet_receive(wg, skb);
 	wg_dbg("Exiting function wg_receive\n");
@@ -2260,8 +2273,10 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 				if (!skb_queue_empty(&new_peer_connection->sk->sk_receive_queue)) {
 					wg_dbg("wg_tcp_listener_worker calling wg_tcp_data_ready() for temp peer\n");
 					wg_tcp_data_ready(new_peer_connection->sk);
-				print_peer_socket_info(new_temp_peer);
 				}
+				print_peer_socket_info(new_temp_peer);
+				wg_finish_tcp_connection_init(wg,
+							     new_peer_connection);
 			} else {
 				kernel_sock_shutdown(new_peer_connection, SHUT_RDWR);
 				sock_release(new_peer_connection);
@@ -3608,123 +3623,50 @@ void wg_peer_discard_partial_read(struct wg_peer *peer)
 	peer->received_len = 0;
 }
 
-bool wg_sync_header(struct wg_peer *peer, struct socket *socket);
+bool wg_sync_header(struct wg_peer *peer);
 
-bool wg_sync_header(struct wg_peer *peer, struct socket *socket)
+bool wg_sync_header(struct wg_peer *peer)
 {
-	struct sk_buff *read_skb = NULL;
-	struct msghdr msg = { .msg_flags = MSG_DONTWAIT };
-	struct kvec vec;
-	int read_bytes;
-	bool found = false;
-	if (!socket || !socket->sk)
-		return false;
-	// Attempt to read as much data as available from the socket
+	size_t i, suffix_len;
+
 	wg_dbg("Entering function wg_sync_header\n");
-
-	// Now attempt to find the next valid header within the data we already have
 	wg_dbg("wg_sync_header: Trying to synchonize to new header.\n");
-	if (peer->partial_skb && peer->received_len >= WG_TCP_ENCAP_HDR_LEN) {
-		// If there are less then 8 bytes left, give up (there's no room for a wg_tcp_encap_header)
-		for (size_t i = 0; i <= peer->received_len - WG_TCP_ENCAP_HDR_LEN; ++i) {
-			// Attempt to validate the header starting from the current byte
-			struct wg_tcp_encap_header *potential_hdr = (struct wg_tcp_encap_header *)(peer->partial_skb->data + i);
-			struct wg_tcp_encap_header candidate;
+	if (!peer->partial_skb ||
+	    peer->received_len < WG_TCP_ENCAP_HDR_LEN)
+		return false;
 
-			if (wg_check_potential_header_validity(
-				    potential_hdr, peer->received_len - i)) {
-				memcpy(&candidate, potential_hdr, sizeof(candidate));
-				wg_dbg("wg_sync_header: Found new header.\n");
-				found = true;
-				// Adjust the skb to start from the found valid header
-				skb_pull(peer->partial_skb, i);
-				peer->received_len -= i; // Update received_len to remaining data length
-				peer->expected_len = ntohl(candidate.length); // Set expected length from valid header
-				goto out; // Exit as we've found a starting point
-			}		
-		}
-	}
-	// not in the existing buffer, try to read more
-	read_skb = alloc_skb(WG_MAX_PACKET_SIZE +
-			     WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN,
-			     GFP_ATOMIC); // Allocate buffer for bounded bulk read
-	if (!read_skb) {
-		pr_err("WireGuard: Failed to allocate skb for bulk data read\n");
-		goto out;
-	}
-	skb_reserve(read_skb, WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN);
-	
-	// Perform the read operation
-	vec.iov_base = skb_put(read_skb,0); // Prepare space
-	vec.iov_len = skb_tailroom(read_skb);
-	//lock_sock(peer->peer_socket->sk); // XXX - Lock ONLY for reading - Jeff
-	read_bytes = kernel_recvmsg(socket, &msg, &vec, 1, vec.iov_len,
-				    MSG_DONTWAIT);
-	//release_sock(peer->peer_socket->sk); XXX - Jeff
-
-
-	if (read_bytes <= 0) {
-		if (read_bytes == -EAGAIN) {
-			// No more data available, exit
-			wg_dbg("wg_sync_header: kernel_recvmsg returned -EAGAIN\n");
-			kfree_skb(read_skb);
-			goto out;
-		}
-		if (read_bytes == 0) {
-			wg_dbg("wg_sync_header: peer closed the TCP stream\n");
-			kfree_skb(read_skb);
-			goto out;
-		}
-		pr_err("wg_sync_header: kernel_recvmsg error=%zd peer=%llu\n",
-			(ssize_t)read_bytes, peer->internal_id);
-#if WG_TCP_DIAG_ENABLED
-		wg_tcp_diag_dump_sock(socket->sk, "rx:sync_header:error", read_bytes, vec.iov_len);
-#endif
-#if WG_TCP_DIAG_ENABLED
-		atomic64_inc(&wg_tcp_stats_rx_errors);
-#endif
-		kfree_skb(read_skb);
-		goto out;
-	}
-	// Print the number of bytes read and the actual data (only after confirming read_bytes > 0)
-	wg_dbg("wg_sync_header: kernel_recvmsg read %d bytes: %*ph\n", (int)read_bytes, (int)read_bytes, vec.iov_base);
-	skb_trim(read_skb, read_bytes); // Trim skb to actual size of received data
-	
-	// Now attempt to find the next valid header within the newly read data
-	wg_dbg("wg_sync_header: Trying to synchonize to new header.\n");
-	/* BUG FIX: guard against unsigned underflow — if read_skb->len < WG_TCP_ENCAP_HDR_LEN,
-	 * the subtraction wraps to ~4 billion, causing an extremely long loop */
-	if (read_skb->len < WG_TCP_ENCAP_HDR_LEN) {
-		kfree_skb(read_skb);
-		goto out;
-	}
-	for (size_t i = 0; i <= read_skb->len - WG_TCP_ENCAP_HDR_LEN; ++i) {
-		// Attempt to validate the header starting from the current byte
-		struct wg_tcp_encap_header *potential_hdr = (struct wg_tcp_encap_header *)(read_skb->data + i);
+	for (i = 0; i <= peer->received_len - WG_TCP_ENCAP_HDR_LEN; ++i) {
+		struct wg_tcp_encap_header *potential_hdr =
+			(struct wg_tcp_encap_header *)(peer->partial_skb->data + i);
 		struct wg_tcp_encap_header candidate;
 
 		if (wg_check_potential_header_validity(potential_hdr,
-						   read_skb->len - i)) {
+						       peer->received_len - i)) {
 			memcpy(&candidate, potential_hdr, sizeof(candidate));
 			wg_dbg("wg_sync_header: Found new header.\n");
-			found = true;
-			// Adjust the skb to start from the found valid header
-			skb_pull(read_skb, i);
-			if (peer->partial_skb)
-					kfree_skb(peer->partial_skb);  // free discarded data buffer
-			peer->partial_skb = read_skb; // Transfer ownership of the buffer to partial_skb for further processing
-			peer->received_len = read_bytes - i; // Update received_len to remaining data length
-			peer->expected_len = ntohl(candidate.length); // Set expected length from valid header
-			break; // Exit the loop as we've found a starting point
-		}		
+			skb_pull(peer->partial_skb, i);
+			peer->received_len -= i;
+			peer->expected_len = ntohl(candidate.length);
+			wg_dbg("Exiting function wg_sync_header\n");
+			return true;
+		}
 	}
-	if (!found){
-		wg_peer_discard_partial_read(peer);
-		kfree_skb(read_skb);
-	}
-out:
+
+	/* No complete candidate exists yet. Preserve the maximum possible header
+	 * prefix so the next ordinary reader invocation can append bytes from a
+	 * later TCP segment. Keeping fewer than a full header also prevents the
+	 * processable-buffer exit guard from spinning on known-invalid data.
+	 */
+	suffix_len = min_t(size_t, peer->received_len,
+			   WG_TCP_ENCAP_HDR_LEN - 1);
+	memmove(peer->partial_skb->data,
+		peer->partial_skb->data + peer->received_len - suffix_len,
+		suffix_len);
+	skb_trim(peer->partial_skb, suffix_len);
+	peer->received_len = suffix_len;
+	peer->expected_len = 0;
 	wg_dbg("Exiting function wg_sync_header\n");
-	return found;
+	return false;
 }
 
 // Function to check if the given data pointer has a valid WireGuard TCP encapsulation header
@@ -3747,6 +3689,21 @@ bool wg_check_potential_header_validity(struct wg_tcp_encap_header *hdr, size_t 
 		minimum_len += WG_TCP_FRAG_HDR_LEN;
 	total_len = ntohl(candidate.length);
 	return total_len >= minimum_len && total_len <= WG_MAX_PACKET_SIZE;
+}
+
+static bool wg_tcp_partial_buffer_processable(const struct wg_peer *peer)
+{
+	struct wg_tcp_encap_header header;
+
+	if (!peer->partial_skb ||
+	    peer->received_len < WG_TCP_ENCAP_HDR_LEN)
+		return false;
+
+	memcpy(&header, peer->partial_skb->data, sizeof(header));
+	if (!wg_check_potential_header_validity(&header, peer->received_len))
+		return true;
+
+	return peer->received_len >= ntohl(header.length);
 }
 
 /* FIX: -Wmissing-prototypes — made static (file-local only);
@@ -4031,18 +3988,17 @@ void wg_tcp_read_worker(struct work_struct *work)
 		}
 		// Read as much data as fits into the skb buffer
 		// When reading more data, make sure to append after existing data
-		vec.iov_base = skb_tail_pointer(peer->partial_skb);
-		vec.iov_len = skb_tailroom(peer->partial_skb);
-		/*
-		 * A bulk read can leave a complete next record in partial_skb.
-		 * Consume it before a nonblocking recvmsg() returns -EAGAIN and
-		 * strands it until unrelated traffic arrives.
+		/* Drain complete records already buffered by a prior bulk read before
+		 * asking the nonblocking socket for more data. Otherwise EAGAIN
+		 * strands the leftover record until another frame arrives.
 		 */
-		if (((!peer->expected_len &&
-		     peer->received_len < WG_TCP_ENCAP_HDR_LEN) ||
-		    (peer->expected_len &&
-		     peer->received_len < peer->expected_len)) &&
-		    vec.iov_len > 0) {
+		if (!wg_tcp_partial_buffer_processable(peer)) {
+			// Read as much data as fits into the skb buffer
+			// When reading more data, make sure to append after existing data
+			vec.iov_base = skb_tail_pointer(peer->partial_skb);
+			vec.iov_len = skb_tailroom(peer->partial_skb);
+			if (!vec.iov_len)
+				break;
 			//lock_sock(peer->peer_socket->sk); // XXX - Lock ONLY for reading - Jeff
 			read_bytes = kernel_recvmsg(socket, &msg, &vec, 1, vec.iov_len, msg.msg_flags);
 			if (read_bytes > 0) {
@@ -4108,9 +4064,8 @@ void wg_tcp_read_worker(struct work_struct *work)
 			if (!wg_check_potential_header_validity(&header,
 							peer->received_len)) {
 				pr_err("WireGuard: Invalid packet header detected, attempting to resynchronize\n");
-				if (!wg_sync_header(peer, socket)) {
-					pr_err("WireGuard: Failed to find valid header in bulk read data\n");
-					wg_peer_discard_partial_read(peer);
+				if (!wg_sync_header(peer)) {
+					wg_dbg("WireGuard: Waiting for more bytes while resynchronizing\n");
 					break;
 				}
 				/* Resynchronization can pull, free, or replace partial_skb.
@@ -4361,7 +4316,8 @@ out:
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled && peer->tcp_read_wq &&
 	    peer->peer_socket && peer->peer_socket->sk &&
-	    !skb_queue_empty(&peer->peer_socket->sk->sk_receive_queue)) {
+	    (wg_tcp_partial_buffer_processable(peer) ||
+	     !skb_queue_empty(&peer->peer_socket->sk->sk_receive_queue))) {
 		peer->tcp_read_worker_scheduled = true;
 		queue_work(peer->tcp_read_wq, &peer->tcp_read_work);
 	}
@@ -4678,6 +4634,7 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
 {
 	wg_dbg("Entering function wg_add_tcp_socket_to_list\n");
 	struct wg_tcp_socket_list_entry *entry;
+	struct wg_socket_data *socket_data;
 	struct sockaddr_storage addr;
 	int ret;
 
@@ -4689,6 +4646,16 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
 
     	entry->tcp_socket = receive_socket;
     	entry->temp_peer = temp_peer;  /* BUG FIX: store temp_peer in list entry */
+	socket_data = receive_socket && receive_socket->sk ?
+		READ_ONCE(receive_socket->sk->sk_user_data) : NULL;
+	if (!socket_data || socket_data->peer != temp_peer ||
+	    !socket_data->inbound) {
+		kfree(entry);
+		return -EINVAL;
+	}
+	entry->stream_id = atomic64_inc_return(&wg_tcp_stream_id);
+	WRITE_ONCE(socket_data->stream_id, entry->stream_id);
+	entry->initializing = true;
 	entry->created_at = ktime_get();
 	entry->timestamp = entry->created_at;
 
@@ -4731,6 +4698,31 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
 	return 0;
 }
 
+static void wg_finish_tcp_connection_init(struct wg_device *wg,
+					  struct socket *socket)
+{
+	struct wg_tcp_socket_list_entry *entry;
+	bool cleanup = false;
+
+	spin_lock_bh(&wg->tcp_connection_list_lock);
+	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
+		if (entry->tcp_socket != socket)
+			continue;
+		if (!socket->sk ||
+		    READ_ONCE(socket->sk->sk_state) != TCP_ESTABLISHED) {
+			if (entry->temp_peer && !IS_ERR(entry->temp_peer))
+				WRITE_ONCE(entry->temp_peer->is_dead, true);
+			cleanup = true;
+		}
+		entry->initializing = false;
+		break;
+	}
+	spin_unlock_bh(&wg->tcp_connection_list_lock);
+
+	if (cleanup && READ_ONCE(wg->tcp_cleanup_scheduled))
+		mod_delayed_work(system_wq, &wg->tcp_cleanup_work, 0);
+}
+
 static void wg_touch_tcp_connection(struct wg_peer *peer)
 {
 	struct wg_tcp_socket_list_entry *entry;
@@ -4749,6 +4741,26 @@ static void wg_touch_tcp_connection(struct wg_peer *peer)
 	spin_unlock_bh(&wg->tcp_connection_list_lock);
 }
 
+bool wg_tcp_mark_pending_authenticated(struct wg_device *wg, u64 stream_id)
+{
+	struct wg_tcp_socket_list_entry *entry;
+	bool marked = false;
+
+	if (!wg || !stream_id || wg->transport != WG_TRANSPORT_TCP)
+		return false;
+
+	spin_lock_bh(&wg->tcp_connection_list_lock);
+	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
+		if (entry->stream_id != stream_id)
+			continue;
+		entry->authenticated = true;
+		marked = true;
+		break;
+	}
+	spin_unlock_bh(&wg->tcp_connection_list_lock);
+	return marked;
+}
+
 static struct wg_tcp_socket_list_entry *
 wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,
 			bool cleanup_only)
@@ -4761,13 +4773,19 @@ wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,
 	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
 		if (pending_socket && entry->tcp_socket != pending_socket)
 			continue;
+		if (cleanup_only && entry->initializing)
+			continue;
 		if (cleanup_only && entry->temp_peer &&
 		    !IS_ERR(entry->temp_peer) &&
 		    !READ_ONCE(entry->temp_peer->is_dead) &&
-		    ktime_ms_delta(now, entry->timestamp) <
-			    WG_TCP_AUTH_IDLE_TIMEOUT_MS &&
-		    ktime_ms_delta(now, entry->created_at) <
-			    WG_TCP_AUTH_MAX_LIFETIME_MS)
+		    ((entry->authenticated &&
+		      ktime_ms_delta(now, entry->timestamp) <
+			      WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS) ||
+		     (!entry->authenticated &&
+		      ktime_ms_delta(now, entry->timestamp) <
+			      WG_TCP_AUTH_IDLE_TIMEOUT_MS &&
+		      ktime_ms_delta(now, entry->created_at) <
+			      WG_TCP_AUTH_MAX_LIFETIME_MS)))
 			continue;
 		list_del_rcu(&entry->tcp_connection_ll);
 		claimed = entry;

@@ -60,6 +60,7 @@ enum packet_state {
 
 struct packet_cb {
 	u64 nonce;
+	u64 tcp_stream_id;
 	struct noise_keypair *keypair;
 	atomic_t state;
 	u32 mtu;

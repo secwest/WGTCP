@@ -59,6 +59,28 @@ class TcpRoamingContract(unittest.TestCase):
         )
         self.assertNotIn("peer->peer_socket = skb->sk->sk_socket", response)
 
+    def test_exact_pending_stream_is_marked_only_after_authentication(self) -> None:
+        initiation = section(
+            self.handshake,
+            "case cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION):",
+            "case cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE):",
+        )
+        response = section(
+            self.handshake,
+            "case cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE):",
+            "default:",
+        )
+        marker = "wg_tcp_mark_pending_authenticated("
+        self.assertEqual(self.handshake.count(marker), 2)
+        self.assertLess(
+            initiation.index("wg_noise_handshake_consume_initiation"),
+            initiation.index(marker),
+        )
+        self.assertLess(
+            response.index("wg_noise_handshake_consume_response"),
+            response.index(marker),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

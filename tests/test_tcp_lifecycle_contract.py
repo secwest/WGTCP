@@ -29,6 +29,7 @@ class TcpLifecycleContract(unittest.TestCase):
         cls.peer = source("kernel/peer.c")
         cls.peer_header = source("kernel/peer.h")
         cls.device_header = source("kernel/device.h")
+        cls.queueing_header = source("kernel/queueing.h")
 
     def test_pending_connections_have_a_locked_hard_cap(self) -> None:
         add = final_section(
@@ -51,7 +52,7 @@ class TcpLifecycleContract(unittest.TestCase):
         self.assertLess(add.index(insert), add.index(increment))
         self.assertLess(add.index(increment), add.rindex(unlock))
 
-    def test_live_temp_connections_age_out_and_keep_the_sweeper_armed(self) -> None:
+    def test_provisional_and_authenticated_connections_have_distinct_deadlines(self) -> None:
         add = final_section(
             self.socket,
             "int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socket,",
@@ -60,6 +61,16 @@ class TcpLifecycleContract(unittest.TestCase):
         touch = section(
             self.socket,
             "static void wg_touch_tcp_connection(struct wg_peer *peer)\n{",
+            "bool wg_tcp_mark_pending_authenticated(",
+        )
+        finish_init = final_section(
+            self.socket,
+            "static void wg_finish_tcp_connection_init(struct wg_device *wg,",
+            "static void wg_touch_tcp_connection(",
+        )
+        authenticate = section(
+            self.socket,
+            "bool wg_tcp_mark_pending_authenticated(",
             "static struct wg_tcp_socket_list_entry *",
         )
         claim = section(
@@ -77,18 +88,49 @@ class TcpLifecycleContract(unittest.TestCase):
             "void wg_tcp_data_ready(struct sock *sk)",
             "void wg_tcp_write_space(struct sock *sk)",
         )
+        listener = section(
+            self.socket,
+            "int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)",
+            "int wg_tcp_listener_socket_init(",
+        )
 
         self.assertIn("#define WG_TCP_AUTH_IDLE_TIMEOUT_MS 5000", self.socket)
         self.assertIn("#define WG_TCP_AUTH_MAX_LIFETIME_MS 30000", self.socket)
+        self.assertIn(
+            "#define WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS 180000", self.socket
+        )
+        self.assertIn("bool authenticated;", self.socket)
         self.assertIn("entry->created_at = ktime_get();", add)
         self.assertIn("entry->timestamp = entry->created_at;", add)
+        self.assertIn("u64 tcp_stream_id;", self.queueing_header)
+        self.assertIn("u64 stream_id;", self.socket)
+        self.assertIn("bool initializing;", self.socket)
+        self.assertIn("atomic64_inc_return(&wg_tcp_stream_id)", add)
+        self.assertIn("socket_data->stream_id, entry->stream_id", add)
+        self.assertIn("entry->initializing = true;", add)
+        self.assertIn("entry->initializing = false;", finish_init)
+        self.assertIn("socket->sk->sk_state) != TCP_ESTABLISHED", finish_init)
+        self.assertIn("WRITE_ONCE(entry->temp_peer->is_dead, true);", finish_init)
+        self.assertIn("entry->initializing", claim)
         self.assertIn("entry->timestamp = ktime_get();", touch)
         self.assertIn("wg_touch_tcp_connection(peer);", data_ready)
+        self.assertIn("entry->stream_id != stream_id", authenticate)
+        self.assertIn("entry->authenticated = true;", authenticate)
+        self.assertNotIn("entry->timestamp = ktime_get();", authenticate)
+        self.assertIn("spin_lock_bh(&wg->tcp_connection_list_lock);", authenticate)
+        self.assertIn("spin_unlock_bh(&wg->tcp_connection_list_lock);", authenticate)
+        self.assertIn("entry->authenticated", claim)
+        self.assertIn("!entry->authenticated", claim)
         self.assertIn("ktime_ms_delta(now, entry->timestamp)", claim)
         self.assertIn("WG_TCP_AUTH_IDLE_TIMEOUT_MS", claim)
         self.assertIn("ktime_ms_delta(now, entry->created_at)", claim)
         self.assertIn("WG_TCP_AUTH_MAX_LIFETIME_MS", claim)
+        self.assertIn("WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS", claim)
         self.assertIn("mod_delayed_work(system_wq, &wg->tcp_cleanup_work, 0);", add)
+        self.assertLess(
+            listener.index("wg_setup_tcp_socket_callbacks(new_temp_peer, true);"),
+            listener.index("wg_finish_tcp_connection_init(wg,"),
+        )
         self.assertIn("pending = !list_empty(&wg->tcp_connection_list);", cleanup)
         self.assertIn("WG_TCP_CLEANUP_INTERVAL_MS", cleanup)
 

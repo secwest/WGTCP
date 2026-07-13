@@ -1,0 +1,155 @@
+# Test Plan - TCP-over-TCP Meltdown
+
+## 1. Question
+
+Does WireguardTCP enter classical TCP-over-TCP meltdown when congestion is
+endogenous, and if so, at what queue, RTT, flow-count, and loss-recovery
+boundary?
+
+The stock UDP WireGuard mode from the same module is the control in every
+scored cell. A result is about this implementation and build, not every TCP
+tunnel.
+
+## 2. Predeclared operational definition
+
+The measurement window excludes iperf's configured warm-up. Inner delivery is
+sampled at 100 ms from the selected tunnel interface's cumulative receive-byte
+counter on the data receiver. This avoids treating iperf's synchronized
+per-flow block-completion reports as zero-delivery intervals.
+
+A run is **meltdown** only when all three conditions hold:
+
+1. `stall_fraction_100ms >= 0.20`, where a stall bin has exactly zero inner
+   bytes delivered;
+2. `trend_drop_fraction <= -0.20` and the OLS slope t statistic is `<= -2.0`;
+   the trend fraction is the fitted end-to-start change divided by mean
+   goodput;
+3. `inner_rto_per_flow_min >= 1.0`, measured by
+   `tcp_retransmit_timer` and filtered to inner workload ports.
+
+Classification is fixed before results:
+
+| Class | Rule |
+|---|---|
+| `meltdown` | all three conditions |
+| `near-meltdown` | exactly two conditions |
+| `degraded` | exactly one condition, or TCP goodput is below 50% of its exact matched UDP control |
+| `stable` | none of the conditions |
+| `invalid` | workload or impairment validity checks fail |
+
+The 20% thresholds require sustained rather than isolated stalls and decline.
+The RTO floor requires at least one timeout per flow-minute, so a single event
+does not condemn a high-concurrency run. The UDP comparison is applied only
+when the same named repetition is valid for both transports.
+
+## 3. Validity requirements
+
+A cell is invalid rather than negative evidence if any of these apply:
+
+- workload exit status is nonzero or fewer than 80% of expected 100 ms bins
+  are present;
+- the selected tunnel did not pass a preflight ping;
+- either expected TCP carrier tuple changed or disappeared, or 200 ms socket
+  samples do not cover the complete workload interval;
+- either endpoint sampler did not complete, BPF output lacks any of its six
+  required summaries, or summary counts do not reconcile with emitted events;
+- the shaped class saw no packets;
+- configured rate, delay, queue kind, or queue bytes do not match the manifest;
+- source, runtime build, matrix-axis, repetition, cell, or campaign
+  fingerprints do not match;
+- a competing-flow cell lacks a successful, nonzero, sufficiently long
+  competitor workload;
+- qdisc restoration was not verified before result publication;
+- endpoint clocks are not synchronized;
+- a kernel warning/oops, host restart, or unrelated workload overlaps the run.
+
+Queue overflow is reported separately from validity. A valid run with no
+finite-queue drops shows that offered load did not reach the overflow regime;
+it does not test the complete feedback loop.
+
+## 4. Bottleneck construction
+
+Each carrier egress uses:
+
+```text
+HTB root
+  test class: configured rate
+    bfifo: explicit byte limit, or fq_codel with memory limit
+  default class: unshaped control traffic
+
+selective ingress
+  IFB
+    netem: half-RTT delay and optional random/burst loss
+```
+
+Only carrier traffic on UDP/51820, TCP/51821, and optional competing TCP/5202
+enters the test class. At rate `R` Mbps and RTT `T` ms:
+
+```text
+BDP bytes = R * T * 125
+queue bytes = BDP bytes * queue_bdp
+```
+
+Both endpoints receive half the emulated RTT. The physical same-VNet RTT is
+recorded and remains additive. Queue depths are 0.5x, 1x, and 4x BDP.
+
+For TCP, both peers have explicit static endpoints. This is the only static
+cross-host topology supported by the current implementation because
+authenticated promotion of an accepted provisional socket is deliberately
+disabled. It normally creates two established outer streams, one initiated by
+each peer. The harness records both streams and requires the count to remain
+stable during every scored cell; responder-only topology failures are
+implementation limitations, not meltdown evidence.
+
+## 5. Measurements
+
+Per endpoint:
+
+- `tcp_retransmit_timer` RTO events split by inner and outer ports;
+- `tcp_retransmit_skb` retransmission events split by layer;
+- complete BPF status plus reconciled inner, outer, and competitor
+  RTO/retransmission summaries;
+- `ss -tinm` every 200 ms for cwnd, ssthresh, RTT, RTO, delivery rate, and
+  socket queues, plus completion and full-window TCP carrier tuple stability;
+- `tc -s -j qdisc/class/filter` every 200 ms;
+- absolute `nstat -asz` and `/proc/net/{snmp,netstat}` before and after;
+- `mpstat` each second, interface counters, kernel log, clock state, and
+  module/build identity.
+
+Per workload:
+
+- 100 ms tunnel-interface delivery and goodput, with iperf goodput retained as
+  a cross-check;
+- first/last-quartile goodput and fitted trend;
+- stall fraction and longest zero-delivery run;
+- inner and outer RTO/retransmission rates;
+- finite-queue drops, overlimits, and backlog;
+- for short flows, p50/p95/p99/max completion time and failure rate.
+
+## 6. Stages
+
+1. `calibration`: clean matched TCP/UDP, one and 16 inner flows.
+2. `queue`: 0.5x/1x/4x BDP at representative RTTs.
+3. `boundary`: fine RTT sweep through 50-400 ms.
+4. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
+5. `endurance`: selected 10-minute clean/high-risk matched runs.
+6. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+7. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+   jitter, AQM/ECN, and competing CUBIC.
+
+Screening cells use 30-60 seconds and at least two repetitions. Key queue and
+boundary cells use three repetitions. Endurance cells run 600 seconds.
+
+## 7. Interpretation
+
+Average outer throughput alone cannot establish meltdown. The claim requires
+inner delivery, timer behavior, and temporal coupling. A robust result is:
+
+- no full-meltdown classifications in high-risk finite-queue cells;
+- bounded stalls and inner RTOs;
+- no statistically significant downward trend in endurance runs;
+- recovery to at least 90% of pre-impairment goodput after an epoch clears.
+
+Conversely, phase-locked outer RTO spikes followed by inner RTO/cwnd collapse,
+with increasing stall duration and declining goodput, are direct evidence of
+the mechanism.
