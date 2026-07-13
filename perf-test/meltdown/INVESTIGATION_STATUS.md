@@ -1,19 +1,21 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 15:30 PDT (2026-07-13 22:30 UTC)
+Status cutoff: 2026-07-13 16:40 PDT (2026-07-13 23:40 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
-conclusions reached so far. Clean-path qualification and the initial finite
-queue/RTT screening matrix are complete; stronger congestion, mechanism, and
-endurance stages remain.
+conclusions reached so far. Clean-path qualification and the finite-queue/RTT
+screening matrix are complete and qualified; stronger congestion, mechanism,
+and endurance stages remain.
 
 ## 1. Executive summary
 
 The patched transport passed clean qualification and all 14 calibration cells.
 The initial screening executed all 68 scheduled finite-queue and RTT-boundary
-cells: 61 are valid/stable and seven are invalid because their evidence windows
-failed closed. No valid cell is degraded, near-meltdown, or meltdown.
+cells, with 61 valid/stable and seven evidence-invalid. A separate exact-cell
+campaign reran those seven with complete evidence; all are valid/stable. The
+qualified composite is therefore 68/68 stable screening cells, and the combined
+calibration/screening inventory is 82/82 valid/stable.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -393,21 +395,21 @@ telemetry, zero finite-queue drops, and verified qdisc restoration. The
 16-flow TCP repetitions recorded 1,118-1,205 inner retransmissions without
 timeout, stalls, or delivery collapse.
 
-### 10.3 Initial finite-queue and RTT-boundary screening
+### 10.3 Qualified finite-queue and RTT-boundary screening
 
-All 68 scheduled cells executed without an execution failure. The formal
-published inventory is:
+All 68 scheduled cells executed without an execution failure. Seven initial
+evidence-window failures were rerun in a separate fingerprinted campaign. The
+qualified composite retains per-cell source provenance and contains:
 
 | Classification | Cells |
 |---|---:|
-| valid/stable | 61 |
+| valid/stable | 68 |
 | valid/degraded | 0 |
 | valid/near-meltdown | 0 |
 | valid/meltdown | 0 |
-| invalid | 7 |
+| invalid | 0 |
 
-Together with calibration, 82/82 scheduled screening cells executed: 75 are
-valid/stable and seven are invalid.
+Together with calibration, all 82 scheduled cells are valid/stable.
 
 Valid TCP cells generally delivered 46.4-47.3 Mb/s versus approximately
 48.59 Mb/s for UDP controls. No valid cell produced an inner RTO or an outer
@@ -419,7 +421,7 @@ Most configured 50 Mb/s bottlenecks did not overflow because observed TCP
 delivery remained below the bottleneck rate. Those cells validate operation at
 their measured load but do not close the endogenous congestion feedback loop.
 
-### 10.4 Invalid evidence inventory
+### 10.4 Initial invalid evidence and qualification rerun
 
 The seven invalid repetitions are:
 
@@ -435,18 +437,22 @@ The seven invalid repetitions are:
   `boundary-rtt400-16f-udp-r2`: qdisc coverage ended early, so the shaped-class
   usage requirement also could not be proven.
 
-These are evidence-window failures, not observed transport collapse. The two
-one-event trace races reanalyze as valid/stable under the bounded shutdown
-rule. Formal screening remains 61 valid and seven invalid until a separate
-fingerprinted rerun replaces all seven with complete evidence. The orchestrator
-now supports exact `-Cell` selection and gives endpoint samplers a 30-second
-margin to cover ARM BPF attachment time and high-RTT setup.
+These were evidence-window failures, not observed transport collapse. The
+initial campaign remains published unchanged with all seven invalid records.
+
+The exact-cell rerun used the same module srcversion/hash, tool hash, and matrix
+axes, plus a 30-second sampler margin. All seven cells are valid/stable with
+complete BPF, qdisc, workload, and carrier evidence. A fail-closed composite
+generator selected only those seven replacements, recomputed matched UDP
+comparisons, and recorded the selected source campaign and cell fingerprint for
+all 68 rows, together with each analyzed cell document's SHA-256. It refuses to
+replace valid evidence or merge different runtime identities or axes.
 
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 75 valid calibration/screening cells meets even one component of
+- None of the 82 valid calibration/screening cells meets even one component of
   the predeclared full-meltdown definition.
 - No valid cell has an inner RTO or outer recovery event, so there is no
   cross-layer recovery coupling to attribute to classical TCP-over-TCP
@@ -464,8 +470,9 @@ margin to cover ARM BPF attachment time and high-RTT setup.
   overflow, outer RTO, bidirectional contention, AQM/ECN, or endurance load.
 - The current results should not be generalized from two outer streams to a
   single-carrier or responder-only design.
-- Invalid repetitions cannot be used as positive or negative transport
-  evidence until their telemetry is complete.
+- The seven records in the initial campaign remain invalid and are not used as
+  transport evidence; only their separate complete reruns enter the qualified
+  composite.
 
 The current assessment is: **no meltdown was observed in qualified screening,
 but most cells did not create enough congestion to test the full feedback
@@ -473,7 +480,7 @@ mechanism.**
 
 ## 12. Validation completed
 
-- 84 repository source-contract and analysis tests pass;
+- 88 repository source-contract, analysis, and composite-integrity tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
 - disposable-veth shaping produced parseable single-line qdisc JSON, accounted
@@ -483,10 +490,18 @@ mechanism.**
 - ARM BPF bytecode uses atomic counter updates;
 - 870/870 raw stress-trace events reconcile;
 - clean 1/2/4/8/16-flow writer traces completed without stranded frames;
-- all 14 calibration and 68 initial screening executions completed;
+- all 14 calibration, 68 initial screening, and seven qualification-rerun
+  executions completed;
+- the qualified composite contains 68/68 valid/stable rows, 61 initial cell
+  fingerprints, and seven rerun fingerprints under an identical runtime
+  identity;
 - post-campaign cleanup restored physical qdiscs and left no sampler or
   competitor unit running;
-- fresh TCP probes after cleanup had zero loss.
+- each endpoint retained two established carriers and the matching module
+  srcversion;
+- a fresh post-rerun TCP probe delivered 10/10 packets at 0.323 ms mean;
+- the temporary restricted access gateway was returned to its deallocated
+  state.
 
 ## 13. Repository changes in this investigation
 
@@ -500,10 +515,12 @@ Major changed or added surfaces include:
 - `tests/test_tcp_*_contract.py`: stream lifetime, framing, captured-socket,
   single-writer, suffix replay, and notification invariants;
 - `perf-test/meltdown/harness/`: selective shaping, endpoint/interface samples,
-  atomic TCP-event telemetry, and fail-closed analysis;
+  atomic TCP-event telemetry, fail-closed analysis, and provenance-preserving
+  campaign composition;
 - `perf-test/meltdown/orchestrator/run-campaign.ps1`: secure execution,
   fingerprints, exact-cell reruns, and cleanup-gated publication;
-- `tests/test_meltdown_analysis.py`: 84-test campaign integrity suite;
+- `tests/test_meltdown_analysis.py` and `tests/test_meltdown_merge.py`: campaign
+  analysis and composite-integrity coverage;
 - `docs/TCP_TRANSPORT_DESIGN.md`, `docs/DESIGN_LOG.md`, and `CHANGELOG.md`:
   implementation and evidence history;
 - `perf-test/meltdown/results/`: compact reviewable calibration and screening
@@ -515,14 +532,16 @@ Raw per-cell artifacts, diagnostic traces, synchronized host captures, and
 host-specific access files remain outside Git. They include:
 
 - writer concurrency traces and BPF atomic-validation evidence;
-- complete 14-cell calibration and 68-cell screening directories;
+- complete 14-cell calibration, 68-cell initial screening, and seven-cell rerun
+  directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
-Git contains the compact `cells.csv`, generated report, and campaign status for
-calibration and the initial screening. No credentials, private keys, or
-host-specific connection files are included.
+Git contains compact calibration, initial-screening, rerun, and qualified
+composite inventories. The qualified directory includes a source fingerprint
+for every selected cell. No credentials, private keys, or host-specific
+connection files are included.
 
 ## 15. Current host state at cutoff
 
@@ -531,17 +550,12 @@ host-specific connection files are included.
 - Two TCP carrier streams are established.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
-- Fresh TCP probes passed with zero loss.
+- A fresh TCP probe passed with zero loss and 0.323 ms mean RTT.
+- The temporary restricted access gateway is deallocated.
 - Restricted test access/services and tunnel state still require final
   closeout cleanup after the remaining campaign.
 
 ## 16. Remaining work
-
-Immediate evidence qualification:
-
-1. rerun the seven invalid repetitions in a separate fingerprinted campaign;
-2. require complete BPF, qdisc, workload, and carrier evidence from all seven;
-3. publish a merged screening inventory without replacing valid original cells.
 
 Mechanism and breadth:
 
@@ -568,3 +582,5 @@ Closeout:
 3. this document - interim engineering state and evidence
 4. [`results/2026-07-13-wakeup-calibration/REPORT.md`](results/2026-07-13-wakeup-calibration/REPORT.md)
 5. [`results/2026-07-13-wakeup-screening-initial/REPORT.md`](results/2026-07-13-wakeup-screening-initial/REPORT.md)
+6. [`results/2026-07-13-wakeup-screening-rerun/REPORT.md`](results/2026-07-13-wakeup-screening-rerun/REPORT.md)
+7. [`results/2026-07-13-wakeup-screening-qualified/REPORT.md`](results/2026-07-13-wakeup-screening-qualified/REPORT.md)
