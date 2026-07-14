@@ -80,6 +80,28 @@ function ConvertTo-ShellQuoted {
     return "'" + $Value.Replace("'", "'\''") + "'"
 }
 
+function Get-IperfServerVerificationCommand {
+    param(
+        [Parameter(Mandatory)] [string] $UnitName,
+        [Parameter(Mandatory)] [string] $IperfHash
+    )
+    if ($UnitName -notmatch "^[A-Za-z0-9_.@-]+\.service$" -or
+        $IperfHash -notmatch "^[A-Fa-f0-9]{64}$") {
+        throw "invalid iperf server verification identity"
+    }
+    $unit = ConvertTo-ShellQuoted $UnitName
+    $hash = ConvertTo-ShellQuoted $IperfHash
+    return (
+        "set -e; sudo systemctl restart $unit; " +
+        "systemctl is-active --quiet $unit; " +
+        "pid=`$(systemctl show -p MainPID --value $unit); " +
+        "test `"`$pid`" -gt 0; " +
+        "test `"`$(sudo readlink -f /proc/`$pid/exe)`" = " +
+        "`"`$(readlink -f /usr/bin/iperf3)`"; " +
+        "test `"`$(sudo sha256sum /proc/`$pid/exe | awk '{print `$1}')`" = $hash"
+    )
+}
+
 function Invoke-Remote {
     param(
         [Parameter(Mandatory)] [string] $HostName,
@@ -149,10 +171,14 @@ function Write-CampaignStatus {
     param(
         [Parameter(Mandatory)] [string] $Status,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $ExpectedCells,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $MatrixExpectedCells,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $FailedCells,
         [Parameter(Mandatory)] [string] $CampaignFingerprint,
         [Parameter(Mandatory)] [hashtable] $CellFingerprints
     )
+    $targetedSelection = @(
+        Compare-Object -ReferenceObject $MatrixExpectedCells -DifferenceObject $ExpectedCells
+    ).Count -gt 0
     $completedCells = @(
         $ExpectedCells | Where-Object {
             $cell = Join-Path (Join-Path $ResultsDir "cells") $_
@@ -167,6 +193,9 @@ function Write-CampaignStatus {
         status = $Status
         updated_at = (Get-Date -AsUTC -Format "o")
         expected_cells = @($ExpectedCells)
+        matrix_expected_cells = @($MatrixExpectedCells)
+        targeted_selection = $targetedSelection
+        qualifying_complete = $Status -eq "complete" -and -not $targetedSelection
         completed_cells = @($completedCells)
         failed_cells = @($FailedCells)
         campaign_fingerprint = $CampaignFingerprint
@@ -286,6 +315,11 @@ function Invoke-Cell {
     Assert-MatrixValue "loss_model" $Row.loss_model "^(none|random|gemodel)$"
     Assert-MatrixValue "inner_cc" $Row.inner_cc "^(cubic|reno|bbr)$"
     Assert-MatrixValue "direction" $Row.direction "^(forward|reverse|bidir)$"
+    $workloadCompletion = [string]$Row.workload_completion
+    if ([string]::IsNullOrWhiteSpace($workloadCompletion)) {
+        $workloadCompletion = "strict"
+    }
+    Assert-MatrixValue "workload_completion" $workloadCompletion "^(strict|interval_complete)$"
 
     $cellId = "$($Row.stage)-$($Row.name)-$($Row.tunnel)-r$Repetition"
     $localCell = Join-Path (Join-Path $ResultsDir "cells") $cellId
@@ -354,9 +388,15 @@ function Invoke-Cell {
         ) | Out-Null
 
         Invoke-Remote $HostA $PortA (
-            "sudo systemctl restart wgtcp-meltdown-iperf-inner.service; " +
-            "systemctl is-active --quiet wgtcp-meltdown-iperf-inner.service"
+            Get-IperfServerVerificationCommand `
+                "wgtcp-meltdown-iperf-inner.service" $runtimeIperfHash
         ) | Out-Null
+        if ([int]$Row.competitor -eq 1) {
+            Invoke-Remote $HostA $PortA (
+                Get-IperfServerVerificationCommand `
+                    "wgtcp-meltdown-iperf-competitor.service" $runtimeIperfHash
+            ) | Out-Null
+        }
 
         Invoke-Remote $HostA $PortA (
             "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverUnit) --collect --quiet " +
@@ -369,12 +409,12 @@ function Invoke-Cell {
             "--duration $sampleDuration --tunnel-iface $tunnelInterface --owner $AdminUser"
         ) | Out-Null
 
-        Wait-RemoteFiles "$remoteCellA/ready" "$remoteCellB/client/ready" 15
+        Wait-RemoteFiles "$remoteCellA/ready" "$remoteCellB/client/ready" 30
 
         if ([int]$Row.competitor -eq 1) {
             $competitorDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 5
             $competitorCommand = (
-                "set +e; iperf3 -c $PrivateIpA -p 5202 -t $competitorDuration -P 1 -C cubic --json " +
+                "set +e; /usr/bin/iperf3 -c $PrivateIpA -p 5202 -t $competitorDuration -P 1 -C cubic --json " +
                 "> $(ConvertTo-ShellQuoted "$remoteCellB/competitor-iperf3.json") " +
                 "2> $(ConvertTo-ShellQuoted "$remoteCellB/competitor-iperf3.stderr"); " +
                 "rc=`$?; printf '%s\n' `"`$rc`" > " +
@@ -392,7 +432,7 @@ function Invoke-Cell {
             "bidir" { "--bidir" }
         }
         $iperfCommand = (
-            "set +e; iperf3 -c $targetIp -p 5201 -t $($Row.duration_s) " +
+            "set +e; /usr/bin/iperf3 -c $targetIp -p 5201 -t $($Row.duration_s) " +
             "-P $($Row.flows) -O $($Row.warmup_s) -i 0.1 -C $($Row.inner_cc) " +
             "--json --get-server-output $directionArgument " +
             "> $(ConvertTo-ShellQuoted "$remoteCellB/iperf3.json") " +
@@ -415,7 +455,7 @@ function Invoke-Cell {
         $workloadRc = if (Test-Path $workloadRcPath) {
             (Get-Content $workloadRcPath -Raw).Trim()
         } else {
-            "1"
+            "missing"
         }
         $competitorRcPath = Join-Path $localCell "competitor.rc"
         $competitorRc = if ([int]$Row.competitor -eq 0) {
@@ -423,7 +463,7 @@ function Invoke-Cell {
         } elseif (Test-Path $competitorRcPath) {
             (Get-Content $competitorRcPath -Raw).Trim()
         } else {
-            "1"
+            "missing"
         }
         $envLines = @(
             "cell_id=$cellId",
@@ -441,6 +481,7 @@ function Invoke-Cell {
             "flows=$($Row.flows)",
             "duration_s=$($Row.duration_s)",
             "warmup_s=$($Row.warmup_s)",
+            "workload_completion=$workloadCompletion",
             "inner_cc=$($Row.inner_cc)",
             "direction=$($Row.direction)",
             "competitor=$($Row.competitor)",
@@ -450,6 +491,8 @@ function Invoke-Cell {
             "module_srcversion=$runtimeSrcversion",
             "module_sha256=$runtimeModuleHash",
             "tool_sha256=$runtimeToolHash",
+            "iperf_version=$runtimeIperfVersion",
+            "iperf_sha256=$runtimeIperfHash",
             "workload_rc=$workloadRc"
         )
         [IO.File]::WriteAllLines(
@@ -595,27 +638,45 @@ try {
     $runtimeModuleHashB = @(Invoke-Remote $HostB $PortB "sha256sum $RemoteSourceDir/kernel/wireguard.ko | awk '{print `$1}'")[-1].Trim()
     $runtimeToolHashA = @(Invoke-Remote $HostA $PortA "sha256sum $RemoteSourceDir/tools/wg | awk '{print `$1}'")[-1].Trim()
     $runtimeToolHashB = @(Invoke-Remote $HostB $PortB "sha256sum $RemoteSourceDir/tools/wg | awk '{print `$1}'")[-1].Trim()
+    Invoke-Remote $HostA $PortA (
+        "systemctl show -p ExecStart --value wgtcp-meltdown-iperf-inner.service | " +
+        "grep -Fq 'path=/usr/bin/iperf3 ;'"
+    ) | Out-Null
+    $runtimeIperfVersionA = @(Invoke-Remote $HostA $PortA "LC_ALL=C /usr/bin/iperf3 --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2")[-1].Trim()
+    $runtimeIperfVersionB = @(Invoke-Remote $HostB $PortB "LC_ALL=C /usr/bin/iperf3 --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2")[-1].Trim()
+    $runtimeIperfHashA = @(Invoke-Remote $HostA $PortA "sha256sum /usr/bin/iperf3 | awk '{print `$1}'")[-1].Trim()
+    $runtimeIperfHashB = @(Invoke-Remote $HostB $PortB "sha256sum /usr/bin/iperf3 | awk '{print `$1}'")[-1].Trim()
     if ($loadedSrcA -ne $loadedSrcB -or
         $loadedSrcA -ne $builtSrcA -or
         $loadedSrcB -ne $builtSrcB -or
         $runtimeModuleHashA -ne $runtimeModuleHashB -or
-        $runtimeToolHashA -ne $runtimeToolHashB) {
+        $runtimeToolHashA -ne $runtimeToolHashB -or
+        $runtimeIperfVersionA -ne $runtimeIperfVersionB -or
+        $runtimeIperfHashA -ne $runtimeIperfHashB) {
         throw "loaded module or host build identities differ"
     }
     if ($loadedSrcA -notmatch "^[A-Fa-f0-9]+$" -or
         $runtimeModuleHashA -notmatch "^[A-Fa-f0-9]{64}$" -or
-        $runtimeToolHashA -notmatch "^[A-Fa-f0-9]{64}$") {
+        $runtimeToolHashA -notmatch "^[A-Fa-f0-9]{64}$" -or
+        $runtimeIperfHashA -notmatch "^[A-Fa-f0-9]{64}$" -or
+        [string]::IsNullOrWhiteSpace($runtimeIperfVersionA) -or
+        $runtimeIperfVersionA.Length -gt 160 -or
+        $runtimeIperfVersionA -notmatch "^[ -~]+$") {
         throw "invalid runtime build identity"
     }
     $runtimeSrcversion = $loadedSrcA
     $runtimeModuleHash = $runtimeModuleHashA.ToLowerInvariant()
     $runtimeToolHash = $runtimeToolHashA.ToLowerInvariant()
+    $runtimeIperfVersion = $runtimeIperfVersionA
+    $runtimeIperfHash = $runtimeIperfHashA.ToLowerInvariant()
     $sourceFingerprint = Get-CampaignSourceFingerprint
     $campaignFingerprint = Get-StringSha256 (
         "source=$sourceFingerprint`n" +
         "module_srcversion=$runtimeSrcversion`n" +
         "module_sha256=$runtimeModuleHash`n" +
-        "tool_sha256=$runtimeToolHash"
+        "tool_sha256=$runtimeToolHash`n" +
+        "iperf_version=$runtimeIperfVersion`n" +
+        "iperf_sha256=$runtimeIperfHash"
     )
 
     $selectedStages = [Collections.Generic.HashSet[string]]::new(
@@ -633,11 +694,13 @@ try {
         }
     )
     $expectedCells = [Collections.Generic.List[string]]::new()
+    $matrixExpectedCells = [Collections.Generic.List[string]]::new()
     $cellFingerprints = @{}
     foreach ($row in $selectedRows) {
         $repetitions = [int]$row.repetitions
         for ($rep = 1; $rep -le $repetitions; $rep++) {
             $cellId = "$($row.stage)-$($row.name)-$($row.tunnel)-r$rep"
+            $matrixExpectedCells.Add($cellId)
             if ($selectedCells.Count -gt 0 -and -not $selectedCells.Contains($cellId)) {
                 continue
             }
@@ -656,7 +719,7 @@ try {
     }
 
     $failedCells = [Collections.Generic.List[string]]::new()
-    Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$failedCells) `
+    Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
         $campaignFingerprint $cellFingerprints
     foreach ($row in $selectedRows) {
         $repetitions = [int]$row.repetitions
@@ -688,7 +751,7 @@ try {
                 Write-CampaignLog "FAILED $cellId $($_.Exception.Message)"
                 $failedCells.Add($cellId)
             }
-            Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$failedCells) `
+            Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
                 $campaignFingerprint $cellFingerprints
         }
     }
@@ -706,22 +769,22 @@ try {
         }
     )
     if ($failedCells.Count -gt 0 -or $missingCells.Count -gt 0) {
-        Write-CampaignStatus "incomplete" ([string[]]$expectedCells) ([string[]]$failedCells) `
+        Write-CampaignStatus "incomplete" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
             $campaignFingerprint $cellFingerprints
         throw "campaign incomplete: failed=$($failedCells.Count), missing=$($missingCells.Count)"
     }
 
-    Write-CampaignStatus "ready" ([string[]]$expectedCells) ([string[]]$failedCells) `
+    Write-CampaignStatus "ready" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
         $campaignFingerprint $cellFingerprints
     $campaignOutput = & python $analyzer campaign $ResultsDir `
         --csv (Join-Path $ResultsDir "cells.csv") `
         --report (Join-Path $ResultsDir "REPORT.generated.md") 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-CampaignStatus "analysis_failed" ([string[]]$expectedCells) ([string[]]$failedCells) `
+        Write-CampaignStatus "analysis_failed" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
             $campaignFingerprint $cellFingerprints
         throw "campaign analysis failed: $($campaignOutput | Out-String)"
     }
-    Write-CampaignStatus "complete" ([string[]]$expectedCells) ([string[]]$failedCells) `
+    Write-CampaignStatus "complete" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
         $campaignFingerprint $cellFingerprints
     $campaignOutput | Write-Host
 } finally {

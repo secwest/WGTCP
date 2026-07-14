@@ -29,6 +29,8 @@ done
 [[ "$INNER_PORT" =~ ^[0-9]+$ ]] || { echo "--inner-port must be numeric" >&2; exit 2; }
 [[ "$DURATION" =~ ^[0-9]+$ && "$DURATION" -gt 0 ]] ||
 	{ echo "--duration must be a positive integer" >&2; exit 2; }
+((DURATION > 1)) ||
+	{ echo "--duration must leave one second for BPF quiescence" >&2; exit 2; }
 [[ -d "/sys/class/net/$TUNNEL_IFACE" ]] ||
 	{ echo "tunnel interface is unavailable: $TUNNEL_IFACE" >&2; exit 1; }
 rm -rf "$OUT"
@@ -135,16 +137,22 @@ fi
 
 (
 	trace_start_ns="$(date -u +%s%N)"
+	capture_duration=$((DURATION - 1))
 	set +e
 	bpftrace -q -B line -c "sleep $DURATION" "$SCRIPT_DIR/tcp-events.bt" \
+		"$capture_duration" \
 		> "$OUT/tcp-events.csv" 2> "$OUT/tcp-events.stderr"
 	trace_rc=$?
 	set -e
 	trace_end_ns="$(date -u +%s%N)"
 	trace_elapsed_ns=$((trace_end_ns - trace_start_ns))
 	trace_min_ns=$((DURATION * 1000000000 - 500000000))
+	capture_marker_count="$(
+		grep -Ec '^[0-9]+,capture,meta,[0-9]+,0,[0-9]+,0,0$' \
+			"$OUT/tcp-events.csv" 2>/dev/null || true
+	)"
 	trace_complete=no
-	if ((trace_elapsed_ns >= trace_min_ns)); then
+	if ((trace_elapsed_ns >= trace_min_ns && capture_marker_count == 1)); then
 		case "$trace_rc" in
 		0) trace_complete=yes ;;
 		esac
@@ -153,15 +161,21 @@ fi
 		printf 'exit_code=%s\n' "$trace_rc"
 		printf 'elapsed_ns=%s\n' "$trace_elapsed_ns"
 		printf 'complete=%s\n' "$trace_complete"
+		printf 'capture_duration_s=%s\n' "$capture_duration"
+		printf 'quiescence_s=1\n'
+		printf 'cutoff_anchor=attached_command\n'
+		printf 'capture_marker_count=%s\n' "$capture_marker_count"
 	} > "$OUT/tcp-events.status.tmp"
 	mv "$OUT/tcp-events.status.tmp" "$OUT/tcp-events.status"
 ) &
 BPF_PID=$!
 PIDS+=("$BPF_PID")
 
-for _ in {1..50}; do
-	if grep -Fqx 'timestamp_ns,event,layer,sport,dport,value1,value2,value3' \
-		"$OUT/tcp-events.csv" 2>/dev/null; then
+for _ in {1..250}; do
+	if [[ "$(head -n 1 "$OUT/tcp-events.csv" 2>/dev/null)" == \
+		'timestamp_ns,event,layer,sport,dport,value1,value2,value3' ]] &&
+		grep -Eq '^[0-9]+,capture,meta,[0-9]+,0,[0-9]+,0,0$' \
+			"$OUT/tcp-events.csv" 2>/dev/null; then
 		touch "$OUT/ready"
 		break
 	fi
@@ -173,7 +187,7 @@ for _ in {1..50}; do
 	sleep 0.1
 done
 [[ -e "$OUT/ready" ]] || {
-	echo "bpftrace did not report attachment readiness" >&2
+	echo "bpftrace did not report its attached capture anchor" >&2
 	exit 1
 }
 wait "${PIDS[@]}" 2>/dev/null || true

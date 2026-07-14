@@ -499,3 +499,48 @@ failure, and UDP r2 reproduced a three-event trace-summary discrepancy. No
 invalid record is promoted or rescored. A prospective gate must remove the
 in-band final-control survivorship bias and quiesce tracer probes before summary
 collection under a new source fingerprint.
+
+## DL-028: Qualify complete interval evidence and quiesce tracer summaries prospectively
+
+**Decision:** retain nonzero workload exit status as invalid for every
+historical or policy-absent cell. Add a separately fingerprinted,
+matrix-explicit `interval_complete` policy for the next matched gate. It
+requires the exact requested flow count, interval span and summed duration each
+within 99.5%-100.5% of the request, no interior gap above 20 ms, and 100%
+independent interface-delivery-bin coverage. Intervals must be chronological
+and non-duplicated, with overlap and reported-duration error no greater than 1
+ms. Bidirectional workloads must independently meet those requirements for both
+the primary `sum` and `sum_bidir_reverse` series. Only exit status one with empty
+stderr is accepted for a tightly allowlisted final in-band control-exchange
+diagnostic after all other completeness checks pass. Publish every check and
+whether fallback was used.
+
+Use `/usr/bin/iperf3` explicitly. Fingerprint and publish the identical endpoint
+iperf version and executable SHA-256, reconcile the client JSON version, and
+verify each selected restarted inner or competitor server process resolves to
+that exact executable and hash. Never synthesize an allowlisted exit status
+when the workload status record is missing. Targeted `-Cell` manifests are
+explicitly non-qualifying subsets even
+though their exact cell fingerprints remain reusable; the composite merger
+accepts only a complete non-targeted base with explicit full-matrix
+qualification metadata and complete iperf identity. Unattested legacy
+campaigns cannot be bases. Anchor the BPF cutoff from a command-exec marker
+emitted only after all probes are attached. `interval_complete` telemetry and
+workload readiness require that marker. Stop all BPF event probes at the
+resulting absolute monotonic cutoff while leaving bpftrace attached for one
+further second before END summaries. Every probe checks the cutoff before a
+counter update or event print. Keep the existing one-event historical summary
+allowance unchanged.
+
+**Rationale:** the failed TCP artifacts contain all 16 connected flows and
+59.9-60.0 seconds of continuous non-omitted intervals. Their failures occur
+during iperf's final results exchange, so strict success creates survivorship
+bias against the strongest collapses. Independently, server raw inner-RTO
+events exceeded END summaries by two to four events near tracer shutdown.
+Prospective independent completeness and quiescence address both limitations
+without promoting or reinterpreting any historical invalid cell.
+
+The new `burst-qualified-smoke` is exactly two TCP and two UDP executions at 50
+Mb/s, 200 ms, 1x BDP, 16 flows, 60 seconds, and Gilbert-Elliott `2/25/90/1`.
+All four must be valid and at least one TCP repetition must record an outer
+retransmission or RTO before broader mechanism or endurance work is released.

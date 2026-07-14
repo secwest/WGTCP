@@ -23,6 +23,11 @@ IDENTITY = {
     "module_sha256": "a" * 64,
     "tool_sha256": "b" * 64,
 }
+PROSPECTIVE_IDENTITY = {
+    **IDENTITY,
+    "iperf_version": "iperf 3.16",
+    "iperf_sha256": "f" * 64,
+}
 
 
 def write_campaign(
@@ -30,6 +35,9 @@ def write_campaign(
     cells: dict[str, tuple[bool, str, str]],
     campaign_fingerprint: str,
     identity: dict[str, str] | None = None,
+    matrix_cells: list[str] | None = None,
+    targeted_selection: bool = False,
+    qualifying_complete: bool = True,
 ) -> None:
     identity = identity or IDENTITY
     fingerprints: dict[str, str] = {}
@@ -77,6 +85,14 @@ def write_campaign(
         "campaign_fingerprint": campaign_fingerprint,
         "cell_fingerprints": fingerprints,
     }
+    if matrix_cells is not None:
+        status.update(
+            {
+                "matrix_expected_cells": matrix_cells,
+                "targeted_selection": targeted_selection,
+                "qualifying_complete": qualifying_complete,
+            }
+        )
     path.mkdir(parents=True, exist_ok=True)
     (path / "campaign-status.json").write_text(
         json.dumps(status),
@@ -98,11 +114,23 @@ class CampaignMergeTests(unittest.TestCase):
                     "boundary-x-udp-r1": (True, "stable", "udp"),
                 },
                 "c" * 64,
+                PROSPECTIVE_IDENTITY,
+                matrix_cells=[
+                    "boundary-x-tcp-r1",
+                    "boundary-x-udp-r1",
+                ],
             )
             write_campaign(
                 replacement,
                 {"boundary-x-tcp-r1": (True, "stable", "tcp")},
                 "d" * 64,
+                PROSPECTIVE_IDENTITY,
+                matrix_cells=[
+                    "boundary-x-tcp-r1",
+                    "boundary-x-udp-r1",
+                ],
+                targeted_selection=True,
+                qualifying_complete=False,
             )
 
             status = MERGE.write_composite(
@@ -130,11 +158,14 @@ class CampaignMergeTests(unittest.TestCase):
                 base,
                 {"boundary-x-tcp-r1": (True, "stable", "tcp")},
                 "c" * 64,
+                PROSPECTIVE_IDENTITY,
+                matrix_cells=["boundary-x-tcp-r1"],
             )
             write_campaign(
                 replacement,
                 {"boundary-x-tcp-r1": (True, "stable", "tcp")},
                 "d" * 64,
+                PROSPECTIVE_IDENTITY,
             )
             with self.assertRaisesRegex(ValueError, "overwrite valid evidence"):
                 MERGE.write_composite(
@@ -152,12 +183,47 @@ class CampaignMergeTests(unittest.TestCase):
                 base,
                 {"boundary-x-tcp-r1": (False, "invalid", "tcp")},
                 "c" * 64,
+                PROSPECTIVE_IDENTITY,
+                matrix_cells=["boundary-x-tcp-r1"],
             )
             write_campaign(
                 replacement,
                 {"boundary-x-tcp-r1": (True, "stable", "tcp")},
                 "d" * 64,
-                {**IDENTITY, "module_sha256": "e" * 64},
+                {**PROSPECTIVE_IDENTITY, "module_sha256": "e" * 64},
+            )
+            with self.assertRaisesRegex(ValueError, "runtime identities differ"):
+                MERGE.write_composite(
+                    MERGE.load_campaign(base),
+                    MERGE.load_campaign(replacement),
+                    root / "qualified",
+                )
+
+    def test_rejects_prospective_iperf_version_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            replacement = root / "rerun"
+            write_campaign(
+                base,
+                {"boundary-x-tcp-r1": (False, "invalid", "tcp")},
+                "c" * 64,
+                {
+                    **IDENTITY,
+                    "iperf_version": "iperf 3.9",
+                    "iperf_sha256": "f" * 64,
+                },
+                matrix_cells=["boundary-x-tcp-r1"],
+            )
+            write_campaign(
+                replacement,
+                {"boundary-x-tcp-r1": (True, "stable", "tcp")},
+                "d" * 64,
+                {
+                    **IDENTITY,
+                    "iperf_version": "iperf 3.10",
+                    "iperf_sha256": "f" * 64,
+                },
             )
             with self.assertRaisesRegex(ValueError, "runtime identities differ"):
                 MERGE.write_composite(
@@ -179,6 +245,93 @@ class CampaignMergeTests(unittest.TestCase):
             status["completed_cells"] = []
             status_path.write_text(json.dumps(status), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "completed/failed"):
+                MERGE.load_campaign(path)
+
+    def test_rejects_targeted_or_incomplete_qualifying_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            replacement = root / "rerun"
+            write_campaign(
+                base,
+                {"boundary-x-tcp-r1": (False, "invalid", "tcp")},
+                "c" * 64,
+                PROSPECTIVE_IDENTITY,
+                matrix_cells=[
+                    "boundary-x-tcp-r1",
+                    "boundary-x-udp-r1",
+                ],
+                targeted_selection=True,
+                qualifying_complete=False,
+            )
+            write_campaign(
+                replacement,
+                {"boundary-x-tcp-r1": (True, "stable", "tcp")},
+                "d" * 64,
+                PROSPECTIVE_IDENTITY,
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "targeted or incomplete campaign",
+            ):
+                MERGE.write_composite(
+                    MERGE.load_campaign(base),
+                    MERGE.load_campaign(replacement),
+                    root / "qualified",
+                )
+
+            status_path = base / "campaign-status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            del status["qualifying_complete"]
+            status_path.write_text(json.dumps(status), encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "qualification metadata is incomplete",
+            ):
+                MERGE.write_composite(
+                    MERGE.load_campaign(base),
+                    MERGE.load_campaign(replacement),
+                    root / "qualified",
+                )
+
+    def test_rejects_legacy_base_without_full_matrix_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "base"
+            replacement = root / "rerun"
+            write_campaign(
+                base,
+                {"boundary-x-tcp-r1": (False, "invalid", "tcp")},
+                "c" * 64,
+            )
+            write_campaign(
+                replacement,
+                {"boundary-x-tcp-r1": (True, "stable", "tcp")},
+                "d" * 64,
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "explicit qualifying base metadata is required",
+            ):
+                MERGE.write_composite(
+                    MERGE.load_campaign(base),
+                    MERGE.load_campaign(replacement),
+                    root / "qualified",
+                )
+
+    def test_rejects_current_campaign_without_iperf_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "base"
+            write_campaign(
+                path,
+                {"boundary-x-tcp-r1": (False, "invalid", "tcp")},
+                "c" * 64,
+                matrix_cells=["boundary-x-tcp-r1"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "runtime identity is incomplete"):
                 MERGE.load_campaign(path)
 
 

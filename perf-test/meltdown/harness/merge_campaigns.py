@@ -17,9 +17,20 @@ from typing import Any
 from analyze import CSV_FIELDS, apply_udp_control_comparison, flatten, write_report
 
 
-IDENTITY_KEYS = ("module_srcversion", "module_sha256", "tool_sha256")
+IDENTITY_KEYS = (
+    "module_srcversion",
+    "module_sha256",
+    "tool_sha256",
+    "iperf_version",
+    "iperf_sha256",
+)
 HEX64 = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 SRCVERSION = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
+QUALIFICATION_FIELDS = (
+    "matrix_expected_cells",
+    "targeted_selection",
+    "qualifying_complete",
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +57,34 @@ def read_env(path: Path) -> dict[str, str]:
     return values
 
 
+def validate_qualification_metadata(
+    path: Path,
+    status: dict[str, Any],
+    order: list[str],
+) -> bool:
+    present = [field in status for field in QUALIFICATION_FIELDS]
+    if not any(present):
+        return False
+    if not all(present):
+        raise ValueError(f"{path.name}: qualification metadata is incomplete")
+
+    matrix_cells = status["matrix_expected_cells"]
+    if (
+        not isinstance(matrix_cells, list)
+        or not matrix_cells
+        or not all(isinstance(cell, str) for cell in matrix_cells)
+        or len(matrix_cells) != len(set(matrix_cells))
+        or not set(order).issubset(set(matrix_cells))
+    ):
+        raise ValueError(f"{path.name}: qualification matrix cells are invalid")
+    targeted = set(order) != set(matrix_cells)
+    if status["targeted_selection"] is not targeted:
+        raise ValueError(f"{path.name}: targeted selection metadata is invalid")
+    if status["qualifying_complete"] is not (not targeted):
+        raise ValueError(f"{path.name}: qualifying completion metadata is invalid")
+    return True
+
+
 def load_campaign(path: Path) -> Campaign:
     status_path = path / "campaign-status.json"
     status = json.loads(status_path.read_text(encoding="utf-8-sig"))
@@ -62,6 +101,7 @@ def load_campaign(path: Path) -> Campaign:
     }
     if not order or len(order) != len(expected):
         raise ValueError(f"{path.name}: expected cell list is empty or duplicated")
+    current_format = validate_qualification_metadata(path, status, order)
     if expected != completed or failed:
         raise ValueError(f"{path.name}: completed/failed cell sets do not match")
     if set(fingerprints) != expected:
@@ -106,10 +146,22 @@ def load_campaign(path: Path) -> Campaign:
                 raise ValueError(f"{path.name}/{cell_id}: cell axis {key} mismatch")
 
         identity = tuple(env.get(key, "") for key in IDENTITY_KEYS)
+        has_iperf_version = bool(identity[3])
+        has_iperf_hash = bool(identity[4])
         if (
             not SRCVERSION.fullmatch(identity[0])
             or not HEX64.fullmatch(identity[1])
             or not HEX64.fullmatch(identity[2])
+            or has_iperf_version != has_iperf_hash
+            or (current_format and not has_iperf_version)
+            or (
+                has_iperf_version
+                and (
+                    len(identity[3]) > 160
+                    or not all(" " <= character <= "~" for character in identity[3])
+                )
+            )
+            or (identity[4] and not HEX64.fullmatch(identity[4]))
         ):
             raise ValueError(f"{path.name}/{cell_id}: runtime identity is incomplete")
         identities.add(identity)
@@ -130,7 +182,28 @@ def load_campaign(path: Path) -> Campaign:
     )
 
 
+def require_qualifying_base(campaign: Campaign) -> None:
+    if not all(field in campaign.status for field in QUALIFICATION_FIELDS):
+        raise ValueError(
+            f"{campaign.path.name}: explicit qualifying base metadata is required"
+        )
+
+    matrix_cells = campaign.status["matrix_expected_cells"]
+    if (
+        not isinstance(matrix_cells, list)
+        or not all(isinstance(cell, str) for cell in matrix_cells)
+        or matrix_cells != campaign.order
+        or campaign.status["targeted_selection"] is not False
+        or campaign.status["qualifying_complete"] is not True
+    ):
+        raise ValueError(
+            f"{campaign.path.name}: targeted or incomplete campaign cannot be a "
+            "qualifying base"
+        )
+
+
 def write_composite(base: Campaign, replacement: Campaign, output: Path) -> dict[str, Any]:
+    require_qualifying_base(base)
     if base.identity != replacement.identity:
         raise ValueError("base and replacement runtime identities differ")
 

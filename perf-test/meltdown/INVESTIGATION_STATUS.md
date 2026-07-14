@@ -55,6 +55,24 @@ because the impairment broke iperf's final in-band results exchange. Repeated
 records will not be rescored; a prospective source fingerprint must validate
 full interval completion independently and quiesce probes before summaries.
 
+That prospective gate is now predeclared as `burst-qualified-smoke`. Its
+matrix explicitly opts into `interval_complete`: exact flow count, both
+interval span and sum within 99.5%-100.5%, no interval gap above 20 ms, and
+chronological non-duplicated intervals with at most 1 ms boundary error, plus
+100% independent interface-delivery coverage. Only exit status one with empty
+stderr and one of three observed final-control diagnostic classes is
+allowlisted. Missing policy remains strict. Campaign identity now includes the
+common fixed-path endpoint iperf version and executable hash, reconciled against
+the client JSON version and every selected restarted server process. Missing
+workload exit-status evidence cannot enter the final-control fallback. Targeted
+subsets are
+marked non-qualifying, and only explicitly attested full-matrix campaigns with
+complete iperf identity can be composite bases. Bidirectional completion
+validates both interval series independently. `interval_complete` telemetry and
+BPF readiness require an attached-command marker that anchors the absolute
+cutoff after probe attachment; event capture stops one second before summary
+collection.
+
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
 outer TCP carrier, and inner delivery, congestion control, retransmission

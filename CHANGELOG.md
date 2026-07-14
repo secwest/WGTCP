@@ -53,6 +53,23 @@ All notable changes to this repository are documented here.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.
+- Added an opt-in prospective interval-completion policy that can qualify only
+  allowlisted final-control failures with exact flow count, near-full
+  continuous interval output in every active direction, and complete
+  independent interface delivery. Missing policy remains strict, so historical
+  invalid evidence is unchanged.
+- Added common endpoint iperf version fingerprinting, exact restarted-server
+  process identity, and an attached-command BPF event cutoff with one second of
+  pre-summary quiescence. The fixed iperf executable hash and JSON-reported
+  client version are also reconciled.
+- Required explicit workload exit-status evidence and exact restarted process
+  identity for both inner and selected competitor iperf servers.
+- Marked targeted cell manifests as non-qualifying subsets and barred them from
+  serving as qualified-composite bases. Composite bases now require explicit
+  full-matrix attestation and complete iperf identity, without changing exact
+  cell-fingerprint rerun semantics.
+- Predeclared a separate four-execution `2/25/90/1` burst-qualified smoke using
+  the prospective workload and tracing contracts.
 
 ### Changed
 

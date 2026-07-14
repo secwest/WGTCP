@@ -6,47 +6,72 @@ BEGIN
 	@inner_retrans = 0;
 	@outer_retrans = 0;
 	@competitor_retrans = 0;
+	@capture_started = 0;
+	@capture_start_ns = 0;
+	@capture_until_ns = 0;
 	printf("timestamp_ns,event,layer,sport,dport,value1,value2,value3\n");
+}
+
+tracepoint:syscalls:sys_enter_execve
+/pid == cpid && @capture_started == 0/
+{
+	@capture_start_ns = nsecs;
+	@capture_until_ns = @capture_start_ns + $1 * 1000000000;
+	@capture_started = 1;
+	printf("%llu,capture,meta,%llu,0,%llu,0,0\n", @capture_start_ns, $1,
+	    @capture_until_ns);
 }
 
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 5201 || args->dport == 5201 || args->sport == 8080 || args->dport == 8080/
 {
-	@inner_retrans++;
-	printf("%llu,retrans,inner,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
+	$now = nsecs;
+	if (@capture_started && $now <= @capture_until_ns) {
+		@inner_retrans++;
+		printf("%llu,retrans,inner,%u,%u,0,0,0\n", $now, args->sport, args->dport);
+	}
 }
 
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 51821 || args->dport == 51821/
 {
-	@outer_retrans++;
-	printf("%llu,retrans,outer,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
+	$now = nsecs;
+	if (@capture_started && $now <= @capture_until_ns) {
+		@outer_retrans++;
+		printf("%llu,retrans,outer,%u,%u,0,0,0\n", $now, args->sport, args->dport);
+	}
 }
 
 tracepoint:tcp:tcp_retransmit_skb
 /args->sport == 5202 || args->dport == 5202/
 {
-	@competitor_retrans++;
-	printf("%llu,retrans,competitor,%u,%u,0,0,0\n", nsecs, args->sport, args->dport);
+	$now = nsecs;
+	if (@capture_started && $now <= @capture_until_ns) {
+		@competitor_retrans++;
+		printf("%llu,retrans,competitor,%u,%u,0,0,0\n", $now, args->sport, args->dport);
+	}
 }
 
 kprobe:tcp_retransmit_timer
 {
-	$sk = (struct sock *)arg0;
-	$sport = $sk->__sk_common.skc_num;
-	$raw_dport = (uint16)$sk->__sk_common.skc_dport;
-	$dport = (($raw_dport & 0xff) << 8) | (($raw_dport >> 8) & 0xff);
-	if ($sport == 5201 || $dport == 5201 || $sport == 8080 || $dport == 8080) {
-		@inner_rto++;
-		printf("%llu,rto,inner,%u,%u,0,0,0\n", nsecs, $sport, $dport);
-	}
-	if ($sport == 51821 || $dport == 51821) {
-		@outer_rto++;
-		printf("%llu,rto,outer,%u,%u,0,0,0\n", nsecs, $sport, $dport);
-	}
-	if ($sport == 5202 || $dport == 5202) {
-		@competitor_rto++;
-		printf("%llu,rto,competitor,%u,%u,0,0,0\n", nsecs, $sport, $dport);
+	$now = nsecs;
+	if (@capture_started && $now <= @capture_until_ns) {
+		$sk = (struct sock *)arg0;
+		$sport = $sk->__sk_common.skc_num;
+		$raw_dport = (uint16)$sk->__sk_common.skc_dport;
+		$dport = (($raw_dport & 0xff) << 8) | (($raw_dport >> 8) & 0xff);
+		if ($sport == 5201 || $dport == 5201 || $sport == 8080 || $dport == 8080) {
+			@inner_rto++;
+			printf("%llu,rto,inner,%u,%u,0,0,0\n", $now, $sport, $dport);
+		}
+		if ($sport == 51821 || $dport == 51821) {
+			@outer_rto++;
+			printf("%llu,rto,outer,%u,%u,0,0,0\n", $now, $sport, $dport);
+		}
+		if ($sport == 5202 || $dport == 5202) {
+			@competitor_rto++;
+			printf("%llu,rto,competitor,%u,%u,0,0,0\n", $now, $sport, $dport);
+		}
 	}
 }
 
@@ -55,17 +80,19 @@ tracepoint:tcp:tcp_probe
  args->dport == 8080 || args->sport == 51821 || args->dport == 51821/
 {
 	$now = nsecs;
-	if ($now - @last_probe[args->sport, args->dport] >= 100000000) {
-		if (args->sport == 51821 || args->dport == 51821) {
-			printf("%llu,cwnd,outer,%u,%u,%u,%u,%u\n", $now,
-			    args->sport, args->dport, args->snd_cwnd,
-			    args->ssthresh, args->srtt);
-		} else {
-			printf("%llu,cwnd,inner,%u,%u,%u,%u,%u\n", $now,
-			    args->sport, args->dport, args->snd_cwnd,
-			    args->ssthresh, args->srtt);
+	if (@capture_started && $now <= @capture_until_ns) {
+		if ($now - @last_probe[args->sport, args->dport] >= 100000000) {
+			if (args->sport == 51821 || args->dport == 51821) {
+				printf("%llu,cwnd,outer,%u,%u,%u,%u,%u\n", $now,
+				    args->sport, args->dport, args->snd_cwnd,
+				    args->ssthresh, args->srtt);
+			} else {
+				printf("%llu,cwnd,inner,%u,%u,%u,%u,%u\n", $now,
+				    args->sport, args->dport, args->snd_cwnd,
+				    args->ssthresh, args->srtt);
+			}
+			@last_probe[args->sport, args->dport] = $now;
 		}
-		@last_probe[args->sport, args->dport] = $now;
 	}
 }
 
@@ -84,4 +111,7 @@ END
 	clear(@outer_retrans);
 	clear(@competitor_retrans);
 	clear(@last_probe);
+	clear(@capture_started);
+	clear(@capture_start_ns);
+	clear(@capture_until_ns);
 }
