@@ -529,9 +529,11 @@ emitted only after all probes are attached. `interval_complete` telemetry and
 workload readiness require that marker. Stop all BPF event probes at the
 resulting absolute monotonic cutoff while leaving bpftrace attached for one
 further second before END summaries. Every probe checks the cutoff before a
-counter update or event print. New evidence uses a versioned per-CPU `count()`
-aggregation map and requires exact raw/summary equality. Keep the existing
-one-event allowance only for historical scalar-summary traces.
+counter update or event print. New evidence assigns a monotonic sequence to
+every event/layer/CPU stream and requires every detailed stream to contain
+exactly `1..N` through its terminal map value. This detects missing, duplicate,
+skipped, reordered, or wrong-CPU rows without relying on a separate aggregate.
+Keep the existing one-event allowance only for historical scalar-summary traces.
 
 Before any impairment, bind the controller's server/client roles to the exact
 physical address and fixed local/peer TCP and UDP tunnel addresses on each
@@ -544,16 +546,30 @@ timestamps, and each pair lost one shared scalar increment. The detailed trace
 therefore exceeded the summary by exactly two even though all events preceded
 the cutoff by seconds. On the deployed bpftrace version, a 16-way concurrent
 probe validated per-CPU `count()` aggregation at exactly 800 raw and 800
-summarized events. The new format emits an explicit version marker and numeric
-event/layer keys; absent keys mean zero, mixed formats fail closed, and every
-present count must exactly match detailed output.
+summarized events. That intermediate format emits an explicit version marker
+and numeric event/layer keys; absent keys mean zero, mixed formats fail closed,
+and every present count must exactly match detailed output.
+
+The first full gate using that per-CPU aggregate still produced one extra
+detailed inner-RTO row versus its aggregate (93 versus 92), despite no
+same-timestamp pair. Because a separate counter cannot identify whether its
+write or the asynchronous output was lost, supersede it prospectively with
+CPU-keyed monotonic sequences embedded in each row. A 2,000-event concurrent
+prototype produced continuous sequences on four CPUs; the exact multi-flow
+tracer produced 1,330 rows across eight streams, all continuous through their
+terminal values. After replacing explicit asynchronous map printing with
+bpftrace's exit-time automatic map output, a final exact validation produced
+957 rows across eight streams, again continuous through every terminal value.
+Historical per-CPU-count and scalar formats remain backward-compatible and are
+not rescored; they reject sequence-bearing detail fields as mixed-format
+evidence.
 
 **Rationale:** the failed TCP artifacts contain all 16 connected flows and
 59.9-60.0 seconds of continuous non-omitted intervals. Their failures occur
 during iperf's final results exchange, so strict success creates survivorship
 bias against the strongest collapses. Independently, server raw inner-RTO
 events exceeded END summaries by two to four events. Prospective independent
-completion, bounded capture, quiescence, and per-CPU aggregation address those
+completion, bounded capture, quiescence, and CPU-keyed sequences address those
 limitations without promoting or reinterpreting any historical invalid cell.
 
 The new `burst-qualified-smoke` is exactly two TCP and two UDP executions at 50

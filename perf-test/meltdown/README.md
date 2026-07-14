@@ -129,10 +129,12 @@ near-full continuous interval output, and complete independent interface
 delivery are all proven. Bidirectional workloads must prove both interval
 directions independently. It does not rescore prior artifacts. See
 [`TESTPLAN.md`](TESTPLAN.md) for the fixed thresholds and error allowlist.
-Current traces summarize RTO and retransmission events with versioned per-CPU
-`count()` aggregation and require exact equality with emitted detail rows.
-Legacy scalar summaries retain their historical one-event allowance only when
-reanalyzing their original evidence.
+Current traces attach monotonic sequence numbers to every event/layer/CPU stream
+and require each detailed stream to contain exactly `1..N` through its terminal
+map value. Missing, duplicated, skipped, reordered, wrong-CPU, or mixed-format
+evidence therefore fails closed. Legacy scalar and per-CPU-count summaries
+retain their original compatibility semantics only when reanalyzing historical
+evidence.
 
 When a separate fingerprinted campaign reruns evidence-invalid cells, build an
 auditable qualified composite rather than copying over the original cells:

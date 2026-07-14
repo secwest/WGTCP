@@ -65,6 +65,10 @@ All notable changes to this repository are documented here.
 - Replaced concurrent shared-scalar BPF event summaries with versioned per-CPU
   `count()` aggregation and exact raw/summary reconciliation while retaining
   historical trace semantics.
+- Replaced the separate per-CPU aggregate for new evidence with monotonic
+  event/layer/CPU sequences, making every missing or duplicated detail row
+  directly detectable while retaining historical summary parsers. The final
+  production-form live validation reconciled 957 rows across eight streams.
 - Required explicit workload exit-status evidence and exact restarted process
   identity for both inner and selected competitor iperf servers.
 - Added a pre-impairment endpoint-role check that binds physical and fixed
