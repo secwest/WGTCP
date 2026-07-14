@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 21:01 PDT (2026-07-14 04:01 UTC)
+Status cutoff: 2026-07-13 21:49 PDT (2026-07-14 04:49 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -26,17 +26,21 @@ valid/stable cells. Both TCP repetitions recorded finite-queue overflow (60 and
 The next 0.05x-BDP recovery smoke completed all four scheduled cells: two UDP
 controls are valid/stable, one TCP cell is valid/degraded, and one TCP cell is
 invalid because its final iperf results exchange failed. An exact retry
-reproduced the severe invalid result and remained invalid. The scheduled unique
-completed inventory is 94/94: 93 valid, 92 stable, one degraded, zero
-near-meltdown, zero meltdown, and one invalid. The full provenance-preserving
-audit inventory retains 102 executions: 92 stable, one degraded, and nine
+reproduced the severe invalid result and remained invalid.
+
+The separately fingerprinted Gilbert-Elliott burst-recovery smoke also
+completed all four scheduled cells, but every TCP and UDP preflight had 100%
+loss and no workload began. All four records are invalid. The active released
+inventory is now 98/98 complete: 93 valid, 92 stable, one degraded, zero
+near-meltdown, zero meltdown, and five invalid. The full provenance-preserving
+audit inventory retains 106 cell executions: 92 stable, one degraded, and 13
 invalid records.
 
-A separately fingerprinted Gilbert-Elliott burst-recovery smoke is now
-predeclared but unrun. Its two TCP and two UDP executions make the active
-released inventory 94/98 complete. The analyzer now verifies the live netem
-loss model and exact probabilities rather than accepting configured-but-
-unverified loss.
+The live netem model and exact `2/25/90/99` probabilities matched the matrix on
+both endpoints. The failure was semantic rather than configurational: netem's
+last argument is `1-K`, so `99%` imposed 99% loss in the good state. This gate
+provides no outer-recovery or meltdown evidence, and no broader rows are
+released.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -64,10 +68,10 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
 The current valid evidence does not meet the predeclared meltdown definition.
-It also does not rule out meltdown: most nominal 50 Mb/s finite queues did not
-overflow because observed TCP delivery was only about 47 Mb/s. The next
-mechanism stage must use a lower bottleneck rate or additional contention, then
-force outer recovery and test temporal coupling to inner stalls and RTOs.
+It also does not rule out meltdown: no valid cell has yet forced outer TCP
+recovery. The next mechanism gate must use a separately fingerprinted,
+semantically corrected burst severity that preserves tunnel preflight while
+forcing retransmission or RTO.
 
 ## 2. Objective and falsifiable definition
 
@@ -538,6 +542,32 @@ invalid. Neither had a scored outer retransmission or RTO.
 The recovery gate therefore failed on both validity and mechanism. The 12
 broader lower-rate, higher-RTT, and contention executions remain unrun.
 
+### 10.8 Gilbert-Elliott burst-recovery smoke
+
+The next gate used 50 Mb/s, 200 ms, 1x BDP, 16 flows, and netem
+`gemodel 2/25/90/99`. Both endpoints' live qdisc JSON exactly matched the
+declared model and probabilities in all four cells:
+
+| Execution | Validity | Preflight loss | Delivery bins | Outer recovery |
+|---|---|---:|---:|---:|
+| TCP r1 | invalid | 100% | 0 | 0 |
+| TCP r2 | invalid | 100% | 0 | 0 |
+| UDP r1 | invalid | 100% | 0 | 0 |
+| UDP r2 | invalid | 100% | 0 | 0 |
+
+Netem's parameters are `P`, `R`, `1-H`, and `1-K`. The final value therefore
+specified 99% good-state loss, not 99% good-state delivery. Combined with the
+declared transition and bad-state probabilities, nominal stationary loss is
+about 98.3% per impaired direction. The harness correctly failed every cell
+before workload, so no scored timeout, retransmission, stall, or trend evidence
+exists.
+
+The qdiscs and transient units were clean after the campaign, but only one TCP
+carrier remained per endpoint and the TCP control was unreachable. Re-running
+the preparation-only path against the isolated matching runtime restored two
+carriers per endpoint. Fresh 10-packet TCP and UDP probes then had zero loss at
+0.37 ms and 0.29 ms mean RTT, respectively.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
@@ -596,6 +626,8 @@ exercised.**
   invalid, and an exact retry of the invalid cell remained invalid;
 - the 12 broader recovery executions were gated off because both TCP
   repetitions were not valid and no outer recovery occurred;
+- all four Gilbert-Elliott burst-smoke cells completed invalid at 100%
+  preflight loss, with exact live loss configuration and no workload evidence;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -603,8 +635,9 @@ exercised.**
   competitor unit running;
 - each endpoint retained two established carriers and the matching module
   srcversion;
-- a fresh post-recovery-smoke TCP probe delivered 10/10 packets at 0.315 ms
-  mean;
+- post-burst preparation restored both tunnels and two carriers per endpoint;
+- fresh TCP and UDP probes each delivered 10/10 packets at 0.37 ms and 0.29 ms
+  mean, respectively;
 - the temporary restricted access gateway is limited to its two forwarding
   sockets while mechanism testing remains active.
 
@@ -639,16 +672,17 @@ host-specific access files remain outside Git. They include:
 - writer concurrency traces and BPF atomic-validation evidence;
 - complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
   four-cell mechanism-smoke, four-cell adaptive-smoke, four-cell
-  recovery-smoke, and one-cell exact-retry directories;
+  recovery-smoke, one-cell exact-retry, and four-cell burst-smoke directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
 Git contains compact calibration, initial-screening, rerun, qualified composite,
-mechanism-smoke, adaptive-smoke, recovery-smoke, and invalid-retry inventories.
-The qualified directory includes a source fingerprint for every selected cell.
-Recovery evidence preserves the failed gate without promoting invalid records.
-No credentials, private keys, or host-specific connection files are included.
+mechanism-smoke, adaptive-smoke, recovery-smoke, invalid-retry, and burst-smoke
+inventories. The qualified directory includes a source fingerprint for every
+selected cell. Recovery evidence preserves failed gates without promoting
+invalid records. No credentials, private keys, or host-specific connection
+files are included.
 
 ## 15. Current host state at cutoff
 
@@ -657,7 +691,8 @@ No credentials, private keys, or host-specific connection files are included.
 - Two TCP carrier streams are established.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
-- A fresh TCP probe passed with zero loss and 0.315 ms mean RTT.
+- Fresh TCP and UDP probes passed with zero loss and 0.37 ms and 0.29 ms mean
+  RTT, respectively.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -667,8 +702,8 @@ No credentials, private keys, or host-specific connection files are included.
 
 Mechanism and breadth:
 
-1. run the predeclared matched burst-loss smoke designed to force observable
-   outer retransmission or RTO before any broader recovery rows;
+1. predeclare a semantically corrected burst-loss smoke that preserves tunnel
+   preflight while forcing observable outer retransmission or RTO;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,

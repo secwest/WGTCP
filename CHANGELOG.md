@@ -42,7 +42,8 @@ All notable changes to this repository are documented here.
 - Added compact reviewable evidence for the 14-cell clean calibration, 68-cell
   initial finite-queue/RTT screening, seven-cell qualification rerun, and final
   68-cell qualified composite, plus the 0.25x- and 0.10x-BDP mechanism smoke
-  gates, the failed 0.05x-BDP outer-recovery gate, and its invalid-cell retry.
+  gates, the failed 0.05x-BDP outer-recovery gate and invalid-cell retry, and
+  the four invalid preflight-only Gilbert-Elliott burst-smoke cells.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.

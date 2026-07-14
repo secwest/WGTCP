@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T04:44:03.4876767Z",
+  "expected_cells": [
+    "burst-smoke-ge-r200-q1-16f-tcp-r1",
+    "burst-smoke-ge-r200-q1-16f-tcp-r2",
+    "burst-smoke-ge-r200-q1-16f-udp-r1",
+    "burst-smoke-ge-r200-q1-16f-udp-r2"
+  ],
+  "completed_cells": [
+    "burst-smoke-ge-r200-q1-16f-tcp-r1",
+    "burst-smoke-ge-r200-q1-16f-tcp-r2",
+    "burst-smoke-ge-r200-q1-16f-udp-r1",
+    "burst-smoke-ge-r200-q1-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "b2078458ae90eb235273939234ae39b58367cdc1ab73f65b713d4ade74184a64",
+  "cell_fingerprints": {
+    "burst-smoke-ge-r200-q1-16f-udp-r1": "a7f16dbcefc1fe23deafed657c1651e9ef1610584f1578d94223d7d2c781b7a6",
+    "burst-smoke-ge-r200-q1-16f-tcp-r1": "17e13506f5dc150566239c78dfd8aa1b9b6e099760852fd8fbfd3b85b294ce16",
+    "burst-smoke-ge-r200-q1-16f-udp-r2": "42dfcb140c4e396d79154cd30ab459628101033abacd0b235e7d543e38911c20",
+    "burst-smoke-ge-r200-q1-16f-tcp-r2": "09c301f9373bd4119b63b3badbfb8e171f1cb089c2720746f8608d4af34e91c0"
+  }
+}
