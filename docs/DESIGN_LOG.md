@@ -372,3 +372,10 @@ Broader mechanism rows add 0.5x BDP at 35 Mb/s, 0.25x BDP at 25 Mb/s, and
 no exogenous loss, and the same runtime build. The broader rows run only after
 the smoke records finite-queue overflow with complete evidence and verified
 cleanup.
+
+**Gate result:** all four smoke executions were valid/stable, but none recorded
+a queue drop. TCP delivered 32.80-33.08 Mb/s and UDP delivered 34.02 Mb/s.
+The sampled sender-side queue peaked at 130,548 of 218,750 bytes (59.7%);
+HTB recorded rate-shaper overlimits without child-queue overflow. The 12
+broader rows were therefore not run. The next adaptive step requires a
+separately fingerprinted smaller-queue predeclaration.

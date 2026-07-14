@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 16:40 PDT (2026-07-13 23:40 UTC)
+Status cutoff: 2026-07-13 17:05 PDT (2026-07-14 00:05 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -16,6 +16,11 @@ cells, with 61 valid/stable and seven evidence-invalid. A separate exact-cell
 campaign reran those seven with complete evidence; all are valid/stable. The
 qualified composite is therefore 68/68 stable screening cells, and the combined
 calibration/screening inventory is 82/82 valid/stable.
+
+The next four matched lower-rate mechanism smoke cells are also valid/stable,
+but the predeclared overflow gate was not met: 1,077,876 shaped packets produced
+zero queue drops, inner/outer RTOs, or outer recovery. The 12 broader mechanism
+rows remain intentionally unrun pending a separately predeclared smaller queue.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -448,12 +453,28 @@ comparisons, and recorded the selected source campaign and cell fingerprint for
 all 68 rows, together with each analyzed cell document's SHA-256. It refuses to
 replace valid evidence or merge different runtime identities or axes.
 
+### 10.5 Lower-rate mechanism smoke
+
+The predeclared mechanism gate ran two TCP and two UDP repetitions at 35 Mb/s,
+200 ms, 0.25x BDP, and 16 inner flows:
+
+| Transport | Valid/stable | Goodput range | Queue drops | Inner/outer RTO |
+|---|---:|---:|---:|---:|
+| TCP | 2/2 | 32.80-33.08 Mb/s | 0 | 0 / 0 |
+| UDP control | 2/2 | 34.02 Mb/s | 0 | 0 / 0 |
+
+All four had zero 100 ms stalls, no negative trend, complete telemetry, stable
+dual carriers, and verified cleanup. Across 1,077,876 shaped packets, the
+sender-side queue peaked at 130,548 of 218,750 bytes (59.7%). HTB overlimits
+confirmed active rate shaping, but the finite child queue did not overflow.
+The predeclared gate therefore stopped the remaining 12 mechanism rows.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 82 valid calibration/screening cells meets even one component of
-  the predeclared full-meltdown definition.
+- None of the 86 valid calibration, screening, or mechanism-smoke cells meets
+  even one component of the predeclared full-meltdown definition.
 - No valid cell has an inner RTO or outer recovery event, so there is no
   cross-layer recovery coupling to attribute to classical TCP-over-TCP
   meltdown.
@@ -480,7 +501,8 @@ mechanism.**
 
 ## 12. Validation completed
 
-- 88 repository source-contract, analysis, and composite-integrity tests pass;
+- 89 repository source-contract, analysis, matrix, and composite-integrity
+  tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
 - disposable-veth shaping produced parseable single-line qdisc JSON, accounted
@@ -492,6 +514,8 @@ mechanism.**
 - clean 1/2/4/8/16-flow writer traces completed without stranded frames;
 - all 14 calibration, 68 initial screening, and seven qualification-rerun
   executions completed;
+- all four mechanism-smoke executions completed valid/stable; the 12 broader
+  rows were gated off because no queue overflow occurred;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -500,8 +524,8 @@ mechanism.**
 - each endpoint retained two established carriers and the matching module
   srcversion;
 - a fresh post-rerun TCP probe delivered 10/10 packets at 0.323 ms mean;
-- the temporary restricted access gateway was returned to its deallocated
-  state.
+- the temporary restricted access gateway is limited to its two forwarding
+  sockets while mechanism testing remains active.
 
 ## 13. Repository changes in this investigation
 
@@ -532,16 +556,16 @@ Raw per-cell artifacts, diagnostic traces, synchronized host captures, and
 host-specific access files remain outside Git. They include:
 
 - writer concurrency traces and BPF atomic-validation evidence;
-- complete 14-cell calibration, 68-cell initial screening, and seven-cell rerun
-  directories;
+- complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
+  and four-cell mechanism-smoke directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
-Git contains compact calibration, initial-screening, rerun, and qualified
-composite inventories. The qualified directory includes a source fingerprint
-for every selected cell. No credentials, private keys, or host-specific
-connection files are included.
+Git contains compact calibration, initial-screening, rerun, qualified composite,
+and mechanism-smoke inventories. The qualified directory includes a source
+fingerprint for every selected cell. No credentials, private keys, or
+host-specific connection files are included.
 
 ## 15. Current host state at cutoff
 
@@ -551,7 +575,8 @@ connection files are included.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
 - A fresh TCP probe passed with zero loss and 0.323 ms mean RTT.
-- The temporary restricted access gateway is deallocated.
+- The temporary restricted access gateway is running only for the active
+  mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
   closeout cleanup after the remaining campaign.
 
@@ -559,8 +584,8 @@ connection files are included.
 
 Mechanism and breadth:
 
-1. lower the bottleneck below observed delivery or add contention so the finite
-   queue repeatedly overflows;
+1. predeclare and run a smaller-queue smoke based on the observed 59.7% peak
+   occupancy, and require actual finite-queue drops before broader rows;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
@@ -584,3 +609,4 @@ Closeout:
 5. [`results/2026-07-13-wakeup-screening-initial/REPORT.md`](results/2026-07-13-wakeup-screening-initial/REPORT.md)
 6. [`results/2026-07-13-wakeup-screening-rerun/REPORT.md`](results/2026-07-13-wakeup-screening-rerun/REPORT.md)
 7. [`results/2026-07-13-wakeup-screening-qualified/REPORT.md`](results/2026-07-13-wakeup-screening-qualified/REPORT.md)
+8. [`results/2026-07-13-mechanism-smoke/REPORT.md`](results/2026-07-13-mechanism-smoke/REPORT.md)
