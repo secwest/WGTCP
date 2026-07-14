@@ -742,6 +742,49 @@ def matching_filter_count(path: Path, port: int, ingress: bool) -> int:
     return count
 
 
+def netem_loss_configuration_issues(
+    netem: dict[str, Any] | None, axes: dict[str, str]
+) -> list[str]:
+    options = ((netem or {}).get("options") or {})
+    configured_models = {
+        key
+        for key in ("loss-random", "loss-state", "loss-gemodel")
+        if key in options
+    }
+    expected_model = axes.get("loss_model", "none")
+    expected_key = {
+        "random": "loss-random",
+        "gemodel": "loss-gemodel",
+    }.get(expected_model)
+
+    if expected_model == "none":
+        return ["netem_loss_model"] if configured_models else []
+    if expected_key is None or configured_models != {expected_key}:
+        return ["netem_loss_model"]
+
+    parameters = options.get(expected_key)
+    if not isinstance(parameters, dict):
+        return ["netem_loss_parameters"]
+    expected_parameters = (
+        {"loss": "loss_pct"}
+        if expected_model == "random"
+        else {
+            "p": "burst_p",
+            "r": "burst_r",
+            "1-h": "burst_h",
+            "1-k": "burst_k",
+        }
+    )
+    for option, axis in expected_parameters.items():
+        configured = parameters.get(option)
+        expected = as_float(axes.get(axis)) / 100.0
+        if not isinstance(configured, (int, float)) or not math.isclose(
+            float(configured), expected, rel_tol=0.0, abs_tol=1e-6
+        ):
+            return ["netem_loss_parameters"]
+    return []
+
+
 def impairment_configuration_issues(
     endpoint: Path, axes: dict[str, str], queue_bytes: int
 ) -> list[str]:
@@ -781,6 +824,7 @@ def impairment_configuration_issues(
     expected_delay_ms = as_float(axes.get("rtt_ms")) / 2.0
     if abs(configured_delay_ms - expected_delay_ms) > 1.0:
         issues.append("netem_delay")
+    issues.extend(netem_loss_configuration_issues(netem, axes))
 
     port = 51821 if axes.get("tunnel") == "tcp" else 51820
     if matching_filter_count(endpoint / "filter-pre.json", port, False) < 2:
@@ -1015,6 +1059,10 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
                 "queue_kind",
                 "loss_model",
                 "loss_pct",
+                "burst_p",
+                "burst_r",
+                "burst_h",
+                "burst_k",
                 "flows",
                 "duration_s",
                 "warmup_s",
@@ -1124,6 +1172,10 @@ CSV_FIELDS = [
     "queue_kind",
     "loss_model",
     "loss_pct",
+    "burst_p",
+    "burst_r",
+    "burst_h",
+    "burst_k",
     "flows",
     "duration_s",
     "inner_cc",

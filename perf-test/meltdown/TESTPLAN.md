@@ -56,7 +56,8 @@ A cell is invalid rather than negative evidence if any of these apply:
   it trails that count by more than the one final event allowed at tracer
   shutdown;
 - the shaped class saw no packets;
-- configured rate, delay, queue kind, or queue bytes do not match the manifest;
+- configured rate, delay, queue kind, queue bytes, loss model, or loss
+  parameters do not match the manifest;
 - source, runtime build, matrix-axis, repetition, cell, or campaign
   fingerprints do not match;
 - a competing-flow cell lacks a successful, nonzero, sufficiently long
@@ -155,12 +156,18 @@ Per workload:
 8. `recovery`: matched 25 Mb/s/200 ms/0.05x-BDP, 35 Mb/s/400
    ms/0.05x-BDP, and competing-flow 35 Mb/s/200 ms/0.10x-BDP cells. These 12
    executions run only if `recovery-smoke` meets its outer-recovery gate.
-9. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+9. `burst-smoke`: after the endogenous recovery gate failed, matched 50
+   Mb/s/200 ms/1x-BDP cells with Gilbert-Elliott parameters `2/25/90/99`.
+   The two TCP and two UDP executions must all be valid, including exact live
+   loss-model verification on both endpoints, and at least one TCP execution
+   must record an outer retransmission or RTO before broader burst testing.
+10. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-10. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
-11. `endurance`: selected 10-minute clean/high-risk matched runs.
-12. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-13. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+11. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
+   only after `burst-smoke` meets its outer-recovery gate.
+12. `endurance`: selected 10-minute clean/high-risk matched runs.
+13. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+14. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and

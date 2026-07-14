@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 19:01 PDT (2026-07-14 02:01 UTC)
+Status cutoff: 2026-07-13 21:01 PDT (2026-07-14 04:01 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -27,9 +27,16 @@ The next 0.05x-BDP recovery smoke completed all four scheduled cells: two UDP
 controls are valid/stable, one TCP cell is valid/degraded, and one TCP cell is
 invalid because its final iperf results exchange failed. An exact retry
 reproduced the severe invalid result and remained invalid. The scheduled unique
-inventory is now 94/94 complete: 92 stable, one degraded, zero near-meltdown,
-zero meltdown, and one invalid. Including the exact retry, 95 executions are
-retained with two invalid execution records.
+completed inventory is 94/94: 93 valid, 92 stable, one degraded, zero
+near-meltdown, zero meltdown, and one invalid. The full provenance-preserving
+audit inventory retains 102 executions: 92 stable, one degraded, and nine
+invalid records.
+
+A separately fingerprinted Gilbert-Elliott burst-recovery smoke is now
+predeclared but unrun. Its two TCP and two UDP executions make the active
+released inventory 94/98 complete. The analyzer now verifies the live netem
+loss model and exact probabilities rather than accepting configured-but-
+unverified loss.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -568,7 +575,7 @@ exercised.**
 
 ## 12. Validation completed
 
-- 91 repository source-contract, analysis, matrix, and composite-integrity
+- 93 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
@@ -660,7 +667,7 @@ No credentials, private keys, or host-specific connection files are included.
 
 Mechanism and breadth:
 
-1. predeclare and run a matched burst-loss smoke designed to force observable
+1. run the predeclared matched burst-loss smoke designed to force observable
    outer retransmission or RTO before any broader recovery rows;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
