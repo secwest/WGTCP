@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-14 00:40 PDT (2026-07-14 07:40 UTC)
+Status cutoff: 2026-07-14 04:35 PDT (2026-07-14 11:35 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -45,15 +45,17 @@ stationary loss per impaired direction. Its complete campaign produced one
 valid/degraded UDP cell and three invalid cells. Exact separate reruns of the
 invalid cells remained invalid. Released inventory is now 102/102 complete: 94
 valid, 92 stable, two degraded, zero near-meltdown, zero meltdown, and eight
-invalid. Full audit inventory contains 113 completed executions: 92 stable, two
-degraded, and 19 invalid.
+invalid. Released counts remain unchanged below. Full audit inventory now
+contains 121 completed executions: 92 stable, two degraded, two near-meltdown,
+zero meltdown, and 25 invalid.
 
 Both corrected TCP repetitions forced outer TCP recovery. One exact invalid
 rerun exhibited all three formal meltdown conditions, but it remains unscored
 because the impairment broke iperf's final in-band results exchange. Repeated
-2-4 event tracer-summary discrepancies also expose a shutdown race. Existing
-records will not be rescored; a prospective source fingerprint must validate
-full interval completion independently and quiesce probes before summaries.
+2-4 event tracer-summary discrepancies also exposed unsafe concurrent scalar
+aggregation. Existing records will not be rescored; a prospective source
+fingerprint must validate full interval completion independently and use
+concurrency-safe summaries.
 
 That prospective gate is now predeclared as `burst-qualified-smoke`. Its
 matrix explicitly opts into `interval_complete`: exact flow count, both
@@ -72,6 +74,30 @@ validates both interval series independently. `interval_complete` telemetry and
 BPF readiness require an attached-command marker that anchors the absolute
 cutoff after probe attachment; event capture stops one second before summary
 collection.
+
+The first live attempt under that policy completed 4/4 but had reversed
+controller roles, so all traffic terminated on local tunnel addresses at
+87-92 Gbit/s and bypassed shaping. Those four executions remain invalid. Commit
+`f7a76b0` adds a fail-closed physical, host, and tunnel-role assertion.
+
+The correctly routed campaign then completed 4/4 under fingerprint
+`6bb97111...`. Both UDP controls are valid/near-meltdown at 3.87-4.07 Mb/s:
+they show significant decline and inner RTOs but no stalled delivery bins. Both
+TCP cells are invalid because one endpoint realized 3.66% and 3.16% loss,
+below the predeclared 3.80% lower bound. TCP r1 additionally has a two-event
+server trace-summary mismatch. It nevertheless records the strongest complete
+unscored signature: exit zero, a complete 60-second interval series, 0.027
+Mb/s, 96.8% stalled bins, significant decline, 1.75 inner RTOs per flow-minute,
+and 46 outer recovery events. TCP r2 delivered 0.518 Mb/s with 61.3% stalls,
+significant decline, and 188 outer recovery events, but only 0.125 inner RTOs
+per flow-minute.
+
+The two missing summary events are exactly explained by two pairs of
+same-nanosecond server inner RTOs; each concurrent pair lost one shared scalar
+increment despite occurring seconds before cutoff. The next fingerprint
+replaces those scalars with versioned per-CPU `count()` aggregation and exact
+raw/summary equality. A 16-way live probe reconciled 800/800 generic events,
+and the full tracer reconciled 970/970 inner retransmission events.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -100,9 +126,9 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 
 The current valid evidence does not meet the predeclared meltdown definition.
 It also does not rule out meltdown: no valid TCP cell has yet forced outer TCP
-recovery. The next mechanism gate must use a separately fingerprinted,
-prospective completion and tracing policy that preserves tunnel preflight while
-forcing retransmission or RTO.
+recovery. The next full gate must retain the prospective completion, identity,
+topology, cutoff, and tunnel-preflight contracts under the separately
+fingerprinted per-CPU tracing policy.
 
 ## 2. Objective and falsifiable definition
 

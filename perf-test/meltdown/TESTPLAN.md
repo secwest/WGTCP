@@ -65,14 +65,14 @@ A cell is invalid rather than negative evidence if any of these apply:
 - the selected tunnel did not pass a preflight ping;
 - either expected TCP carrier tuple changed or disappeared, or 200 ms socket
   samples do not cover the complete workload interval;
-- either endpoint sampler did not complete, BPF output lacks any of its six
-  required summaries, a summary exceeds its detailed emitted-event count, or
-  it trails that count by more than the one final event allowed at tracer
-  shutdown. Prospectively, an attached-command marker anchors the absolute
-  monotonic BPF cutoff only after every probe is attached; workload readiness
-  requires that marker. Event probes stop one second before tracer exit so
-  summaries run after a quiescent interval; the historical one-event allowance
-  is not increased;
+- either endpoint sampler did not complete or BPF summaries do not reconcile
+  with detailed emitted events. Legacy six-row scalar summaries retain their
+  historical one-final-event allowance. New traces use a versioned per-CPU
+  `count()` aggregation map and require exact equality; shared scalar increments
+  are not accepted as concurrency-safe. Prospectively, an attached-command
+  marker anchors the absolute monotonic BPF cutoff only after every probe is
+  attached, and workload readiness requires that marker. Event probes stop one
+  second before tracer exit so summaries run after a quiescent interval;
 - the shaped class saw no packets;
 - configured rate, delay, queue kind, queue bytes, loss model, or loss
   parameters do not match the manifest;

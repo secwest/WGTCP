@@ -1,11 +1,5 @@
 BEGIN
 {
-	@inner_rto = 0;
-	@outer_rto = 0;
-	@competitor_rto = 0;
-	@inner_retrans = 0;
-	@outer_retrans = 0;
-	@competitor_retrans = 0;
 	@capture_started = 0;
 	@capture_start_ns = 0;
 	@capture_until_ns = 0;
@@ -27,7 +21,7 @@ tracepoint:tcp:tcp_retransmit_skb
 {
 	$now = nsecs;
 	if (@capture_started && $now <= @capture_until_ns) {
-		@inner_retrans++;
+		@event_counts[2, 1] = count();
 		printf("%llu,retrans,inner,%u,%u,0,0,0\n", $now, args->sport, args->dport);
 	}
 }
@@ -37,7 +31,7 @@ tracepoint:tcp:tcp_retransmit_skb
 {
 	$now = nsecs;
 	if (@capture_started && $now <= @capture_until_ns) {
-		@outer_retrans++;
+		@event_counts[2, 2] = count();
 		printf("%llu,retrans,outer,%u,%u,0,0,0\n", $now, args->sport, args->dport);
 	}
 }
@@ -47,7 +41,7 @@ tracepoint:tcp:tcp_retransmit_skb
 {
 	$now = nsecs;
 	if (@capture_started && $now <= @capture_until_ns) {
-		@competitor_retrans++;
+		@event_counts[2, 3] = count();
 		printf("%llu,retrans,competitor,%u,%u,0,0,0\n", $now, args->sport, args->dport);
 	}
 }
@@ -61,15 +55,15 @@ kprobe:tcp_retransmit_timer
 		$raw_dport = (uint16)$sk->__sk_common.skc_dport;
 		$dport = (($raw_dport & 0xff) << 8) | (($raw_dport >> 8) & 0xff);
 		if ($sport == 5201 || $dport == 5201 || $sport == 8080 || $dport == 8080) {
-			@inner_rto++;
+			@event_counts[1, 1] = count();
 			printf("%llu,rto,inner,%u,%u,0,0,0\n", $now, $sport, $dport);
 		}
 		if ($sport == 51821 || $dport == 51821) {
-			@outer_rto++;
+			@event_counts[1, 2] = count();
 			printf("%llu,rto,outer,%u,%u,0,0,0\n", $now, $sport, $dport);
 		}
 		if ($sport == 5202 || $dport == 5202) {
-			@competitor_rto++;
+			@event_counts[1, 3] = count();
 			printf("%llu,rto,competitor,%u,%u,0,0,0\n", $now, $sport, $dport);
 		}
 	}
@@ -98,18 +92,9 @@ tracepoint:tcp:tcp_probe
 
 END
 {
-	printf("summary,rto,inner,%llu,0,0,0,0\n", @inner_rto);
-	printf("summary,rto,outer,%llu,0,0,0,0\n", @outer_rto);
-	printf("summary,rto,competitor,%llu,0,0,0,0\n", @competitor_rto);
-	printf("summary,retrans,inner,%llu,0,0,0,0\n", @inner_retrans);
-	printf("summary,retrans,outer,%llu,0,0,0,0\n", @outer_retrans);
-	printf("summary,retrans,competitor,%llu,0,0,0,0\n", @competitor_retrans);
-	clear(@inner_rto);
-	clear(@outer_rto);
-	clear(@competitor_rto);
-	clear(@inner_retrans);
-	clear(@outer_retrans);
-	clear(@competitor_retrans);
+	printf("summary,format,per_cpu_count,1,0,0,0,0\n");
+	print(@event_counts);
+	clear(@event_counts);
 	clear(@last_probe);
 	clear(@capture_started);
 	clear(@capture_start_ns);

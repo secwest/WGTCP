@@ -44,6 +44,14 @@ TCP_EVENT_SUMMARIES = {
     for event in ("rto", "retrans")
     for layer in ("inner", "outer", "competitor")
 }
+PER_CPU_SUMMARY_KEYS = {
+    (event_id, layer_id): (event, layer)
+    for event_id, event in ((1, "rto"), (2, "retrans"))
+    for layer_id, layer in ((1, "inner"), (2, "outer"), (3, "competitor"))
+}
+PER_CPU_SUMMARY_LINE = re.compile(
+    r"^@event_counts\[(\d+),\s*(\d+)\]:\s*(\d+)$"
+)
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -703,18 +711,42 @@ def tcp_event_telemetry_issues(
         return issues + ["events_header"]
 
     summaries: dict[tuple[str, str], int] = {}
+    per_cpu_summaries: dict[tuple[str, str], int] = {}
+    per_cpu_marker_count = 0
     event_counts: Counter[tuple[str, str]] = Counter()
     capture_markers: list[tuple[int, int, int]] = []
     event_timestamps: list[int] = []
     for line_number, line in enumerate(lines[1:], start=2):
         if not line:
             continue
+        per_cpu_match = PER_CPU_SUMMARY_LINE.fullmatch(line)
+        if per_cpu_match:
+            numeric_key = (int(per_cpu_match[1]), int(per_cpu_match[2]))
+            key = PER_CPU_SUMMARY_KEYS.get(numeric_key)
+            if key is None or key in per_cpu_summaries:
+                issues.append(f"events_malformed_line_{line_number}")
+            else:
+                per_cpu_summaries[key] = int(per_cpu_match[3])
+            continue
+        if line.startswith("@event_counts["):
+            issues.append(f"events_malformed_line_{line_number}")
+            continue
         parts = line.split(",")
         if len(parts) != 8:
             issues.append(f"events_malformed_line_{line_number}")
             continue
         if parts[0] == "summary":
-            if (
+            if parts[1:] == [
+                "format",
+                "per_cpu_count",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+            ]:
+                per_cpu_marker_count += 1
+            elif (
                 parts[1] not in {"rto", "retrans"}
                 or parts[2] not in {"inner", "outer", "competitor"}
                 or not all(value.isdigit() for value in parts[3:])
@@ -751,14 +783,23 @@ def tcp_event_telemetry_issues(
         else:
             event_timestamps.append(int(parts[0]))
 
-    if set(summaries) != TCP_EVENT_SUMMARIES:
-        issues.append("events_summary")
-    elif any(
-        summaries[key] > event_counts[key]
-        or event_counts[key] - summaries[key] > MAX_TRACE_SUMMARY_LAG
-        for key in TCP_EVENT_SUMMARIES
-    ):
-        issues.append("events_summary_mismatch")
+    if per_cpu_marker_count or per_cpu_summaries:
+        if per_cpu_marker_count != 1 or summaries:
+            issues.append("events_summary_format")
+        elif any(
+            per_cpu_summaries.get(key, 0) != event_counts[key]
+            for key in TCP_EVENT_SUMMARIES
+        ):
+            issues.append("events_summary_mismatch")
+    else:
+        if set(summaries) != TCP_EVENT_SUMMARIES:
+            issues.append("events_summary")
+        elif any(
+            summaries[key] > event_counts[key]
+            or event_counts[key] - summaries[key] > MAX_TRACE_SUMMARY_LAG
+            for key in TCP_EVENT_SUMMARIES
+        ):
+            issues.append("events_summary_mismatch")
     anchor_mode = status.get("cutoff_anchor")
     if anchor_mode == "attached_command":
         if len(capture_markers) != 1:
