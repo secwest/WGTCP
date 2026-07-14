@@ -1,0 +1,9 @@
+cell_id,tunnel,endpoint,queue_limit_bytes,peak_backlog_bytes,peak_backlog_fraction,peak_qlen,measurement_samples,htb_overlimits_delta
+mechanism-smoke-r35-q025-r200-16f-tcp-r1,tcp,server,218750,24018,0.10979657142857142,12,292,91195
+mechanism-smoke-r35-q025-r200-16f-tcp-r1,tcp,client,218750,0,0.0,0,292,0
+mechanism-smoke-r35-q025-r200-16f-tcp-r2,tcp,server,218750,130548,0.5967908571428572,28,292,26042
+mechanism-smoke-r35-q025-r200-16f-tcp-r2,tcp,client,218750,0,0.0,0,293,0
+mechanism-smoke-r35-q025-r200-16f-udp-r1,udp,server,218750,103086,0.47125028571428573,69,293,193678
+mechanism-smoke-r35-q025-r200-16f-udp-r1,udp,client,218750,0,0.0,0,293,0
+mechanism-smoke-r35-q025-r200-16f-udp-r2,udp,server,218750,101592,0.4644205714285714,68,292,193628
+mechanism-smoke-r35-q025-r200-16f-udp-r2,udp,client,218750,0,0.0,0,292,0

@@ -109,6 +109,9 @@ All notable changes to this repository are documented here.
   screening executions. Seven exact-cell reruns replaced only the initial
   evidence-invalid repetitions, qualifying all 68 screening cells as stable
   with no degraded, near-meltdown, meltdown, or remaining invalid cells.
+- Completed the four-cell 35 Mb/s/200 ms/0.25x-BDP mechanism smoke as
+  valid/stable. It recorded zero queue drops and therefore correctly stopped
+  the 12 broader mechanism rows at their predeclared overflow gate.
 
 ### Known limitations
 
