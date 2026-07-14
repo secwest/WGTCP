@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 21:49 PDT (2026-07-14 04:49 UTC)
+Status cutoff: 2026-07-13 21:53 PDT (2026-07-14 04:53 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -41,6 +41,13 @@ both endpoints. The failure was semantic rather than configurational: netem's
 last argument is `1-K`, so `99%` imposed 99% loss in the good state. This gate
 provides no outer-recovery or meltdown evidence, and no broader rows are
 released.
+
+A new separately fingerprinted `2/25/90/1` burst-recovery smoke is predeclared
+but unrun. It retains 90% bad-state loss while reducing good-state loss to 1%,
+for 7.59% nominal stationary loss per impaired direction. Its four pending
+cells make the active released inventory 98/102 complete. Loss validity now
+also requires monotonic IFB netem counters, nonzero traffic and drops, and
+realized loss within 0.5x-2x the stationary expectation on each endpoint.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -605,7 +612,7 @@ exercised.**
 
 ## 12. Validation completed
 
-- 93 repository source-contract, analysis, matrix, and composite-integrity
+- 95 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
@@ -702,8 +709,8 @@ files are included.
 
 Mechanism and breadth:
 
-1. predeclare a semantically corrected burst-loss smoke that preserves tunnel
-   preflight while forcing observable outer retransmission or RTO;
+1. run the predeclared `2/25/90/1` burst-recovery smoke and require valid
+   observed outer retransmission or RTO;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,

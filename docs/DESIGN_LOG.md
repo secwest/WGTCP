@@ -464,3 +464,22 @@ The preparation-only recovery path restored both dedicated tunnels, two
 carriers per endpoint, and zero-loss TCP/UDP probes. The completed fingerprint
 is preserved unchanged. Any semantically corrected severity must be declared
 and committed as a new gate.
+
+### DL-027: Correct good-state loss in a new burst fingerprint
+
+**Status:** Accepted
+
+The completed `2/25/90/99` campaign established that the shaper and analyzer
+apply netem's literal `P/R/1-H/1-K` semantics. It cannot be repaired in place.
+A new matrix therefore retains `P=2%`, `R=25%`, and `1-H=90%` while changing
+only good-state loss to `1-K=1%`. Its nominal stationary loss is 7.59% per
+impaired direction instead of 98.3%.
+
+The new gate again consists of two matched TCP/UDP repetitions at 50 Mb/s,
+200 ms, 1x BDP, 16 flows, and 60 seconds. All four executions must be valid,
+with exact live loss configuration, nonzero IFB netem traffic and drops, and
+realized loss between 0.5x and 2x the model's stationary expectation on each
+endpoint. At least one TCP repetition must record a scored outer retransmission
+or RTO. Otherwise broader burst, contention, AQM, workload, and endurance rows
+remain blocked. The prior invalid cells remain part of the audit inventory and
+are not replacement candidates.

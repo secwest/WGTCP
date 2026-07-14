@@ -58,6 +58,9 @@ A cell is invalid rather than negative evidence if any of these apply:
 - the shaped class saw no packets;
 - configured rate, delay, queue kind, queue bytes, loss model, or loss
   parameters do not match the manifest;
+- a loss cell lacks monotonic IFB netem counters, processes no netem traffic,
+  realizes no drops, or its measured loss is outside 0.5x-2x the model's
+  stationary expectation;
 - source, runtime build, matrix-axis, repetition, cell, or campaign
   fingerprints do not match;
 - a competing-flow cell lacks a successful, nonzero, sufficiently long
@@ -69,6 +72,10 @@ A cell is invalid rather than negative evidence if any of these apply:
 Queue overflow is reported separately from validity. A valid run with no
 finite-queue drops shows that offered load did not reach the overflow regime;
 it does not test the complete feedback loop.
+
+The historical matrix fields `burst_h` and `burst_k` are passed directly as
+netem's `1-H` and `1-K` arguments and are verified against those exact live
+qdisc JSON keys. They are loss probabilities, not delivery probabilities.
 
 An exact-cell rerun remains a separate campaign when its source fingerprint
 changes. A qualified composite may select it only when both source manifests
@@ -135,6 +142,7 @@ Per workload:
 - inner and outer RTO/retransmission rates;
 - finite-queue drops and overlimits, plus sampled peak backlog in bytes and as a
   fraction of the configured queue;
+- expected, aggregate, and per-endpoint minimum/maximum realized netem loss;
 - for short flows, p50/p95/p99/max completion time and failure rate.
 
 ## 6. Stages
@@ -161,13 +169,19 @@ Per workload:
    The two TCP and two UDP executions must all be valid, including exact live
    loss-model verification on both endpoints, and at least one TCP execution
    must record an outer retransmission or RTO before broader burst testing.
-10. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+10. `burst-recovery-smoke`: after `burst-smoke` failed preflight because
+   `1-K=99%`, matched 50 Mb/s/200 ms/1x-BDP cells with `P=2%`, `R=25%`,
+   `1-H=90%`, and `1-K=1%`. Nominal stationary loss is 7.59% per impaired
+   direction. All four executions must be valid, including realized IFB loss
+   within the predeclared 0.5x-2x band, and at least one TCP execution must
+   record an outer retransmission or RTO before broader work.
+11. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-11. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
-   only after `burst-smoke` meets its outer-recovery gate.
-12. `endurance`: selected 10-minute clean/high-risk matched runs.
-13. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-14. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+12. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
+   only after `burst-recovery-smoke` meets its outer-recovery gate.
+13. `endurance`: selected 10-minute clean/high-risk matched runs.
+14. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+15. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and
