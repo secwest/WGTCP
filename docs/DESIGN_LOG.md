@@ -395,3 +395,11 @@ predeclares a 0.05x-BDP fallback (43,750 bytes). The fallback is not run when
 the 0.10x-BDP gate passes. The analyzer now publishes measurement-window
 sampled peak backlog in bytes and as a fraction of the configured queue; queue
 drops remain the gate because discrete sampling can miss a transient peak.
+
+**Gate result:** all four 0.10x-BDP cells were valid/stable. Both TCP
+repetitions recorded finite-queue overflow (60 and 5 drops), satisfying the
+gate; UDP controls recorded 749 and 718 drops. TCP delivered 27.75-29.05 Mb/s
+versus 33.94-33.98 Mb/s for UDP. No cell produced an inner or outer RTO, outer
+retransmission, outer recovery event, or negative trend. The 0.05x-BDP fallback
+is therefore not run. A broader adaptive mechanism matrix may now be declared
+separately; the original rows remain gated off by their failed 0.25x-BDP smoke.
