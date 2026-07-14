@@ -36,6 +36,7 @@ meltdown/
   matrix-mechanism-burst-recovery.csv
   matrix-mechanism-burst-qualified.csv
   matrix-mechanism-burst-transport-qualified.csv
+  matrix-mechanism-burst-breadth.csv
   harness/
     install-host.sh
     setup-tunnels.sh

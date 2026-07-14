@@ -40,6 +40,10 @@ $MatrixFile = (Resolve-Path $MatrixFile).Path
 $SshKey = (Resolve-Path $SshKey).Path
 $KnownHostsFile = (Resolve-Path $KnownHostsFile).Path
 $ResultsDir = [IO.Path]::GetFullPath($ResultsDir)
+$campaignSafetyStopPath = Join-Path $ResultsDir "campaign-safety-stop.json"
+if (Test-Path -LiteralPath $campaignSafetyStopPath) {
+    throw "campaign directory has an immutable safety-stop latch; investigate and use a fresh directory"
+}
 $null = New-Item -ItemType Directory -Force -Path (Join-Path $ResultsDir "cells")
 $isolatedSshConfig = Join-Path $ResultsDir ".ssh-config"
 $emptyGlobalKnownHosts = Join-Path $ResultsDir ".global-known-hosts"
@@ -258,6 +262,166 @@ function Write-CampaignStatus {
     )
 }
 
+function Get-CellSafetyStopReasons {
+    param([Parameter(Mandatory)] [string] $CellJson)
+    $document = $CellJson | ConvertFrom-Json -Depth 100
+    return @(
+        $document.invalid_reasons | Where-Object {
+            $_ -in @(
+                "baseline_preflight",
+                "kernel_anomaly",
+                "unstable_tcp_carriers"
+            )
+        }
+    )
+}
+
+function Write-CampaignSafetyStop {
+    param(
+        [Parameter(Mandatory)] [string] $CellId,
+        [Parameter(Mandatory)] [string[]] $Reasons,
+        [Parameter(Mandatory)] [string] $CampaignFingerprint
+    )
+    if (Test-Path -LiteralPath $campaignSafetyStopPath) {
+        throw "campaign safety-stop latch already exists"
+    }
+    $document = [ordered]@{
+        status = "safety_stopped"
+        stopped_at = (Get-Date -AsUTC -Format "o")
+        cell_id = $CellId
+        reasons = @($Reasons)
+        campaign_fingerprint = $CampaignFingerprint
+    } | ConvertTo-Json -Depth 3
+    [IO.File]::WriteAllText(
+        $campaignSafetyStopPath,
+        $document + [Environment]::NewLine,
+        $Utf8NoBom
+    )
+}
+
+function Test-OrderedStringArrayEqual {
+    param(
+        [AllowEmptyCollection()] [object[]] $Left,
+        [AllowEmptyCollection()] [object[]] $Right
+    )
+    if ($Left.Count -ne $Right.Count) {
+        return $false
+    }
+    for ($index = 0; $index -lt $Left.Count; $index++) {
+        if ([string]$Left[$index] -cne [string]$Right[$index]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Assert-ExistingCampaignIdentity {
+    param(
+        [Parameter(Mandatory)] [string] $CampaignFingerprint,
+        [Parameter(Mandatory)] [string[]] $ExpectedCells,
+        [Parameter(Mandatory)] [string[]] $MatrixExpectedCells,
+        [Parameter(Mandatory)] [hashtable] $CellFingerprints
+    )
+    $statusPath = Join-Path $ResultsDir "campaign-status.json"
+    $existingCellDirectories = @(
+        Get-ChildItem (Join-Path $ResultsDir "cells") -Directory -ErrorAction SilentlyContinue
+    )
+    if (-not (Test-Path -LiteralPath $statusPath)) {
+        if ($existingCellDirectories.Count -gt 0) {
+            throw "existing cell artifacts lack a campaign manifest; use a fresh directory"
+        }
+        return $null
+    }
+
+    try {
+        $existing = Get-Content $statusPath -Raw | ConvertFrom-Json -Depth 100
+    } catch {
+        throw "existing campaign manifest is unreadable; use a fresh directory"
+    }
+    if ($existing.status -notin @("running", "ready", "analysis_failed")) {
+        throw "existing campaign is terminal ($($existing.status)); use a fresh directory"
+    }
+    if ($existing.campaign_fingerprint -cne $CampaignFingerprint -or
+        -not (Test-OrderedStringArrayEqual @($existing.expected_cells) $ExpectedCells) -or
+        -not (Test-OrderedStringArrayEqual @($existing.matrix_expected_cells) $MatrixExpectedCells)) {
+        throw "existing campaign identity or selection differs; use a fresh directory"
+    }
+
+    $existingFingerprints = @($existing.cell_fingerprints.PSObject.Properties)
+    if ($existingFingerprints.Count -ne $CellFingerprints.Count) {
+        throw "existing campaign cell fingerprints differ; use a fresh directory"
+    }
+    foreach ($cellId in $CellFingerprints.Keys) {
+        $properties = @(
+            $existingFingerprints | Where-Object { $_.Name -ceq $cellId }
+        )
+        if ($properties.Count -ne 1 -or
+            [string]$properties[0].Value -cne [string]$CellFingerprints[$cellId]) {
+            throw "existing campaign cell fingerprints differ; use a fresh directory"
+        }
+    }
+
+    $actualCompletedCells = [Collections.Generic.List[string]]::new()
+    foreach ($directory in $existingCellDirectories) {
+        if (@($ExpectedCells | Where-Object { $_ -ceq $directory.Name }).Count -ne 1) {
+            throw "existing campaign contains an unexpected cell directory; use a fresh directory"
+        }
+        $cellId = $directory.Name
+        $cellJsonPath = Join-Path $directory.FullName "cell.json"
+        $cellCompletePath = Join-Path $directory.FullName "cell.complete"
+        $cellFingerprintPath = Join-Path $directory.FullName "cell.fingerprint"
+        $cellEnvPath = Join-Path $directory.FullName "cell.env"
+        if (-not (Test-Path -LiteralPath $cellJsonPath) -or
+            -not (Test-Path -LiteralPath $cellCompletePath) -or
+            -not (Test-Path -LiteralPath $cellFingerprintPath) -or
+            -not (Test-Path -LiteralPath $cellEnvPath)) {
+            throw "existing campaign contains partial cell evidence; use a fresh directory"
+        }
+
+        $expectedCellFingerprint = [string]$CellFingerprints[$cellId]
+        if ((Get-Content $cellFingerprintPath -Raw).Trim() -cne $expectedCellFingerprint) {
+            throw "existing campaign contains mismatched cell evidence; use a fresh directory"
+        }
+        $envLines = @(Get-Content $cellEnvPath)
+        if (@($envLines | Where-Object {
+                    $_ -ceq "campaign_fingerprint=$CampaignFingerprint"
+                }).Count -ne 1 -or
+            @($envLines | Where-Object {
+                    $_ -ceq "cell_fingerprint=$expectedCellFingerprint"
+                }).Count -ne 1) {
+            throw "existing campaign contains mismatched cell environment evidence; use a fresh directory"
+        }
+        try {
+            $cellDocument = Get-Content $cellJsonPath -Raw | ConvertFrom-Json -Depth 100
+        } catch {
+            throw "existing campaign contains unreadable cell evidence; use a fresh directory"
+        }
+        if ([string]$cellDocument.cell_id -cne $cellId -or
+            [string]$cellDocument.axes.campaign_fingerprint -cne $CampaignFingerprint -or
+            [string]$cellDocument.axes.cell_fingerprint -cne $expectedCellFingerprint) {
+            throw "existing campaign contains mismatched analyzed cell evidence; use a fresh directory"
+        }
+        $actualCompletedCells.Add($cellId)
+    }
+    $orderedCompletedCells = @(
+        $ExpectedCells | Where-Object { $actualCompletedCells.Contains($_) }
+    )
+    if (-not (Test-OrderedStringArrayEqual @($existing.completed_cells) $orderedCompletedCells)) {
+        throw "existing manifest completion state differs from cell evidence; use a fresh directory"
+    }
+
+    $seenFailedCells = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($failedCell in @($existing.failed_cells)) {
+        if (-not $seenFailedCells.Add([string]$failedCell) -or
+            @($ExpectedCells | Where-Object { $_ -ceq [string]$failedCell }).Count -ne 1) {
+            throw "existing manifest failed-cell state is invalid; use a fresh directory"
+        }
+    }
+    return $existing
+}
+
 function Get-StringSha256 {
     param([Parameter(Mandatory)] [string] $Value)
     $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -274,7 +438,11 @@ function Get-CampaignSourceFingerprint {
         Get-Item -LiteralPath $PSCommandPath
         Get-Item -LiteralPath $MatrixFile
         Get-Item -LiteralPath (Join-Path $meltdownRoot "TESTPLAN.md")
-        Get-ChildItem -LiteralPath (Join-Path $meltdownRoot "harness") -Recurse -File
+        Get-ChildItem -LiteralPath (Join-Path $meltdownRoot "harness") -Recurse -File |
+            Where-Object {
+                $_.Extension -notin @(".pyc", ".pyo") -and
+                    $_.FullName -notmatch "[\\/]__pycache__[\\/]"
+            }
     ) | Sort-Object -Property FullName -Unique
     $entries = foreach ($file in $files) {
         $relative = [IO.Path]::GetRelativePath($meltdownRoot, $file.FullName)
@@ -415,49 +583,70 @@ function Invoke-Cell {
         "--burst-k $($Row.burst_k)"
     ) -join " "
 
-    Remove-Item -Recurse -Force $localCell -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $localCell) {
+        throw "local cell artifacts already exist; use a fresh campaign directory"
+    }
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $localCell "server")
     Invoke-Remote $HostA $PortA "rm -rf $(ConvertTo-ShellQuoted $remoteCellA); mkdir -p $(ConvertTo-ShellQuoted $remoteCellA)" | Out-Null
     Invoke-Remote $HostB $PortB "rm -rf $(ConvertTo-ShellQuoted $remoteCellB); mkdir -p $(ConvertTo-ShellQuoted $remoteCellB)" | Out-Null
 
     try {
         if ($impairmentValidation -eq "transport_aware") {
-            Invoke-Remote $HostB $PortB (
-                "ping -I $tunnelInterface -c 10 -i 0.2 -W 2 $targetIp " +
-                "> $(ConvertTo-ShellQuoted "$remoteCellB/preimpairment-ping.txt") 2>&1 || true"
-            ) | Out-Null
+            try {
+                Invoke-Remote $HostB $PortB (
+                    "ping -I $tunnelInterface -c 10 -i 0.2 -W 2 $targetIp " +
+                    "> $(ConvertTo-ShellQuoted "$remoteCellB/preimpairment-ping.txt") 2>&1 || true"
+                ) | Out-Null
+                Copy-FromRemote $HostB $PortB "$remoteCellB/preimpairment-ping.txt" $localCell
+                $baselinePreflight = @(
+                    & python $analyzer baseline (Join-Path $localCell "preimpairment-ping.txt") 2>&1
+                )
+                if ($LASTEXITCODE -ne 0) {
+                    throw "validation failed: $($baselinePreflight | Out-String)"
+                }
+            } catch {
+                throw "safety baseline failed: $($_.Exception.Message)"
+            }
         }
 
-        $serverShaped = $true
-        $serverShape = Invoke-Remote $HostA $PortA "sudo $shape apply --peer-ip $PrivateIpB $shapeArgs"
-        [IO.File]::WriteAllLines(
-            (Join-Path $localCell "server-shape-apply.json"),
-            [string[]]$serverShape,
-            $Utf8NoBom
-        )
+        try {
+            $serverShaped = $true
+            $serverShape = Invoke-Remote $HostA $PortA "sudo $shape apply --peer-ip $PrivateIpB $shapeArgs"
+            [IO.File]::WriteAllLines(
+                (Join-Path $localCell "server-shape-apply.json"),
+                [string[]]$serverShape,
+                $Utf8NoBom
+            )
 
-        $clientShaped = $true
-        $clientShape = Invoke-Remote $HostB $PortB "sudo $shape apply --peer-ip $PrivateIpA $shapeArgs"
-        [IO.File]::WriteAllLines(
-            (Join-Path $localCell "client-shape-apply.json"),
-            [string[]]$clientShape,
-            $Utf8NoBom
-        )
+            $clientShaped = $true
+            $clientShape = Invoke-Remote $HostB $PortB "sudo $shape apply --peer-ip $PrivateIpA $shapeArgs"
+            [IO.File]::WriteAllLines(
+                (Join-Path $localCell "client-shape-apply.json"),
+                [string[]]$clientShape,
+                $Utf8NoBom
+            )
+        } catch {
+            throw "safety shaping failed: $($_.Exception.Message)"
+        }
 
         Invoke-Remote $HostB $PortB (
             "ping -I $tunnelInterface -c 10 -i 0.2 -W 2 $targetIp " +
             "> $(ConvertTo-ShellQuoted "$remoteCellB/preflight-ping.txt") 2>&1 || true"
         ) | Out-Null
 
-        Invoke-Remote $HostA $PortA (
-            Get-IperfServerVerificationCommand `
-                "wgtcp-meltdown-iperf-inner.service" $runtimeIperfHash
-        ) | Out-Null
-        if ([int]$Row.competitor -eq 1) {
+        try {
             Invoke-Remote $HostA $PortA (
                 Get-IperfServerVerificationCommand `
-                    "wgtcp-meltdown-iperf-competitor.service" $runtimeIperfHash
+                    "wgtcp-meltdown-iperf-inner.service" $runtimeIperfHash
             ) | Out-Null
+            if ([int]$Row.competitor -eq 1) {
+                Invoke-Remote $HostA $PortA (
+                    Get-IperfServerVerificationCommand `
+                        "wgtcp-meltdown-iperf-competitor.service" $runtimeIperfHash
+                ) | Out-Null
+            }
+        } catch {
+            throw "safety runtime identity failed: $($_.Exception.Message)"
         }
 
         Invoke-Remote $HostA $PortA (
@@ -626,7 +815,8 @@ Invoke-Remote $HostB $PortB (
 
 $archive = Join-Path $env:TEMP "wgtcp-meltdown-$PID.tar.gz"
 try {
-    & tar -czf $archive -C $meltdownRoot harness
+    & tar --exclude="__pycache__" --exclude="*.pyc" --exclude="*.pyo" `
+        -czf $archive -C $meltdownRoot harness
     if ($LASTEXITCODE -ne 0) {
         throw "failed to package meltdown harness"
     }
@@ -802,7 +992,15 @@ try {
         throw "requested cells not found in enabled selected stages: $($missingSelection -join ', ')"
     }
 
+    $existingCampaign = Assert-ExistingCampaignIdentity `
+        $campaignFingerprint ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) `
+        $cellFingerprints
     $failedCells = [Collections.Generic.List[string]]::new()
+    if ($null -ne $existingCampaign) {
+        foreach ($failedCell in @($existingCampaign.failed_cells)) {
+            $failedCells.Add([string]$failedCell)
+        }
+    }
     Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
         $campaignFingerprint $cellFingerprints
     foreach ($row in $selectedRows) {
@@ -813,6 +1011,7 @@ try {
                 continue
             }
             $cellJsonPath = Join-Path (Join-Path (Join-Path $ResultsDir "cells") $cellId) "cell.json"
+            $cellDirectory = Split-Path $cellJsonPath
             $cellCompletePath = Join-Path (Split-Path $cellJsonPath) "cell.complete"
             $cellFingerprintPath = Join-Path (Split-Path $cellJsonPath) "cell.fingerprint"
             $fingerprintMatches = (Test-Path $cellFingerprintPath) -and
@@ -820,20 +1019,48 @@ try {
             if ((Test-Path $cellJsonPath) -and
                 (Test-Path $cellCompletePath) -and
                 $fingerprintMatches) {
+                $safetyStopReasons = @(
+                    Get-CellSafetyStopReasons (Get-Content $cellJsonPath -Raw)
+                )
+                if ($safetyStopReasons.Count -gt 0) {
+                    Write-CampaignLog "SAFETY_STOP $cellId $($safetyStopReasons -join ',')"
+                    Write-CampaignSafetyStop $cellId ([string[]]$safetyStopReasons) $campaignFingerprint
+                    Write-CampaignStatus "safety_stopped" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
+                        $campaignFingerprint $cellFingerprints
+                    throw "campaign safety stop at $cellId`: $($safetyStopReasons -join ', ')"
+                }
                 Write-CampaignLog "SKIP $cellId"
                 continue
             }
-            if ((Test-Path $cellJsonPath) -or (Test-Path $cellCompletePath)) {
-                Write-CampaignLog "STALE $cellId"
+            if (Test-Path -LiteralPath $cellDirectory) {
+                throw "existing incomplete or mismatched artifacts for $cellId; use a fresh directory"
             }
             Write-CampaignLog "START $cellId"
+            $safetyStopReasons = @()
             try {
                 $cellResult = Invoke-Cell $row $rep $cellFingerprints[$cellId]
                 Write-Host $cellResult
                 Write-CampaignLog "DONE $cellId"
+                $safetyStopReasons = @(Get-CellSafetyStopReasons $cellResult)
             } catch {
                 Write-CampaignLog "FAILED $cellId $($_.Exception.Message)"
                 $failedCells.Add($cellId)
+                if ($_.Exception.Message -like "safety baseline failed:*") {
+                    $safetyStopReasons = @("baseline_preflight")
+                } elseif ($_.Exception.Message -like "safety shaping failed:*") {
+                    $safetyStopReasons = @("shape_application")
+                } elseif ($_.Exception.Message -like "safety runtime identity failed:*") {
+                    $safetyStopReasons = @("runtime_identity")
+                } elseif ($_.Exception.Message -like "shape restoration failed:*") {
+                    $safetyStopReasons = @("shape_restoration")
+                }
+            }
+            if ($safetyStopReasons.Count -gt 0) {
+                Write-CampaignLog "SAFETY_STOP $cellId $($safetyStopReasons -join ',')"
+                Write-CampaignSafetyStop $cellId ([string[]]$safetyStopReasons) $campaignFingerprint
+                Write-CampaignStatus "safety_stopped" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
+                    $campaignFingerprint $cellFingerprints
+                throw "campaign safety stop at $cellId`: $($safetyStopReasons -join ', ')"
             }
             Write-CampaignStatus "running" ([string[]]$expectedCells) ([string[]]$matrixExpectedCells) ([string[]]$failedCells) `
                 $campaignFingerprint $cellFingerprints

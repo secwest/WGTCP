@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-14 11:08 PDT (2026-07-14 18:08 UTC)
+Status cutoff: 2026-07-14 12:40 PDT (2026-07-14 19:40 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -155,6 +155,13 @@ is now 106/106 complete: 98 valid, 92 stable, five degraded, one near-meltdown,
 zero meltdown, and eight invalid. Full audit inventory contains 136 completed
 executions: 103 valid (92 stable, seven degraded, four near-meltdown, zero
 meltdown) and 33 invalid.
+
+The released broader stage is now fixed before execution. It adds 20 matched
+TCP/UDP executions around the qualified center reference: independent 7.5%
+loss, lower-loss `1/25/90/1`, longer-burst `1/12.5/90/1`, doubled-RTT
+`2/25/90/1`, and higher-loss `4/25/90/1`. Profiles, order, two repetitions,
+completion and impairment policies, retry bound, and safety stop rule are
+predeclared in `matrix-mechanism-burst-breadth.csv` and `TESTPLAN.md`.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -788,12 +795,15 @@ valid execution meets all three formal meltdown conditions.**
 
 ## 12. Validation completed
 
-- 111 repository source-contract, analysis, matrix, and composite-integrity
+- 113 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
-- seven recent burst campaigns containing 25 completed cells reanalyze without
+- ten burst campaigns containing 34 completed cells reanalyze without
   validity, classification, invalid-reason, or telemetry-reason drift;
+- generated Python bytecode is excluded from source fingerprinting and
+  deployment, and campaign/cell fingerprint drift or partial local evidence now
+  requires a fresh immutable result directory;
 - the final production-form CPU-sequence tracer emitted 957 rows across eight
   streams, each exactly continuous through its terminal map value;
 - disposable-veth shaping produced parseable single-line qdisc JSON, accounted
@@ -898,9 +908,9 @@ are included.
 
 Mechanism and breadth:
 
-1. predeclare and commit the broader burst-loss and outer-RTO matrix now released
-   by the qualified transport-aware gate;
-2. run those cells and measure temporal coupling;
+1. commit and run the predeclared 20-execution burst-breadth matrix and measure
+   temporal coupling;
+2. select matched high-risk/control cells prospectively for 10-minute endurance;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
    dynamics, and selected 10-minute endurance tests.

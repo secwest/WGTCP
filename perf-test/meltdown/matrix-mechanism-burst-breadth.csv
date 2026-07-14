@@ -1,0 +1,11 @@
+stage,enabled,name,tunnel,rate_mbps,rtt_ms,queue_bdp,queue_kind,loss_model,loss_pct,burst_p,burst_r,burst_h,burst_k,flows,duration_s,warmup_s,workload_completion,impairment_validation,inner_cc,direction,competitor,repetitions
+burst-breadth,1,random7p5-r200-q1-16f,tcp,50,200,1,bfifo,random,7.5,0,0,0,0,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,random7p5-r200-q1-16f,udp,50,200,1,bfifo,random,7.5,0,0,0,0,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge1-25-90-1-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,1,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge1-25-90-1-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,1,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge1-12p5-90-1-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,1,12.5,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge1-12p5-90-1-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,1,12.5,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge2-25-90-1-r400-q1-16f,tcp,50,400,1,bfifo,gemodel,0,2,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge2-25-90-1-r400-q1-16f,udp,50,400,1,bfifo,gemodel,0,2,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge4-25-90-1-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,4,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2
+burst-breadth,1,ge4-25-90-1-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,4,25,90,1,16,60,5,interval_complete,transport_aware,cubic,reverse,0,2

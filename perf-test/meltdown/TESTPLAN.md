@@ -249,8 +249,35 @@ Per workload:
    relaxed again to obtain qualification, and no historical cell is rescored.
 13. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-14. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
-   only after `burst-transport-qualified-smoke` meets its outer-recovery gate.
+14. `burst-breadth`: after `burst-transport-qualified-smoke` qualified 4/4 with
+   TCP outer recovery, a fixed 20-execution matrix maps loss correlation,
+   severity, persistence, and RTT around that reference. Every profile has
+   two TCP and two matched UDP executions at 50 Mb/s, 1x BDP, 16 flows, and 60
+   seconds, using `interval_complete` and `transport_aware`:
+   - 7.5% independent random loss at 200 ms;
+   - Gilbert-Elliott `1/25/90/1` at 200 ms, with 4.42% nominal stationary loss;
+   - Gilbert-Elliott `1/12.5/90/1` at 200 ms, with the same 7.59% nominal loss
+     as the qualified reference but twice its mean bad-state residence;
+   - Gilbert-Elliott `2/25/90/1` at 400 ms, preserving the qualified loss model
+     while doubling RTT;
+   - Gilbert-Elliott `4/25/90/1` at 200 ms, with 13.28% nominal stationary loss.
+
+   The qualified `2/25/90/1`, 200 ms composite is the fixed center reference
+   and is not rerun in this matrix. Profiles run in the listed risk-escalation
+   order and are not added, removed, or changed after results are inspected.
+   Complete the full matrix regardless of classification; stop only for a
+   restoration, runtime-identity, carrier, clean-control, or host-safety
+   failure. Clean controls are validated before shaping. Baseline acquisition,
+   shaping application, in-campaign runtime identity, and restoration fail
+   closed. A safety stop writes an immutable campaign-fingerprint-bound latch,
+   and that result directory cannot be resumed or targeted afterward.
+   Pre-campaign runtime mismatch aborts before a manifest or cell exists.
+   Existing manifests, selections, cell fingerprints, complete cells, and
+   partial cells are validated case-exactly before status mutation and are
+   never overwritten; unexpected directories or any manifest, sidecar,
+   environment, or analyzed-cell mismatch requires a fresh directory. At most
+   one exact rerun of each evidence-invalid execution is allowed, in a separate
+   immutable campaign with the original retained.
 15. `endurance`: selected 10-minute clean/high-risk matched runs.
 16. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
 17. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,

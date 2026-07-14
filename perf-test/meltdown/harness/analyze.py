@@ -31,6 +31,29 @@ WORKLOAD_MAX_INTERVAL_GAP_S = 0.02
 WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S = 0.001
 BASELINE_PREFLIGHT_MAX_RTT_MS = 20.0
 IMPAIRMENT_VALIDATION_POLICIES = {"strict", "transport_aware"}
+PUBLISHED_AXIS_FIELDS = (
+    "tunnel",
+    "rate_mbps",
+    "rtt_ms",
+    "queue_bdp",
+    "queue_kind",
+    "loss_model",
+    "loss_pct",
+    "burst_p",
+    "burst_r",
+    "burst_h",
+    "burst_k",
+    "flows",
+    "duration_s",
+    "warmup_s",
+    "workload_completion",
+    "impairment_validation",
+    "inner_cc",
+    "direction",
+    "competitor",
+    "campaign_fingerprint",
+    "cell_fingerprint",
+)
 FINAL_CONTROL_ERRORS = (
     re.compile(
         r"unable to receive results:\s*(?:Connection reset by peer|Broken pipe)?"
@@ -595,6 +618,23 @@ def parse_ping(path: Path) -> dict[str, int | float | None]:
     }
 
 
+def baseline_preflight(
+    path: Path,
+) -> tuple[dict[str, int | float | bool | None], bool]:
+    baseline = parse_ping(path)
+    valid = (
+        baseline["ping_transmitted"] == 10
+        and baseline["ping_received"] == 10
+        and baseline["ping_loss_pct"] == 0.0
+        and baseline["ping_rtt_mean_ms"] is not None
+        and baseline["ping_rtt_mean_ms"] <= BASELINE_PREFLIGHT_MAX_RTT_MS
+    )
+    return {
+        **baseline,
+        "baseline_preflight_valid": valid,
+    }, valid
+
+
 def impairment_ping_validation(
     cell_dir: Path, axes: dict[str, str]
 ) -> tuple[dict[str, int | float | bool | None], list[str]]:
@@ -616,23 +656,20 @@ def impairment_ping_validation(
         )
     )
 
-    baseline = (
-        parse_ping(cell_dir / "preimpairment-ping.txt")
+    baseline, baseline_valid = (
+        baseline_preflight(cell_dir / "preimpairment-ping.txt")
         if policy_valid and policy == "transport_aware"
-        else {
-            "ping_transmitted": None,
-            "ping_received": None,
-            "ping_loss_pct": None,
-            "ping_rtt_mean_ms": None,
-        }
+        else (
+            {
+                "ping_transmitted": None,
+                "ping_received": None,
+                "ping_loss_pct": None,
+                "ping_rtt_mean_ms": None,
+                "baseline_preflight_valid": None,
+            },
+            None,
+        )
     )
-    baseline_valid = (
-        baseline["ping_transmitted"] == 10
-        and baseline["ping_received"] == 10
-        and baseline["ping_loss_pct"] == 0.0
-        and baseline["ping_rtt_mean_ms"] is not None
-        and baseline["ping_rtt_mean_ms"] <= BASELINE_PREFLIGHT_MAX_RTT_MS
-    ) if policy_valid and policy == "transport_aware" else None
 
     issues: list[str] = []
     if not policy_valid:
@@ -1727,27 +1764,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         "cell_id": axes.get("cell_id", cell_dir.name),
         "axes": {
             key: axes.get(key)
-            for key in (
-                "tunnel",
-                "rate_mbps",
-                "rtt_ms",
-                "queue_bdp",
-                "queue_kind",
-                "loss_model",
-                "loss_pct",
-                "burst_p",
-                "burst_r",
-                "burst_h",
-                "burst_k",
-                "flows",
-                "duration_s",
-                "warmup_s",
-                "workload_completion",
-                "impairment_validation",
-                "inner_cc",
-                "direction",
-                "competitor",
-            )
+            for key in PUBLISHED_AXIS_FIELDS
         },
         "runtime": {
             key: axes.get(key)
@@ -2216,6 +2233,8 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     cell_parser = sub.add_parser("cell")
     cell_parser.add_argument("cell_dir", type=Path)
+    baseline_parser = sub.add_parser("baseline")
+    baseline_parser.add_argument("ping_path", type=Path)
     campaign_parser = sub.add_parser("campaign")
     campaign_parser.add_argument("root", type=Path)
     campaign_parser.add_argument("--csv", type=Path, required=True)
@@ -2224,6 +2243,10 @@ def main() -> int:
     if args.command == "cell":
         print(json.dumps(analyze_cell(args.cell_dir), indent=2, sort_keys=True))
         return 0
+    if args.command == "baseline":
+        metrics, valid = baseline_preflight(args.ping_path)
+        print(json.dumps(metrics, indent=2, sort_keys=True))
+        return 0 if valid else 1
     return campaign(args.root, args.csv, args.report)
 
 
