@@ -34,6 +34,9 @@ TCP_EVENTS = (
 MECHANISM_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism.csv"
 )
+ADAPTIVE_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism-adaptive.csv"
+)
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -74,6 +77,43 @@ class MeltdownAnalysisTest(unittest.TestCase):
             {"mechanism-smoke"},
         )
         self.assertEqual({row["stage"] for row in rows[2:]}, {"mechanism"})
+
+    def test_adaptive_matrix_is_paired_and_predeclared(self) -> None:
+        with ADAPTIVE_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"35"})
+        self.assertEqual({row["rtt_ms"] for row in rows}, {"200"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"none"})
+
+        pairs: dict[tuple[str, str], set[str]] = {}
+        for row in rows:
+            pairs.setdefault((row["queue_bdp"], row["name"]), set()).add(
+                row["tunnel"]
+            )
+        self.assertEqual(
+            set(pairs),
+            {
+                ("0.1", "r35-q010-r200-16f"),
+                ("0.05", "r35-q005-r200-16f"),
+            },
+        )
+        self.assertTrue(all(tunnels == {"tcp", "udp"} for tunnels in pairs.values()))
+        self.assertEqual(
+            {row["stage"] for row in rows[:2]},
+            {"adaptive-smoke"},
+        )
+        self.assertEqual(
+            {row["stage"] for row in rows[2:]},
+            {"adaptive-fallback"},
+        )
 
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -166,7 +206,12 @@ class MeltdownAnalysisTest(unittest.TestCase):
                             "handle": "30:",
                             "packets": 10_000,
                         },
-                        {"kind": "fq_codel", "handle": "20:", "packets": 100},
+                        {
+                            "kind": "fq_codel",
+                            "handle": "20:",
+                            "packets": 100,
+                            "backlog": 1_000,
+                        },
                     ],
                 },
                 {
@@ -177,7 +222,12 @@ class MeltdownAnalysisTest(unittest.TestCase):
                             "handle": "30:",
                             "packets": 20_000,
                         },
-                        {"kind": "fq_codel", "handle": "20:", "packets": 140},
+                        {
+                            "kind": "fq_codel",
+                            "handle": "20:",
+                            "packets": 140,
+                            "backlog": 4_000,
+                        },
                     ],
                 },
             ]
@@ -195,6 +245,16 @@ class MeltdownAnalysisTest(unittest.TestCase):
                     start_ns + 1_000_000_000,
                 ),
                 40,
+            )
+            self.assertEqual(
+                ANALYZE.qdisc_window_peak(
+                    endpoint,
+                    "fq_codel",
+                    "backlog",
+                    start_ns,
+                    start_ns + 1_000_000_000,
+                ),
+                4_000,
             )
 
     def test_tcp_event_telemetry_requires_complete_well_formed_trace(self) -> None:

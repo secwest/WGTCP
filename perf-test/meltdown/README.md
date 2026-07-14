@@ -30,6 +30,7 @@ meltdown/
   INVESTIGATION_STATUS.md
   matrix-screening.csv
   matrix-mechanism.csv
+  matrix-mechanism-adaptive.csv
   harness/
     install-host.sh
     setup-tunnels.sh
