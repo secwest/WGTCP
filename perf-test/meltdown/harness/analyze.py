@@ -25,6 +25,20 @@ DELIVERY_BIN_NS = 100_000_000
 MAX_COUNTER_ALIGNMENT_NS = 75_000_000
 TCP_EVENTS_HEADER = "timestamp_ns,event,layer,sport,dport,value1,value2,value3"
 MAX_TRACE_SUMMARY_LAG = 1
+WORKLOAD_MIN_INTERVAL_FRACTION = 0.995
+WORKLOAD_MAX_INTERVAL_FRACTION = 1.005
+WORKLOAD_MAX_INTERVAL_GAP_S = 0.02
+WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S = 0.001
+FINAL_CONTROL_ERRORS = (
+    re.compile(
+        r"unable to receive results:\s*(?:Connection reset by peer|Broken pipe)?"
+    ),
+    re.compile(
+        r"unable to send control message - port may not be available, "
+        r"the other side may have stopped running, etc\.: Broken pipe"
+    ),
+    re.compile(r"control socket has closed unexpectedly"),
+)
 TCP_EVENT_SUMMARIES = {
     (event, layer)
     for event in ("rto", "retrans")
@@ -71,13 +85,27 @@ def as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def iperf_intervals(doc: dict[str, Any]) -> list[dict[str, float]]:
+def iperf_intervals(
+    doc: dict[str, Any],
+    summary_keys: tuple[str, ...] = ("sum_received", "sum"),
+    *,
+    allow_stream_fallback: bool = True,
+) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
     for interval in doc.get("intervals", []):
-        summary = interval.get("sum_received") or interval.get("sum")
-        if not summary:
+        if not isinstance(interval, dict):
+            continue
+        summary = next(
+            (
+                candidate
+                for key in summary_keys
+                if isinstance((candidate := interval.get(key)), dict) and candidate
+            ),
+            None,
+        )
+        if not summary and allow_stream_fallback:
             streams = interval.get("streams", [])
-            if streams:
+            if isinstance(streams, list) and streams:
                 summary = {
                     "start": min(as_float(s.get("start")) for s in streams),
                     "end": max(as_float(s.get("end")) for s in streams),
@@ -99,6 +127,246 @@ def iperf_intervals(doc: dict[str, Any]) -> list[dict[str, float]]:
             }
         )
     return rows
+
+
+def interval_completion_stats(
+    intervals: list[dict[str, float]], duration: float
+) -> dict[str, Any]:
+    span = (
+        max(row["end"] for row in intervals)
+        - min(row["start"] for row in intervals)
+        if intervals
+        else None
+    )
+    total = sum(row["seconds"] for row in intervals) if intervals else None
+    max_gap = (
+        max(
+            (
+                max(0.0, current["start"] - previous["end"])
+                for previous, current in zip(intervals, intervals[1:])
+            ),
+            default=0.0,
+        )
+        if intervals
+        else None
+    )
+    max_overlap = (
+        max(
+            (
+                max(0.0, previous["end"] - current["start"])
+                for previous, current in zip(intervals, intervals[1:])
+            ),
+            default=0.0,
+        )
+        if intervals
+        else None
+    )
+    max_duration_error = (
+        max(
+            abs(row["seconds"] - (row["end"] - row["start"]))
+            for row in intervals
+        )
+        if intervals
+        else None
+    )
+    ordered = bool(intervals) and all(
+        current["start"] > previous["start"]
+        and current["end"] > previous["end"]
+        for previous, current in zip(intervals, intervals[1:])
+    )
+    shape_valid = bool(intervals) and all(
+        math.isfinite(row[key])
+        for row in intervals
+        for key in ("start", "end", "seconds")
+    ) and all(
+        row["start"] >= 0
+        and row["end"] > row["start"]
+        and row["seconds"] > 0
+        for row in intervals
+    )
+    return {
+        "count": len(intervals),
+        "span_s": span,
+        "sum_s": total,
+        "span_fraction": span / duration if span is not None and duration > 0 else None,
+        "sum_fraction": total / duration if total is not None and duration > 0 else None,
+        "max_gap_s": max_gap,
+        "max_overlap_s": max_overlap,
+        "max_duration_error_s": max_duration_error,
+        "ordered": ordered,
+        "shape_valid": shape_valid,
+    }
+
+
+def interval_completion_issues(
+    stats: dict[str, Any], prefix: str = "interval"
+) -> list[str]:
+    issues: list[str] = []
+    if not stats["shape_valid"]:
+        issues.append(f"{prefix}_shape")
+    if not stats["ordered"]:
+        issues.append(f"{prefix}_order")
+    if (
+        stats["max_overlap_s"] is None
+        or stats["max_overlap_s"] > WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S
+    ):
+        issues.append(f"{prefix}_overlap")
+    if (
+        stats["max_duration_error_s"] is None
+        or stats["max_duration_error_s"] > WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S
+    ):
+        issues.append(f"{prefix}_duration")
+    if not (
+        stats["span_fraction"] is not None
+        and WORKLOAD_MIN_INTERVAL_FRACTION
+        <= stats["span_fraction"]
+        <= WORKLOAD_MAX_INTERVAL_FRACTION
+    ):
+        issues.append(f"{prefix}_span")
+    if not (
+        stats["sum_fraction"] is not None
+        and WORKLOAD_MIN_INTERVAL_FRACTION
+        <= stats["sum_fraction"]
+        <= WORKLOAD_MAX_INTERVAL_FRACTION
+    ):
+        issues.append(f"{prefix}_sum")
+    if (
+        stats["max_gap_s"] is None
+        or stats["max_gap_s"] > WORKLOAD_MAX_INTERVAL_GAP_S
+    ):
+        issues.append(f"{prefix}_gap")
+    return issues
+
+
+def final_control_error_allowed(error: str) -> bool:
+    normalized = error.strip()
+    return any(pattern.fullmatch(normalized) for pattern in FINAL_CONTROL_ERRORS)
+
+
+def workload_completion(
+    axes: dict[str, str],
+    document: dict[str, Any],
+    intervals: list[dict[str, float]],
+    delivery: dict[str, Any],
+    stderr: str | None = "",
+) -> tuple[dict[str, Any], list[str]]:
+    policy = (axes.get("workload_completion") or "strict").strip()
+    try:
+        workload_rc: int | None = int(axes["workload_rc"])
+    except (KeyError, TypeError, ValueError):
+        workload_rc = None
+    duration = as_float(axes.get("duration_s"))
+    expected_flows = max(1, as_int(axes.get("flows"), 1))
+    if axes.get("direction") == "bidir":
+        expected_flows *= 2
+    connected = document.get("start", {}).get("connected", [])
+    connected_flows = len(connected) if isinstance(connected, list) else 0
+    error = str(document.get("error") or "")
+    reported_iperf_version = str(document.get("start", {}).get("version") or "")
+    completion_intervals = (
+        iperf_intervals(
+            document,
+            ("sum",),
+            allow_stream_fallback=False,
+        )
+        if axes.get("direction") == "bidir"
+        else intervals
+    )
+    interval_stats = interval_completion_stats(completion_intervals, duration)
+    bidir_reverse_stats = (
+        interval_completion_stats(
+            iperf_intervals(
+                document,
+                ("sum_bidir_reverse",),
+                allow_stream_fallback=False,
+            ),
+            duration,
+        )
+        if axes.get("direction") == "bidir"
+        else None
+    )
+    delivery_complete = (
+        delivery.get("expected_bins", 0) > 0
+        and delivery.get("covered_bins") == delivery.get("expected_bins")
+    )
+    error_allowed = final_control_error_allowed(error)
+    metrics: dict[str, Any] = {
+        "workload_completion_policy": policy,
+        "workload_exit_code": workload_rc,
+        "workload_completion_fallback_used": False,
+        "workload_completion_valid": False,
+        "workload_error": error,
+        "workload_stderr_empty": stderr is not None and not stderr.strip(),
+        "workload_final_control_error_allowed": error_allowed,
+        "workload_reported_iperf_version": reported_iperf_version,
+        "workload_iperf_version_matches": (
+            bool(axes.get("iperf_version"))
+            and reported_iperf_version == axes.get("iperf_version")
+        ),
+        "workload_connected_flows": connected_flows,
+        "workload_expected_flows": expected_flows,
+        "workload_interval_count": interval_stats["count"],
+        "workload_interval_span_s": interval_stats["span_s"],
+        "workload_interval_sum_s": interval_stats["sum_s"],
+        "workload_interval_span_fraction": interval_stats["span_fraction"],
+        "workload_interval_sum_fraction": interval_stats["sum_fraction"],
+        "workload_interval_max_gap_s": interval_stats["max_gap_s"],
+        "workload_interval_max_overlap_s": interval_stats["max_overlap_s"],
+        "workload_interval_max_duration_error_s": interval_stats[
+            "max_duration_error_s"
+        ],
+        "workload_interval_ordered": interval_stats["ordered"],
+        "workload_interval_shape_valid": interval_stats["shape_valid"],
+        "workload_interface_delivery_complete": delivery_complete,
+    }
+    if bidir_reverse_stats is not None:
+        metrics.update(
+            {
+                f"workload_bidir_reverse_interval_{key}": value
+                for key, value in bidir_reverse_stats.items()
+            }
+        )
+
+    issues: list[str] = []
+    if policy == "strict":
+        if workload_rc != 0:
+            issues.append("exit_status")
+    elif policy == "interval_complete":
+        if (
+            not axes.get("iperf_version")
+            or reported_iperf_version != axes.get("iperf_version")
+        ):
+            issues.append("iperf_version")
+        if not re.fullmatch(r"[a-f0-9]{64}", axes.get("iperf_sha256", "")):
+            issues.append("iperf_sha256")
+        if connected_flows != expected_flows:
+            issues.append("connected_flows")
+        issues.extend(interval_completion_issues(interval_stats))
+        if bidir_reverse_stats is not None:
+            issues.extend(
+                interval_completion_issues(
+                    bidir_reverse_stats,
+                    "bidir_reverse_interval",
+                )
+            )
+        if not delivery_complete:
+            issues.append("interface_delivery")
+        if workload_rc not in (0, 1):
+            issues.append("exit_status")
+        elif workload_rc == 1 and not error_allowed:
+            issues.append("final_control_error")
+        if workload_rc == 0 and error.strip():
+            issues.append("unexpected_error")
+        if stderr is None or stderr.strip():
+            issues.append("stderr")
+    else:
+        issues.append("policy")
+
+    metrics["workload_completion_fallback_used"] = (
+        policy == "interval_complete" and workload_rc == 1 and not issues
+    )
+    metrics["workload_completion_valid"] = not issues
+    return metrics, issues
 
 
 def competitor_workload(
@@ -393,6 +661,8 @@ def timed_tcp_events(endpoint: Path) -> list[dict[str, Any]]:
         parts = line.split(",")
         if len(parts) < 5 or not parts[0].isdigit():
             continue
+        if len(parts) > 2 and parts[1:3] == ["capture", "meta"]:
+            continue
         try:
             event = {
                 "timestamp_ns": boot_epoch_ns + int(parts[0]),
@@ -411,7 +681,10 @@ def timed_tcp_events(endpoint: Path) -> list[dict[str, Any]]:
     return events
 
 
-def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
+def tcp_event_telemetry_issues(
+    endpoint: Path,
+    require_capture_anchor: bool = False,
+) -> list[str]:
     issues: list[str] = []
     if not (endpoint / "done").is_file():
         issues.append("sampler_not_done")
@@ -431,6 +704,8 @@ def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
 
     summaries: dict[tuple[str, str], int] = {}
     event_counts: Counter[tuple[str, str]] = Counter()
+    capture_markers: list[tuple[int, int, int]] = []
+    event_timestamps: list[int] = []
     for line_number, line in enumerate(lines[1:], start=2):
         if not line:
             continue
@@ -450,6 +725,19 @@ def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
             else:
                 summaries[(parts[1], parts[2])] = int(parts[3])
             continue
+        if parts[1:3] == ["capture", "meta"]:
+            if (
+                not parts[0].isdigit()
+                or not all(value.isdigit() for value in parts[3:])
+                or parts[4] != "0"
+                or parts[6:] != ["0", "0"]
+            ):
+                issues.append(f"events_malformed_line_{line_number}")
+            else:
+                capture_markers.append(
+                    (int(parts[0]), int(parts[3]), int(parts[5]))
+                )
+            continue
         if (
             not parts[0].isdigit()
             or parts[1] not in {"rto", "retrans", "cwnd"}
@@ -459,6 +747,9 @@ def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
             issues.append(f"events_malformed_line_{line_number}")
         elif parts[1] in {"rto", "retrans"}:
             event_counts[(parts[1], parts[2])] += 1
+            event_timestamps.append(int(parts[0]))
+        else:
+            event_timestamps.append(int(parts[0]))
 
     if set(summaries) != TCP_EVENT_SUMMARIES:
         issues.append("events_summary")
@@ -468,6 +759,28 @@ def tcp_event_telemetry_issues(endpoint: Path) -> list[str]:
         for key in TCP_EVENT_SUMMARIES
     ):
         issues.append("events_summary_mismatch")
+    anchor_mode = status.get("cutoff_anchor")
+    if anchor_mode == "attached_command":
+        if len(capture_markers) != 1:
+            issues.append("events_capture_anchor")
+        else:
+            capture_start_ns, capture_duration_s, capture_until_ns = capture_markers[0]
+            if (
+                status.get("capture_duration_s") != str(capture_duration_s)
+                or status.get("capture_marker_count") != "1"
+                or status.get("quiescence_s") != "1"
+                or capture_duration_s <= 0
+                or capture_until_ns - capture_start_ns
+                != capture_duration_s * 1_000_000_000
+            ):
+                issues.append("events_capture_anchor")
+            if any(
+                timestamp < capture_start_ns or timestamp > capture_until_ns
+                for timestamp in event_timestamps
+            ):
+                issues.append("events_capture_window")
+    elif require_capture_anchor or anchor_mode is not None or capture_markers:
+        issues.append("events_capture_anchor")
     if clock_boot_epoch_ns(endpoint) is None:
         issues.append("clock_anchor")
     return issues
@@ -984,6 +1297,17 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     delivery = interface_delivery_bins(cell_dir, direction, warmup, duration)
     bps = delivery["bps"]
     iperf_bps = [row["bits_per_second"] for row in intervals]
+    completion_metrics, completion_issues = workload_completion(
+        axes,
+        iperf if isinstance(iperf, dict) else {},
+        intervals,
+        delivery,
+        (
+            (cell_dir / "iperf3.stderr").read_text(errors="replace")
+            if (cell_dir / "iperf3.stderr").is_file()
+            else None
+        ),
+    )
     flows = max(1, as_int(axes.get("flows"), 1))
     expected_bins = delivery["expected_bins"]
     stall_fraction = sum(value <= 0 for value in bps) / len(bps) if bps else None
@@ -1017,7 +1341,12 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     telemetry_issues = [
         f"{endpoint}:{issue}"
         for endpoint in ("client", "server")
-        for issue in tcp_event_telemetry_issues(cell_dir / endpoint)
+        for issue in tcp_event_telemetry_issues(
+            cell_dir / endpoint,
+            require_capture_anchor=(
+                axes.get("workload_completion") == "interval_complete"
+            ),
+        )
     ]
     carrier_endpoints = {
         endpoint: tcp_carrier_stability(
@@ -1128,8 +1457,12 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
 
     anomalies = kernel_anomalies(cell_dir / "client") + kernel_anomalies(cell_dir / "server")
     invalid_reasons: list[str] = []
-    if as_int(axes.get("workload_rc"), 1) != 0:
-        invalid_reasons.append("workload_rc")
+    if completion_issues:
+        invalid_reasons.append(
+            "workload_rc"
+            if completion_metrics["workload_completion_policy"] == "strict"
+            else "workload_completion"
+        )
     if delivery["covered_bins"] < expected_bins * 0.80:
         invalid_reasons.append("missing_delivery_bins")
     if ping["ping_loss_pct"] is None or ping["ping_loss_pct"] >= 100:
@@ -1201,9 +1534,20 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
                 "flows",
                 "duration_s",
                 "warmup_s",
+                "workload_completion",
                 "inner_cc",
                 "direction",
                 "competitor",
+            )
+        },
+        "runtime": {
+            key: axes.get(key)
+            for key in (
+                "module_srcversion",
+                "module_sha256",
+                "tool_sha256",
+                "iperf_version",
+                "iperf_sha256",
             )
         },
         "derived_controls": {
@@ -1220,6 +1564,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "iperf_goodput_mbps": (
                 statistics.fmean(iperf_bps) / 1e6 if iperf_bps else None
             ),
+            **completion_metrics,
             "stall_fraction_100ms": stall_fraction,
             "longest_stall_ms": longest_zero_run(bps) * 100,
             "first_quartile_mbps": first_q / 1e6 if first_q is not None else None,
@@ -1301,11 +1646,18 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "trend_drop_fraction": TREND_THRESHOLD,
             "trend_slope_t": TREND_T_THRESHOLD,
             "inner_rto_per_flow_min": RTO_THRESHOLD,
+            "workload_interval_min_fraction": WORKLOAD_MIN_INTERVAL_FRACTION,
+            "workload_interval_max_fraction": WORKLOAD_MAX_INTERVAL_FRACTION,
+            "workload_interval_max_gap_s": WORKLOAD_MAX_INTERVAL_GAP_S,
+            "workload_interval_max_boundary_error_s": (
+                WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S
+            ),
         },
         "valid": not invalid_reasons,
         "invalid_reasons": invalid_reasons,
         "impairment_configuration_issues": impairment_issues,
         "tcp_event_telemetry_issues": telemetry_issues,
+        "workload_completion_issues": completion_issues,
         "competitor_workload_issues": competitor_issues,
         "kernel_anomalies": anomalies,
         "classification": classification,
@@ -1327,6 +1679,7 @@ CSV_FIELDS = [
     "burst_k",
     "flows",
     "duration_s",
+    "workload_completion",
     "inner_cc",
     "direction",
     "competitor",
@@ -1334,6 +1687,39 @@ CSV_FIELDS = [
     "classification",
     "goodput_mbps",
     "iperf_goodput_mbps",
+    "iperf_version",
+    "iperf_sha256",
+    "workload_exit_code",
+    "workload_completion_fallback_used",
+    "workload_completion_valid",
+    "workload_error",
+    "workload_stderr_empty",
+    "workload_final_control_error_allowed",
+    "workload_reported_iperf_version",
+    "workload_iperf_version_matches",
+    "workload_connected_flows",
+    "workload_expected_flows",
+    "workload_interval_count",
+    "workload_interval_span_s",
+    "workload_interval_sum_s",
+    "workload_interval_span_fraction",
+    "workload_interval_sum_fraction",
+    "workload_interval_max_gap_s",
+    "workload_interval_max_overlap_s",
+    "workload_interval_max_duration_error_s",
+    "workload_interval_ordered",
+    "workload_interval_shape_valid",
+    "workload_bidir_reverse_interval_count",
+    "workload_bidir_reverse_interval_span_s",
+    "workload_bidir_reverse_interval_sum_s",
+    "workload_bidir_reverse_interval_span_fraction",
+    "workload_bidir_reverse_interval_sum_fraction",
+    "workload_bidir_reverse_interval_max_gap_s",
+    "workload_bidir_reverse_interval_max_overlap_s",
+    "workload_bidir_reverse_interval_max_duration_error_s",
+    "workload_bidir_reverse_interval_ordered",
+    "workload_bidir_reverse_interval_shape_valid",
+    "workload_interface_delivery_complete",
     "udp_control_goodput_ratio",
     "delivery_bin_coverage",
     "stall_fraction_100ms",
@@ -1376,6 +1762,7 @@ CSV_FIELDS = [
 def flatten(doc: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {"cell_id": doc.get("cell_id")}
     row.update(doc.get("axes", {}))
+    row.update(doc.get("runtime", {}))
     row.update(doc.get("metrics", {}))
     row["valid"] = doc.get("valid")
     row["classification"] = doc.get("classification")
@@ -1492,6 +1879,28 @@ def campaign_manifest_issues(root: Path, discovered: set[str]) -> list[str]:
     failed_value = manifest.get("failed_cells", [])
     if not isinstance(failed_value, list) or failed_value:
         issues.append("campaign_failed_cells")
+    matrix_value = manifest.get("matrix_expected_cells")
+    targeted_value = manifest.get("targeted_selection")
+    qualifying_value = manifest.get("qualifying_complete")
+    if matrix_value is not None:
+        if not isinstance(matrix_value, list) or not all(
+            isinstance(value, str) for value in matrix_value
+        ):
+            issues.append("campaign_matrix_cells")
+        elif (
+            isinstance(expected_value, list)
+            and not set(expected_value).issubset(set(matrix_value))
+        ):
+            issues.append("campaign_matrix_selection")
+        elif targeted_value != (
+            isinstance(expected_value, list)
+            and set(expected_value) != set(matrix_value)
+        ):
+            issues.append("campaign_targeted_selection")
+        if qualifying_value is not (
+            manifest.get("status") == "complete" and targeted_value is False
+        ):
+            issues.append("campaign_qualifying_complete")
     campaign_fingerprint = manifest.get("campaign_fingerprint")
     fingerprints = manifest.get("cell_fingerprints")
     if (

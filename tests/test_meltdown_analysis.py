@@ -8,6 +8,7 @@ import csv
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,49 @@ BURST_MATRIX = ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst.csv"
 BURST_RECOVERY_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-recovery.csv"
 )
+BURST_QUALIFIED_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-qualified.csv"
+)
+
+
+def workload_document(
+    interval_count: int = 599,
+    connected_flows: int = 16,
+    error: str | None = "unable to receive results: ",
+    bidirectional: bool = False,
+) -> dict[str, object]:
+    intervals = []
+    for index in range(interval_count):
+        summary = {
+            "start": index / 10,
+            "end": (index + 1) / 10,
+            "seconds": 0.1,
+            "bytes": 1_000,
+            "bits_per_second": 80_000,
+            "omitted": False,
+        }
+        if bidirectional:
+            intervals.append(
+                {
+                    "sum": summary,
+                    "sum_bidir_reverse": dict(summary),
+                }
+            )
+        else:
+            intervals.append({"sum_received": summary})
+    document: dict[str, object] = {
+        "start": {
+            "version": "iperf 3.16",
+            "connected": [
+                {"local_port": 40_000 + index, "remote_port": 5201}
+                for index in range(connected_flows)
+            ]
+        },
+        "intervals": intervals,
+    }
+    if error is not None:
+        document["error"] = error
+    return document
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -217,6 +261,42 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertEqual({row["direction"] for row in rows}, {"reverse"})
         self.assertEqual({row["competitor"] for row in rows}, {"0"})
         self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+
+    def test_burst_qualified_matrix_is_paired_and_predeclared(self) -> None:
+        with BURST_QUALIFIED_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            sum(int(row["repetitions"]) for row in rows),
+            4,
+        )
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["stage"] for row in rows}, {"burst-qualified-smoke"})
+        self.assertEqual(
+            {row["name"] for row in rows},
+            {"ge2-25-90-1-r200-q1-16f"},
+        )
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"50"})
+        self.assertEqual({row["rtt_ms"] for row in rows}, {"200"})
+        self.assertEqual({row["queue_bdp"] for row in rows}, {"1"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"gemodel"})
+        self.assertEqual({row["burst_p"] for row in rows}, {"2"})
+        self.assertEqual({row["burst_r"] for row in rows}, {"25"})
+        self.assertEqual({row["burst_h"] for row in rows}, {"90"})
+        self.assertEqual({row["burst_k"] for row in rows}, {"1"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual(
+            {row["workload_completion"] for row in rows},
+            {"interval_complete"},
+        )
+        self.assertEqual({row["inner_cc"] for row in rows}, {"cubic"})
+        self.assertEqual({row["direction"] for row in rows}, {"reverse"})
+        self.assertEqual({row["competitor"] for row in rows}, {"0"})
 
     def test_netem_loss_configuration_is_fail_closed(self) -> None:
         axes = {
@@ -405,6 +485,307 @@ class MeltdownAnalysisTest(unittest.TestCase):
             self.assertEqual(result["covered_bins"], 1)
             self.assertEqual(result["bps"], [8000.0])
 
+    def test_missing_completion_policy_preserves_strict_exit_rule(self) -> None:
+        axes = {
+            "workload_rc": "1",
+            "duration_s": "60",
+            "flows": "16",
+            "direction": "reverse",
+        }
+        document = workload_document()
+        intervals = ANALYZE.iperf_intervals(document)
+        delivery = {"covered_bins": 600, "expected_bins": 600}
+
+        metrics, issues = ANALYZE.workload_completion(
+            axes, document, intervals, delivery
+        )
+
+        self.assertEqual(metrics["workload_completion_policy"], "strict")
+        self.assertEqual(issues, ["exit_status"])
+        self.assertFalse(metrics["workload_completion_fallback_used"])
+
+        axes["workload_rc"] = "0"
+        metrics, issues = ANALYZE.workload_completion(axes, {}, [], {})
+        self.assertEqual(issues, [])
+        self.assertTrue(metrics["workload_completion_valid"])
+
+    def test_interval_completion_accepts_only_qualified_final_control_failure(
+        self,
+    ) -> None:
+        axes = {
+            "workload_completion": "interval_complete",
+            "workload_rc": "1",
+            "duration_s": "60",
+            "flows": "16",
+            "direction": "reverse",
+            "iperf_version": "iperf 3.16",
+            "iperf_sha256": "a" * 64,
+        }
+        delivery = {"covered_bins": 600, "expected_bins": 600}
+        errors = (
+            "unable to receive results: ",
+            "unable to receive results: Connection reset by peer",
+            "unable to send control message - port may not be available, "
+            "the other side may have stopped running, etc.: Broken pipe",
+            "control socket has closed unexpectedly",
+        )
+        for error in errors:
+            with self.subTest(error=error):
+                document = workload_document(error=error)
+                metrics, issues = ANALYZE.workload_completion(
+                    axes,
+                    document,
+                    ANALYZE.iperf_intervals(document),
+                    delivery,
+                )
+                self.assertEqual(issues, [])
+                self.assertTrue(metrics["workload_completion_fallback_used"])
+                self.assertTrue(metrics["workload_completion_valid"])
+                self.assertEqual(metrics["workload_connected_flows"], 16)
+                self.assertEqual(metrics["workload_interval_count"], 599)
+                self.assertAlmostEqual(
+                    metrics["workload_interval_span_fraction"],
+                    59.9 / 60,
+                )
+                self.assertAlmostEqual(
+                    metrics["workload_interval_sum_fraction"],
+                    59.9 / 60,
+                )
+                self.assertEqual(metrics["workload_interval_max_gap_s"], 0.0)
+                self.assertTrue(
+                    metrics["workload_interface_delivery_complete"]
+                )
+                self.assertTrue(metrics["workload_iperf_version_matches"])
+                self.assertTrue(metrics["workload_stderr_empty"])
+
+    def test_interval_completion_fails_closed_on_incomplete_evidence(self) -> None:
+        base_axes = {
+            "workload_completion": "interval_complete",
+            "workload_rc": "1",
+            "duration_s": "60",
+            "flows": "16",
+            "direction": "reverse",
+            "iperf_version": "iperf 3.16",
+            "iperf_sha256": "a" * 64,
+        }
+        complete_delivery = {"covered_bins": 600, "expected_bins": 600}
+
+        cases: list[tuple[str, dict[str, str], dict[str, object], dict[str, int], str]] = [
+            (
+                "wrong error",
+                base_axes,
+                workload_document(error="unable to connect to server"),
+                complete_delivery,
+                "final_control_error",
+            ),
+            (
+                "wrong flow count",
+                base_axes,
+                workload_document(connected_flows=15),
+                complete_delivery,
+                "connected_flows",
+            ),
+            (
+                "truncated intervals",
+                base_axes,
+                workload_document(interval_count=590),
+                complete_delivery,
+                "interval_span",
+            ),
+            (
+                "incomplete interface delivery",
+                base_axes,
+                workload_document(),
+                {"covered_bins": 599, "expected_bins": 600},
+                "interface_delivery",
+            ),
+            (
+                "missing iperf identity",
+                {key: value for key, value in base_axes.items() if key != "iperf_version"},
+                workload_document(),
+                complete_delivery,
+                "iperf_version",
+            ),
+            (
+                "missing iperf hash",
+                {
+                    key: value
+                    for key, value in base_axes.items()
+                    if key != "iperf_sha256"
+                },
+                workload_document(),
+                complete_delivery,
+                "iperf_sha256",
+            ),
+        ]
+        gap_document = workload_document()
+        gap_interval = gap_document["intervals"][300]["sum_received"]
+        gap_interval["start"] += 0.05
+        gap_interval["end"] += 0.05
+        cases.append(
+            (
+                "material interval gap",
+                base_axes,
+                gap_document,
+                complete_delivery,
+                "interval_gap",
+            )
+        )
+        reordered_document = workload_document()
+        reordered_intervals = reordered_document["intervals"]
+        reordered_intervals[100], reordered_intervals[200] = (
+            reordered_intervals[200],
+            reordered_intervals[100],
+        )
+        cases.append(
+            (
+                "reordered intervals",
+                base_axes,
+                reordered_document,
+                complete_delivery,
+                "interval_order",
+            )
+        )
+        duplicate_document = workload_document()
+        duplicate_intervals = duplicate_document["intervals"]
+        duplicate_intervals[200] = duplicate_intervals[199]
+        cases.append(
+            (
+                "duplicate intervals",
+                base_axes,
+                duplicate_document,
+                complete_delivery,
+                "interval_order",
+            )
+        )
+        duration_document = workload_document()
+        duration_document["intervals"][200]["sum_received"]["seconds"] = 0.05
+        cases.append(
+            (
+                "inconsistent interval duration",
+                base_axes,
+                duration_document,
+                complete_delivery,
+                "interval_duration",
+            )
+        )
+        cases.append(
+            (
+                "abnormal exit status",
+                {**base_axes, "workload_rc": "137"},
+                workload_document(),
+                complete_delivery,
+                "exit_status",
+            )
+        )
+        cases.append(
+            (
+                "malformed exit status",
+                {**base_axes, "workload_rc": "not-an-integer"},
+                workload_document(),
+                complete_delivery,
+                "exit_status",
+            )
+        )
+
+        for name, axes, document, delivery, expected_issue in cases:
+            with self.subTest(name=name):
+                metrics, issues = ANALYZE.workload_completion(
+                    axes,
+                    document,
+                    ANALYZE.iperf_intervals(document),
+                    delivery,
+                )
+                self.assertIn(expected_issue, issues)
+                self.assertFalse(metrics["workload_completion_fallback_used"])
+                self.assertFalse(metrics["workload_completion_valid"])
+
+        stderr_document = workload_document()
+        metrics, issues = ANALYZE.workload_completion(
+            base_axes,
+            stderr_document,
+            ANALYZE.iperf_intervals(stderr_document),
+            complete_delivery,
+            "segmentation fault",
+        )
+        self.assertIn("stderr", issues)
+        self.assertFalse(metrics["workload_completion_fallback_used"])
+
+    def test_interval_completion_requires_both_bidirectional_series(self) -> None:
+        axes = {
+            "workload_completion": "interval_complete",
+            "workload_rc": "1",
+            "duration_s": "60",
+            "flows": "16",
+            "direction": "bidir",
+            "iperf_version": "iperf 3.16",
+            "iperf_sha256": "a" * 64,
+        }
+        delivery = {"covered_bins": 1200, "expected_bins": 1200}
+        document = workload_document(
+            connected_flows=32,
+            bidirectional=True,
+        )
+
+        metrics, issues = ANALYZE.workload_completion(
+            axes,
+            document,
+            ANALYZE.iperf_intervals(document),
+            delivery,
+        )
+
+        self.assertEqual(issues, [])
+        self.assertEqual(metrics["workload_connected_flows"], 32)
+        self.assertEqual(metrics["workload_bidir_reverse_interval_count"], 599)
+        self.assertTrue(metrics["workload_bidir_reverse_interval_shape_valid"])
+
+        missing_reverse = workload_document(
+            connected_flows=32,
+            bidirectional=True,
+        )
+        for interval in missing_reverse["intervals"]:
+            del interval["sum_bidir_reverse"]
+        _, issues = ANALYZE.workload_completion(
+            axes,
+            missing_reverse,
+            ANALYZE.iperf_intervals(missing_reverse),
+            delivery,
+        )
+        self.assertIn("bidir_reverse_interval_shape", issues)
+        self.assertIn("bidir_reverse_interval_span", issues)
+
+        missing_primary = workload_document(
+            connected_flows=32,
+            bidirectional=True,
+        )
+        for interval in missing_primary["intervals"]:
+            del interval["sum"]
+        _, issues = ANALYZE.workload_completion(
+            axes,
+            missing_primary,
+            ANALYZE.iperf_intervals(missing_primary),
+            delivery,
+        )
+        self.assertIn("interval_shape", issues)
+        self.assertIn("interval_span", issues)
+
+        reordered_reverse = workload_document(
+            connected_flows=32,
+            bidirectional=True,
+        )
+        reverse_intervals = reordered_reverse["intervals"]
+        left = reverse_intervals[100]["sum_bidir_reverse"]
+        right = reverse_intervals[200]["sum_bidir_reverse"]
+        reverse_intervals[100]["sum_bidir_reverse"] = right
+        reverse_intervals[200]["sum_bidir_reverse"] = left
+        _, issues = ANALYZE.workload_completion(
+            axes,
+            reordered_reverse,
+            ANALYZE.iperf_intervals(reordered_reverse),
+            delivery,
+        )
+        self.assertIn("bidir_reverse_interval_order", issues)
+
     def test_htb_rate_accepts_text_and_json_tc_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "class-pre.json"
@@ -515,6 +896,13 @@ class MeltdownAnalysisTest(unittest.TestCase):
             )
 
             self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
+            self.assertIn(
+                "events_capture_anchor",
+                ANALYZE.tcp_event_telemetry_issues(
+                    endpoint,
+                    require_capture_anchor=True,
+                ),
+            )
 
             (endpoint / "tcp-events.status").write_text(
                 "exit_code=1\nelapsed_ns=1000000\ncomplete=no\n",
@@ -572,6 +960,63 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 ANALYZE.tcp_event_telemetry_issues(endpoint),
             )
 
+    def test_tcp_event_capture_anchor_is_attached_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+            (endpoint / "done").touch()
+            (endpoint / "clock.txt").write_text(
+                "EpochNs=1700000000000000000\nUptimeSeconds=100.0\n",
+                encoding="ascii",
+            )
+            (endpoint / "tcp-events.status").write_text(
+                "exit_code=0\n"
+                "elapsed_ns=10000000000\n"
+                "complete=yes\n"
+                "capture_duration_s=9\n"
+                "quiescence_s=1\n"
+                "cutoff_anchor=attached_command\n"
+                "capture_marker_count=1\n",
+                encoding="ascii",
+            )
+            start = 100_000_000_000
+            cutoff = start + 9_000_000_000
+            marker = f"{start},capture,meta,9,0,{cutoff},0,0\n"
+            summaries = "".join(
+                f"summary,{event},{layer},0,0,0,0,0\n"
+                for event in ("rto", "retrans")
+                for layer in ("inner", "outer", "competitor")
+            )
+            (endpoint / "tcp-events.csv").write_text(
+                ANALYZE.TCP_EVENTS_HEADER + "\n" + marker + summaries,
+                encoding="ascii",
+            )
+
+            self.assertEqual(
+                ANALYZE.tcp_event_telemetry_issues(
+                    endpoint,
+                    require_capture_anchor=True,
+                ),
+                [],
+            )
+
+            late = f"{cutoff + 1},retrans,inner,40000,5201,0,0,0\n"
+            late_summaries = summaries.replace(
+                "summary,retrans,inner,0,0,0,0,0",
+                "summary,retrans,inner,1,0,0,0,0",
+            )
+            (endpoint / "tcp-events.csv").write_text(
+                ANALYZE.TCP_EVENTS_HEADER
+                + "\n"
+                + marker
+                + late
+                + late_summaries,
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_capture_window",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
     def test_tcp_event_summaries_use_atomic_aggregation(self) -> None:
         for counter in (
             "inner_rto",
@@ -583,6 +1028,54 @@ class MeltdownAnalysisTest(unittest.TestCase):
         ):
             self.assertIn(f"@{counter}++;", TCP_EVENTS)
             self.assertNotIn(f"@{counter} = @{counter} + 1;", TCP_EVENTS)
+
+    def test_tcp_event_cutoff_precedes_every_probe_mutation(self) -> None:
+        self.assertEqual(ANALYZE.MAX_TRACE_SUMMARY_LAG, 1)
+        self.assertIn(
+            "@capture_until_ns = @capture_start_ns + $1 * 1000000000;",
+            TCP_EVENTS,
+        )
+        anchor_start = TCP_EVENTS.index("tracepoint:syscalls:sys_enter_execve")
+        first_data_probe = TCP_EVENTS.index("tracepoint:tcp:tcp_retransmit_skb")
+        anchor = TCP_EVENTS[anchor_start:first_data_probe]
+        self.assertIn("pid == cpid && @capture_started == 0", anchor)
+        self.assertIn(",capture,meta,", anchor)
+        self.assertLess(
+            anchor.index("@capture_until_ns ="),
+            anchor.index("@capture_started = 1;"),
+        )
+        probe_starts = [
+            match.start()
+            for match in re.finditer(
+                r"(?m)^(?:tracepoint:tcp|kprobe:tcp)",
+                TCP_EVENTS,
+            )
+        ]
+        self.assertEqual(len(probe_starts), 5)
+        for index, start in enumerate(probe_starts):
+            end = (
+                probe_starts[index + 1]
+                if index + 1 < len(probe_starts)
+                else TCP_EVENTS.index("\nEND\n", start)
+            )
+            block = TCP_EVENTS[start:end]
+            guard = block.index(
+                "if (@capture_started && $now <= @capture_until_ns) {"
+            )
+            mutations = [
+                match.start()
+                for match in re.finditer(
+                    r"@\w+(?:\[[^\n]+\])?\s*(?:\+\+|=)|printf\(\"%llu",
+                    block,
+                )
+            ]
+            self.assertTrue(mutations)
+            self.assertTrue(all(guard < mutation for mutation in mutations))
+        self.assertIn("capture_duration=$((DURATION - 1))", SAMPLER)
+        self.assertIn('"$capture_duration" \\', SAMPLER)
+        self.assertIn("printf 'quiescence_s=1\\n'", SAMPLER)
+        self.assertIn("cutoff_anchor=attached_command", SAMPLER)
+        self.assertIn("for _ in {1..250}; do", SAMPLER)
 
     def test_kernel_anomalies_match_colon_terminated_signatures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -800,6 +1293,50 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn('"cell.fingerprint"', ORCHESTRATOR)
         self.assertIn("loaded module or host build identities differ", ORCHESTRATOR)
         self.assertIn('-c "sleep $DURATION"', SAMPLER)
+        self.assertIn('$workloadCompletion = "strict"', ORCHESTRATOR)
+        self.assertIn(
+            '"workload_completion=$workloadCompletion"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '"iperf_version=$runtimeIperfVersion"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '"iperf_sha256=$runtimeIperfHash"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "$runtimeIperfVersionA -ne $runtimeIperfVersionB",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "$runtimeIperfHashA -ne $runtimeIperfHashB",
+            ORCHESTRATOR,
+        )
+        self.assertIn("/usr/bin/iperf3 -c $targetIp", ORCHESTRATOR)
+        self.assertIn(
+            "grep -Fq 'path=/usr/bin/iperf3 ;'",
+            ORCHESTRATOR,
+        )
+        self.assertIn("sudo readlink -f /proc/`$pid/exe", ORCHESTRATOR)
+        self.assertIn("sudo sha256sum /proc/`$pid/exe", ORCHESTRATOR)
+        self.assertIn("set -e; sudo systemctl restart $unit", ORCHESTRATOR)
+        self.assertIn(
+            '"wgtcp-meltdown-iperf-competitor.service" $runtimeIperfHash',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '$workloadRcPath = Join-Path $localCell "workload.rc"',
+            ORCHESTRATOR,
+        )
+        self.assertGreaterEqual(ORCHESTRATOR.count('"missing"'), 2)
+        self.assertIn(
+            'Wait-RemoteFiles "$remoteCellA/ready" "$remoteCellB/client/ready" 30',
+            ORCHESTRATOR,
+        )
+        self.assertIn("matrix_expected_cells", ORCHESTRATOR)
+        self.assertIn("qualifying_complete", ORCHESTRATOR)
         self.assertIn(
             "$sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 30",
             ORCHESTRATOR,
@@ -807,7 +1344,7 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn("[string[]] $Cell = @()", ORCHESTRATOR)
         self.assertIn("$selectedCells.Contains($cellId)", ORCHESTRATOR)
         restart_index = ORCHESTRATOR.index(
-            "sudo systemctl restart wgtcp-meltdown-iperf-inner.service"
+            '"wgtcp-meltdown-iperf-inner.service" $runtimeIperfHash'
         )
         sampler_index = ORCHESTRATOR.index(
             "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverUnit)"

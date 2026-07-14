@@ -46,23 +46,43 @@ when the same named repetition is valid for both transports.
 
 A cell is invalid rather than negative evidence if any of these apply:
 
-- workload exit status is nonzero or fewer than 80% of expected 100 ms bins
-  are present;
+- the default `strict` workload-completion policy sees a nonzero exit status,
+  or fewer than 80% of expected 100 ms bins are present;
+- a matrix that explicitly selects the prospective `interval_complete` policy
+  lacks the exact requested connected-flow count, 99.5%-100.5% relative
+  interval span and summed interval duration, at most a 20 ms interior interval
+  gap, chronological non-duplicated intervals with at most 1 ms overlap and
+  duration/boundary error, or 100% independent tunnel-interface delivery-bin
+  coverage. Bidirectional workloads must independently satisfy every interval
+  requirement for both `sum` and `sum_bidir_reverse`;
+- an `interval_complete` workload emits stderr, has any exit status other than
+  zero or one, lacks an explicit recorded exit status, or exits one for anything
+  other than the allowlisted
+  final-control errors `unable to receive results:` (optionally followed by
+  `Connection reset by peer` or `Broken pipe`), the exact broken-pipe
+  `unable to send control message` diagnostic, or
+  `control socket has closed unexpectedly`;
 - the selected tunnel did not pass a preflight ping;
 - either expected TCP carrier tuple changed or disappeared, or 200 ms socket
   samples do not cover the complete workload interval;
 - either endpoint sampler did not complete, BPF output lacks any of its six
   required summaries, a summary exceeds its detailed emitted-event count, or
   it trails that count by more than the one final event allowed at tracer
-  shutdown;
+  shutdown. Prospectively, an attached-command marker anchors the absolute
+  monotonic BPF cutoff only after every probe is attached; workload readiness
+  requires that marker. Event probes stop one second before tracer exit so
+  summaries run after a quiescent interval; the historical one-event allowance
+  is not increased;
 - the shaped class saw no packets;
 - configured rate, delay, queue kind, queue bytes, loss model, or loss
   parameters do not match the manifest;
 - a loss cell lacks monotonic IFB netem counters, processes no netem traffic,
   realizes no drops, or its measured loss is outside 0.5x-2x the model's
   stationary expectation;
-- source, runtime build, matrix-axis, repetition, cell, or campaign
-  fingerprints do not match;
+- source, runtime build, common fixed-path endpoint iperf version and executable
+  SHA-256, every selected restarted inner or competitor server process
+  executable and hash, matrix-axis, repetition, cell, or campaign fingerprints
+  do not match;
 - a competing-flow cell lacks a successful, nonzero, sufficiently long
   competitor workload;
 - qdisc restoration was not verified before result publication;
@@ -77,11 +97,27 @@ The historical matrix fields `burst_h` and `burst_k` are passed directly as
 netem's `1-H` and `1-K` arguments and are verified against those exact live
 qdisc JSON keys. They are loss probabilities, not delivery probabilities.
 
+`workload_completion` is opt-in. A missing field is `strict`, preserving all
+historical validity decisions. `interval_complete` applies its flow, interval,
+gap, delivery, and error checks to both matched transports. A zero exit status
+still must satisfy the independent completeness checks. A nonzero status can
+qualify only when every completeness check passes and the JSON error is in the
+final-control allowlist. The JSON-reported client version must match the pinned
+version, and stderr must be empty. Bidirectional runs validate and publish the
+forward and reverse interval series independently. The analyzer publishes
+policy, exit code, fallback use, error allowlisting, stderr state, version
+match, connected/expected flows, interval count/span/sum, relative coverages,
+maximum gap/overlap/duration error, ordering, and interface-delivery
+completeness.
+
 An exact-cell rerun remains a separate campaign when its source fingerprint
 changes. A qualified composite may select it only when both source manifests
 are complete, runtime module/tool identities and matrix axes match, the base
-cell is invalid, and the replacement is valid. The original cell is never
-overwritten; the composite records the source campaign and cell fingerprint for
+campaign explicitly attests its full non-targeted `matrix_expected_cells`, the
+base cell is invalid, and the replacement is valid. Legacy bases without that
+attestation are rejected. Current-format sources must also provide both iperf
+identity fields. The original cell is never overwritten; the composite
+records the source campaign and cell fingerprint for
 every selected row, plus a SHA-256 of the selected analyzed cell document.
 
 ## 4. Bottleneck construction
@@ -125,7 +161,8 @@ Per endpoint:
 - `tcp_retransmit_timer` RTO events split by inner and outer ports;
 - `tcp_retransmit_skb` retransmission events split by layer;
 - complete BPF status plus reconciled inner, outer, and competitor
-  RTO/retransmission summaries;
+  RTO/retransmission summaries, absolute capture cutoff, and one-second
+  pre-summary quiescence;
 - `ss -tinm` every 200 ms for cwnd, ssthresh, RTT, RTO, delivery rate, and
   socket queues, plus completion and full-window TCP carrier tuple stability;
 - `tc -s -j qdisc/class/filter` every 200 ms;
@@ -137,6 +174,9 @@ Per workload:
 
 - 100 ms tunnel-interface delivery and goodput, with iperf goodput retained as
   a cross-check;
+- workload-completion policy, fallback use, connected-flow count, relative
+  interval span/sum, maximum interval gap, interface-delivery completeness,
+  and common endpoint iperf version and executable hash;
 - first/last-quartile goodput and fitted trend;
 - stall fraction and longest zero-delivery run;
 - inner and outer RTO/retransmission rates;
@@ -175,13 +215,20 @@ Per workload:
    direction. All four executions must be valid, including realized IFB loss
    within the predeclared 0.5x-2x band, and at least one TCP execution must
    record an outer retransmission or RTO before broader work.
-11. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+11. `burst-qualified-smoke`: a separately fingerprinted exact four-execution
+   rerun of `2/25/90/1` after the prior gate exposed final-control survivorship
+   bias and tracer shutdown races. It explicitly selects
+   `workload_completion=interval_complete`, fingerprints the identical
+   endpoint iperf version, and uses the quiescent tracer cutoff. All four cells
+   must be valid and at least one TCP execution must record an outer
+   retransmission or RTO before broader work.
+12. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-12. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
-   only after `burst-recovery-smoke` meets its outer-recovery gate.
-13. `endurance`: selected 10-minute clean/high-risk matched runs.
-14. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-15. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+13. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
+   only after `burst-qualified-smoke` meets its outer-recovery gate.
+14. `endurance`: selected 10-minute clean/high-risk matched runs.
+15. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+16. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and

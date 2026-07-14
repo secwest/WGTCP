@@ -34,6 +34,7 @@ meltdown/
   matrix-mechanism-recovery.csv
   matrix-mechanism-burst.csv
   matrix-mechanism-burst-recovery.csv
+  matrix-mechanism-burst-qualified.csv
   harness/
     install-host.sh
     setup-tunnels.sh
@@ -108,10 +109,23 @@ repetitions without replacing already-qualified evidence:
 Campaign execution is resume-safe only across identical evidence identities. A
 cell is skipped when `cell.json`, `cell.complete`, and a matching
 `cell.fingerprint` all exist. Changes to campaign sources, test plan, matrix
-axes, repetition, module, or tool identity make the prior cell stale. Campaign
-analysis also requires a complete manifest listing every expected fingerprint.
-Raw artifacts stay under the gitignored `cells/` directory; generated
-`cells.csv` and the dated report are the reviewable evidence.
+axes, repetition, module, tool, or common fixed-path endpoint iperf version and
+executable hash make the prior cell stale. Campaign analysis also requires a
+complete manifest listing every expected fingerprint. Targeted `-Cell` runs
+retain exact cell fingerprints but their manifests set
+`targeted_selection=true` and `qualifying_complete=false`; they cannot
+constitute a complete gate. Raw artifacts stay under the gitignored `cells/`
+directory; generated `cells.csv` and the dated report are the reviewable
+evidence.
+
+Historical matrices use the implicit `strict` workload-completion policy:
+nonzero iperf exit status is invalid. The prospective
+`matrix-mechanism-burst-qualified.csv` opts into `interval_complete`, which can
+accept only an allowlisted final-control failure after exact flow count,
+near-full continuous interval output, and complete independent interface
+delivery are all proven. Bidirectional workloads must prove both interval
+directions independently. It does not rescore prior artifacts. See
+[`TESTPLAN.md`](TESTPLAN.md) for the fixed thresholds and error allowlist.
 
 When a separate fingerprinted campaign reruns evidence-invalid cells, build an
 auditable qualified composite rather than copying over the original cells:
@@ -123,7 +137,10 @@ python .\harness\merge_campaigns.py `
   --output .\results\<qualified-composite>
 ```
 
-The merger refuses to replace valid evidence or combine different runtime
-identities or matrix axes. It retains both source campaign fingerprints and
-writes the selected fingerprint and analyzed `cell.json` SHA-256 for every cell
-to `provenance.csv`.
+The merger requires explicit full-matrix qualification metadata, so legacy,
+targeted, or incomplete campaigns cannot serve as a base. It refuses to replace
+valid evidence and refuses to combine different runtime identities, including
+prospectively recorded iperf versions and executable
+hashes, or matrix axes. It retains both source campaign fingerprints and writes
+the selected fingerprint and analyzed `cell.json` SHA-256 for every cell to
+`provenance.csv`.
