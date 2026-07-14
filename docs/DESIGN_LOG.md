@@ -483,3 +483,19 @@ endpoint. At least one TCP repetition must record a scored outer retransmission
 or RTO. Otherwise broader burst, contention, AQM, workload, and endurance rows
 remain blocked. The prior invalid cells remain part of the audit inventory and
 are not replacement candidates.
+
+**Gate result:** the exact complete campaign produced one valid/degraded UDP
+cell and three invalid cells. Both TCP repetitions forced outer recovery: r1
+recorded 181 retransmissions and 25 RTOs, while r2 recorded 33 retransmissions
+and 13 RTOs. Their final in-band iperf results exchanges failed. TCP r1 also
+missed one endpoint's realized-loss band; TCP r2 had a two-event trace-summary
+discrepancy. UDP r2 had a four-event discrepancy.
+
+Exact separate reruns remained invalid. TCP r1 then exhibited all three
+meltdown conditions - 93.7% stalls, a significant negative trend, and 1.31
+inner RTOs per flow-minute - plus 29 outer retransmissions and 17 outer RTOs,
+but its final results exchange again failed. TCP r2 reproduced the finalization
+failure, and UDP r2 reproduced a three-event trace-summary discrepancy. No
+invalid record is promoted or rescored. A prospective gate must remove the
+in-band final-control survivorship bias and quiesce tracer probes before summary
+collection under a new source fingerprint.

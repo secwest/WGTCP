@@ -1,0 +1,21 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T07:29:10.4505836Z",
+  "expected_cells": [
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "completed_cells": [
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "9eafa9f42d7ee71e2b0b96d32811b298c1db6b32751fb9b14b22c56a0327878b",
+  "cell_fingerprints": {
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-udp-r2": "b382e14c110e6e3747e1d7b042850982d89eac002bbfb9952440de21a2177245",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1": "a3660b249b97debc0d18fa409e9097ee994551d918ff60c94398f5bd696e505c",
+    "burst-recovery-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2": "413c4d19066995f97b51bf22fa1ab32d50885d9df325876e4bd1e0202fb6167c"
+  }
+}
