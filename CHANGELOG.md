@@ -17,6 +17,8 @@ All notable changes to this repository are documented here.
   cells.
 - Added a separately fingerprinted 0.10x-BDP adaptive smoke with a gated
   0.05x-BDP fallback after the 0.25x-BDP queue did not overflow.
+- Added a 0.05x-BDP recovery smoke that gates lower-rate, higher-RTT, and
+  contention rows on observed outer TCP retransmission or RTO.
 - Added 100 ms receiver tunnel-interface sampling, layered BPF
   retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
   carrier-tuple tracking, and cross-layer coupling metrics.

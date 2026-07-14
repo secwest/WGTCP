@@ -37,6 +37,9 @@ MECHANISM_MATRIX = (
 ADAPTIVE_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-adaptive.csv"
 )
+RECOVERY_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism-recovery.csv"
+)
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -114,6 +117,45 @@ class MeltdownAnalysisTest(unittest.TestCase):
             {row["stage"] for row in rows[2:]},
             {"adaptive-fallback"},
         )
+
+    def test_recovery_matrix_is_paired_and_predeclared(self) -> None:
+        with RECOVERY_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 8)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"none"})
+
+        pairs: dict[tuple[str, str, str, str, str], set[str]] = {}
+        for row in rows:
+            key = (
+                row["rate_mbps"],
+                row["rtt_ms"],
+                row["queue_bdp"],
+                row["competitor"],
+                row["name"],
+            )
+            pairs.setdefault(key, set()).add(row["tunnel"])
+        self.assertEqual(
+            set(pairs),
+            {
+                ("35", "200", "0.05", "0", "r35-q005-r200-16f"),
+                ("25", "200", "0.05", "0", "r25-q005-r200-16f"),
+                ("35", "400", "0.05", "0", "r35-q005-r400-16f"),
+                ("35", "200", "0.1", "1", "r35-q010-r200-16f-comp"),
+            },
+        )
+        self.assertTrue(all(tunnels == {"tcp", "udp"} for tunnels in pairs.values()))
+        self.assertEqual(
+            {row["stage"] for row in rows[:2]},
+            {"recovery-smoke"},
+        )
+        self.assertEqual({row["stage"] for row in rows[2:]}, {"recovery"})
 
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

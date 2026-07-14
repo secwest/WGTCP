@@ -403,3 +403,19 @@ versus 33.94-33.98 Mb/s for UDP. No cell produced an inner or outer RTO, outer
 retransmission, outer recovery event, or negative trend. The 0.05x-BDP fallback
 is therefore not run. A broader adaptive mechanism matrix may now be declared
 separately; the original rows remain gated off by their failed 0.25x-BDP smoke.
+
+### DL-025: Gate breadth on observed outer TCP recovery
+
+**Status:** Accepted
+
+Finite-queue drops alone establish the endogenous-loss boundary but do not
+exercise nested TCP recovery. The next separately fingerprinted gate therefore
+uses a 0.05x-BDP queue at 35 Mb/s, 200 ms, and 16 flows, with two matched
+TCP/UDP repetitions. Broader rows run only when both TCP repetitions are valid
+and overflow, and at least one records an outer retransmission or RTO.
+
+If the gate passes, 12 predeclared executions test lower rate, doubled RTT, and
+a competing CUBIC flow. If it does not, those rows remain unrun and the
+investigation advances to separately fingerprinted burst-loss cells designed
+to force outer RTO. This prevents spending broader-cell budget on a regime
+that still lacks the recovery mechanism needed for causal meltdown evidence.

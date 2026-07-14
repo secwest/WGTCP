@@ -532,7 +532,7 @@ be exercised.**
 
 ## 12. Validation completed
 
-- 90 repository source-contract, analysis, matrix, and composite-integrity
+- 91 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
@@ -618,8 +618,8 @@ keys, or host-specific connection files are included.
 
 Mechanism and breadth:
 
-1. predeclare a broader adaptive matrix around the now-demonstrated overflow
-   boundary and require outer recovery before expanding expensive arms;
+1. run the predeclared 0.05x-BDP recovery smoke and require valid overflow plus
+   outer retransmission or RTO before the 12 broader recovery rows;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
