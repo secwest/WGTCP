@@ -1,0 +1,23 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T18:01:09.5759119Z",
+  "expected_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1"
+  ],
+  "matrix_expected_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "targeted_selection": true,
+  "qualifying_complete": false,
+  "completed_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "fa67fca2da8eccc0636d5b7a6898a7765067cf2bce308f60d14157077806ebed",
+  "cell_fingerprints": {
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1": "d60c5672360879c10f74da17a1e4b18d1386f4aecbf372e59adb2f1ac32baaba"
+  }
+}
