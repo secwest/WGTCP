@@ -370,6 +370,11 @@ function Invoke-Cell {
         $workloadCompletion = "strict"
     }
     Assert-MatrixValue "workload_completion" $workloadCompletion "^(strict|interval_complete)$"
+    $impairmentValidation = [string]$Row.impairment_validation
+    if ([string]::IsNullOrWhiteSpace($impairmentValidation)) {
+        $impairmentValidation = "strict"
+    }
+    Assert-MatrixValue "impairment_validation" $impairmentValidation "^(strict|transport_aware)$"
 
     $cellId = "$($Row.stage)-$($Row.name)-$($Row.tunnel)-r$Repetition"
     $localCell = Join-Path (Join-Path $ResultsDir "cells") $cellId
@@ -416,6 +421,13 @@ function Invoke-Cell {
     Invoke-Remote $HostB $PortB "rm -rf $(ConvertTo-ShellQuoted $remoteCellB); mkdir -p $(ConvertTo-ShellQuoted $remoteCellB)" | Out-Null
 
     try {
+        if ($impairmentValidation -eq "transport_aware") {
+            Invoke-Remote $HostB $PortB (
+                "ping -I $tunnelInterface -c 10 -i 0.2 -W 2 $targetIp " +
+                "> $(ConvertTo-ShellQuoted "$remoteCellB/preimpairment-ping.txt") 2>&1 || true"
+            ) | Out-Null
+        }
+
         $serverShaped = $true
         $serverShape = Invoke-Remote $HostA $PortA "sudo $shape apply --peer-ip $PrivateIpB $shapeArgs"
         [IO.File]::WriteAllLines(
@@ -532,6 +544,7 @@ function Invoke-Cell {
             "duration_s=$($Row.duration_s)",
             "warmup_s=$($Row.warmup_s)",
             "workload_completion=$workloadCompletion",
+            "impairment_validation=$impairmentValidation",
             "inner_cc=$($Row.inner_cc)",
             "direction=$($Row.direction)",
             "competitor=$($Row.competitor)",

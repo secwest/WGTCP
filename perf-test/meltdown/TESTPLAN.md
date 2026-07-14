@@ -62,7 +62,12 @@ A cell is invalid rather than negative evidence if any of these apply:
   `Connection reset by peer` or `Broken pipe`), the exact broken-pipe
   `unable to send control message` diagnostic, or
   `control socket has closed unexpectedly`;
-- the selected tunnel did not pass a preflight ping;
+- the selected tunnel did not pass a preflight ping. A prospective
+  `transport_aware` cell also requires a pre-impairment 10/10 zero-loss
+  preflight with mean RTT no greater than 20 ms. Its impaired UDP ping retains
+  the strict 0.70x-1.35x-plus-5-ms RTT band. Its impaired TCP ping must retain
+  liveness and at least 0.70x target RTT, while excess RTT is measured as
+  transport amplification rather than rejected;
 - either expected TCP carrier tuple changed or disappeared, or 200 ms socket
   samples do not cover the complete workload interval;
 - either endpoint sampler did not complete or BPF summaries do not reconcile
@@ -81,8 +86,11 @@ A cell is invalid rather than negative evidence if any of these apply:
 - configured rate, delay, queue kind, queue bytes, loss model, or loss
   parameters do not match the manifest;
 - a loss cell lacks monotonic IFB netem counters, processes no netem traffic,
-  realizes no drops, or its measured loss is outside 0.5x-2x the model's
-  stationary expectation;
+  or realizes no drops. Strict and prospective UDP cells also require measured
+  loss within 0.5x-2x the model's stationary expectation. A prospectively
+  opted-in `transport_aware` TCP cell retains exact loss-model configuration
+  and nonzero traffic/drop requirements but treats its adaptive realized loss
+  fraction as an outcome;
 - source, runtime build, common fixed-path endpoint iperf version and executable
   SHA-256, every selected restarted inner or competitor server process
   executable and hash, matrix-axis, repetition, cell, or campaign fingerprints
@@ -228,13 +236,24 @@ Per workload:
    endpoint iperf version, and uses the quiescent tracer cutoff. All four cells
    must be valid and at least one TCP execution must record an outer
    retransmission or RTO before broader work.
-12. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+12. `burst-transport-qualified-smoke`: one bounded prospective correction at
+   the unchanged `2/25/90/1` severity after every loss-detectable TCP
+   execution inflated the post-impairment inner RTT or adaptively
+   under-realized stationary loss. It adds a clean pre-impairment tunnel
+   control, retains strict UDP RTT/loss validation, and measures TCP excess
+   RTT and realized loss only after exact qdisc, liveness, lower RTT,
+   monotonic-counter, nonzero-traffic, and nonzero-drop checks pass. All four
+   cells must be valid and at least one TCP cell must record outer recovery.
+   At most one exact rerun of each invalid cell is allowed; failure after that
+   remains an obstructed gate. Severity and validity policy will not be
+   relaxed again to obtain qualification, and no historical cell is rescored.
+13. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-13. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
-   only after `burst-qualified-smoke` meets its outer-recovery gate.
-14. `endurance`: selected 10-minute clean/high-risk matched runs.
-15. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-16. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+14. `burst`: broader random-onset and Gilbert-Elliott severity cells declared
+   only after `burst-transport-qualified-smoke` meets its outer-recovery gate.
+15. `endurance`: selected 10-minute clean/high-risk matched runs.
+16. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+17. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and

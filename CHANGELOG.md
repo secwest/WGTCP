@@ -80,6 +80,11 @@ All notable changes to this repository are documented here.
   cell-fingerprint rerun semantics.
 - Predeclared a separate four-execution `2/25/90/1` burst-qualified smoke using
   the prospective workload and tracing contracts.
+- Predeclared one bounded transport-aware rerun at unchanged `2/25/90/1`
+  severity. It adds a clean per-cell tunnel control, retains strict UDP
+  RTT/loss bands and exact TCP impairment/counter checks, and measures
+  post-loss TCP RTT amplification and adaptive realized loss as outcomes
+  without rescoring historical evidence.
 
 ### Changed
 

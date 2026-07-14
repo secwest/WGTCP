@@ -48,6 +48,12 @@ BURST_RECOVERY_MATRIX = (
 BURST_QUALIFIED_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-qualified.csv"
 )
+BURST_TRANSPORT_QUALIFIED_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-mechanism-burst-transport-qualified.csv"
+)
 
 
 def workload_document(
@@ -298,6 +304,46 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertEqual({row["direction"] for row in rows}, {"reverse"})
         self.assertEqual({row["competitor"] for row in rows}, {"0"})
 
+    def test_burst_transport_qualified_matrix_is_paired_and_bounded(self) -> None:
+        with BURST_TRANSPORT_QUALIFIED_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(int(row["repetitions"]) for row in rows), 4)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual(
+            {row["stage"] for row in rows},
+            {"burst-transport-qualified-smoke"},
+        )
+        self.assertEqual(
+            {row["name"] for row in rows},
+            {"ge2-25-90-1-r200-q1-16f"},
+        )
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"50"})
+        self.assertEqual({row["rtt_ms"] for row in rows}, {"200"})
+        self.assertEqual({row["queue_bdp"] for row in rows}, {"1"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"gemodel"})
+        self.assertEqual({row["burst_p"] for row in rows}, {"2"})
+        self.assertEqual({row["burst_r"] for row in rows}, {"25"})
+        self.assertEqual({row["burst_h"] for row in rows}, {"90"})
+        self.assertEqual({row["burst_k"] for row in rows}, {"1"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual(
+            {row["workload_completion"] for row in rows},
+            {"interval_complete"},
+        )
+        self.assertEqual(
+            {row["impairment_validation"] for row in rows},
+            {"transport_aware"},
+        )
+        self.assertEqual({row["inner_cc"] for row in rows}, {"cubic"})
+        self.assertEqual({row["direction"] for row in rows}, {"reverse"})
+        self.assertEqual({row["competitor"] for row in rows}, {"0"})
+
     def test_netem_loss_configuration_is_fail_closed(self) -> None:
         axes = {
             "loss_model": "gemodel",
@@ -396,6 +442,26 @@ class MeltdownAnalysisTest(unittest.TestCase):
             )
             self.assertEqual(ANALYZE.netem_counter_issues(endpoint, axes), [])
 
+            write_counters("ifb-qdisc-post.json", 1080, 30)
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, axes),
+                ["netem_loss_rate"],
+            )
+            transport_axes = {
+                **axes,
+                "tunnel": "tcp",
+                "impairment_validation": "transport_aware",
+            }
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, transport_axes),
+                [],
+            )
+            transport_axes["tunnel"] = "udp"
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, transport_axes),
+                ["netem_loss_rate"],
+            )
+
             (endpoint / "ifb-qdisc-pre.json").write_text(
                 json.dumps(
                     [
@@ -429,6 +495,78 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 ANALYZE.netem_counter_issues(endpoint, axes),
                 ["netem_counter_window"],
             )
+
+    def test_transport_aware_ping_preserves_tcp_rtt_amplification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cell = Path(temporary)
+
+            def write_ping(
+                name: str,
+                loss: float,
+                mean_rtt: float,
+                transmitted: int = 10,
+                received: int = 10,
+            ) -> None:
+                (cell / name).write_text(
+                    f"{transmitted} packets transmitted, {received} received, "
+                    f"{loss:g}% packet loss\n"
+                    f"rtt min/avg/max/mdev = 0.1/{mean_rtt:g}/1.0/0.1 ms\n",
+                    encoding="ascii",
+                )
+
+            write_ping("preimpairment-ping.txt", 0, 0.4)
+            write_ping("preflight-ping.txt", 0, 600)
+            axes = {
+                "tunnel": "tcp",
+                "rtt_ms": "200",
+                "impairment_validation": "transport_aware",
+            }
+            metrics, issues = ANALYZE.impairment_ping_validation(cell, axes)
+            self.assertEqual(issues, [])
+            self.assertTrue(metrics["baseline_preflight_valid"])
+            self.assertTrue(metrics["impaired_ping_rtt_valid"])
+
+            _, strict_issues = ANALYZE.impairment_ping_validation(
+                cell,
+                {**axes, "impairment_validation": "strict"},
+            )
+            self.assertEqual(strict_issues, ["rtt_not_achieved"])
+
+            _, udp_issues = ANALYZE.impairment_ping_validation(
+                cell,
+                {**axes, "tunnel": "udp"},
+            )
+            self.assertEqual(udp_issues, ["rtt_not_achieved"])
+
+            write_ping("preimpairment-ping.txt", 10, 0.4)
+            _, baseline_issues = ANALYZE.impairment_ping_validation(cell, axes)
+            self.assertEqual(baseline_issues, ["baseline_preflight"])
+
+            write_ping("preimpairment-ping.txt", 0, 0.4, 9, 9)
+            _, baseline_issues = ANALYZE.impairment_ping_validation(cell, axes)
+            self.assertEqual(baseline_issues, ["baseline_preflight"])
+
+            write_ping("preimpairment-ping.txt", 0, 0.4)
+            _, policy_issues = ANALYZE.impairment_ping_validation(
+                cell,
+                {**axes, "impairment_validation": "transport_aware "},
+            )
+            self.assertEqual(
+                policy_issues,
+                ["impairment_validation_policy", "rtt_not_achieved"],
+            )
+
+    def test_transport_aware_preflight_precedes_impairment(self) -> None:
+        policy = ORCHESTRATOR.index(
+            'if ($impairmentValidation -eq "transport_aware")'
+        )
+        baseline = ORCHESTRATOR.index("preimpairment-ping.txt", policy)
+        shape = ORCHESTRATOR.index("$serverShaped = $true", baseline)
+        self.assertLess(baseline, shape)
+        self.assertIn(
+            '"impairment_validation=$impairmentValidation"',
+            ORCHESTRATOR,
+        )
 
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
