@@ -102,6 +102,56 @@ function Get-IperfServerVerificationCommand {
     )
 }
 
+function Get-EndpointIdentityVerificationCommand {
+    param(
+        [Parameter(Mandatory)] [string] $ExpectedHostname,
+        [Parameter(Mandatory)] [string] $PrivateIp
+    )
+    if ($ExpectedHostname -notmatch "^[a-z0-9-]+$" -or
+        $PrivateIp -notmatch "^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$") {
+        throw "invalid endpoint identity"
+    }
+    $hostname = ConvertTo-ShellQuoted $ExpectedHostname
+    $private = ConvertTo-ShellQuoted $PrivateIp
+    return (
+        "set -e; hostname | grep -Fxq $hostname; " +
+        "ip -4 -o addr show dev eth0 | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $private"
+    )
+}
+
+function Get-TopologyVerificationCommand {
+    param(
+        [Parameter(Mandatory)] [string] $PrivateIp,
+        [Parameter(Mandatory)] [string] $LocalTcpIp,
+        [Parameter(Mandatory)] [string] $PeerTcpIp,
+        [Parameter(Mandatory)] [string] $LocalUdpIp,
+        [Parameter(Mandatory)] [string] $PeerUdpIp
+    )
+    $values = @($PrivateIp, $LocalTcpIp, $PeerTcpIp, $LocalUdpIp, $PeerUdpIp)
+    if ($values.Where({ $_ -notmatch "^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$" }).Count) {
+        throw "invalid topology address"
+    }
+    $private = ConvertTo-ShellQuoted $PrivateIp
+    $localTcp = ConvertTo-ShellQuoted $LocalTcpIp
+    $peerTcp = ConvertTo-ShellQuoted $PeerTcpIp
+    $localUdp = ConvertTo-ShellQuoted $LocalUdpIp
+    $peerUdp = ConvertTo-ShellQuoted $PeerUdpIp
+    return (
+        "set -e; " +
+        "ip -4 -o addr show dev eth0 | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $private; " +
+        "ip -4 -o addr show dev wg-mt-tcp | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $localTcp; " +
+        "! ip -4 -o addr show dev wg-mt-tcp | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $peerTcp; " +
+        "ip -4 -o addr show dev wg-mt-udp | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $localUdp; " +
+        "! ip -4 -o addr show dev wg-mt-udp | awk '{print `$4}' | cut -d/ -f1 | " +
+        "grep -Fxq $peerUdp"
+    )
+}
+
 function Invoke-Remote {
     param(
         [Parameter(Mandatory)] [string] $HostName,
@@ -549,6 +599,18 @@ function Invoke-Cell {
     return ($cellJson -join [Environment]::NewLine)
 }
 
+$expectedPrivateIpA = "10.20.1.6"
+$expectedPrivateIpB = "10.20.1.7"
+if ($PrivateIpA -ne $expectedPrivateIpA -or $PrivateIpB -ne $expectedPrivateIpB) {
+    throw "physical addresses do not match the fixed endpoint roles"
+}
+Invoke-Remote $HostA $PortA (
+    Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA
+) | Out-Null
+Invoke-Remote $HostB $PortB (
+    Get-EndpointIdentityVerificationCommand "wgtcp-amp-a" $PrivateIpB
+) | Out-Null
+
 $archive = Join-Path $env:TEMP "wgtcp-meltdown-$PID.tar.gz"
 try {
     & tar -czf $archive -C $meltdownRoot harness
@@ -629,6 +691,15 @@ try {
         Write-Host "Preparation complete; both tunnel controls passed."
         return
     }
+
+    Invoke-Remote $HostA $PortA (
+        Get-TopologyVerificationCommand `
+            $PrivateIpA "10.99.1.1" "10.99.1.2" "10.99.0.1" "10.99.0.2"
+    ) | Out-Null
+    Invoke-Remote $HostB $PortB (
+        Get-TopologyVerificationCommand `
+            $PrivateIpB "10.99.1.2" "10.99.1.1" "10.99.0.2" "10.99.0.1"
+    ) | Out-Null
 
     $loadedSrcA = @(Invoke-Remote $HostA $PortA "cat /sys/module/wireguard/srcversion")[-1].Trim()
     $loadedSrcB = @(Invoke-Remote $HostB $PortB "cat /sys/module/wireguard/srcversion")[-1].Trim()

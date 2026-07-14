@@ -64,6 +64,9 @@ All notable changes to this repository are documented here.
   client version are also reconciled.
 - Required explicit workload exit-status evidence and exact restarted process
   identity for both inner and selected competitor iperf servers.
+- Added a pre-impairment endpoint-role check that binds physical and fixed
+  tunnel addresses, preventing reversed controllers from running local iperf
+  traffic.
 - Marked targeted cell manifests as non-qualifying subsets and barred them from
   serving as qualified-composite bases. Composite bases now require explicit
   full-matrix attestation and complete iperf identity, without changing exact
