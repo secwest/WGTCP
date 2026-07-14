@@ -952,6 +952,18 @@ class MeltdownAnalysisTest(unittest.TestCase):
             self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
 
             (endpoint / "tcp-events.csv").write_text(
+                ANALYZE.TCP_EVENTS_HEADER
+                + "\n"
+                + event.replace(",0,0,0", ",2,1,0")
+                + summaries,
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            (endpoint / "tcp-events.csv").write_text(
                 ANALYZE.TCP_EVENTS_HEADER + "\n" + event * 2 + summaries,
                 encoding="ascii",
             )
@@ -979,6 +991,15 @@ class MeltdownAnalysisTest(unittest.TestCase):
             (endpoint / "tcp-events.csv").write_text(trace, encoding="ascii")
 
             self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(",0,0,0\n", ",2,1,0\n"),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
 
             (endpoint / "tcp-events.csv").write_text(
                 trace.replace(": 2", ": 1"),
@@ -1026,6 +1047,89 @@ class MeltdownAnalysisTest(unittest.TestCase):
                     issue.startswith("events_malformed_line_")
                     for issue in ANALYZE.tcp_event_telemetry_issues(endpoint)
                 )
+            )
+
+    def test_tcp_event_cpu_sequences_require_continuous_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+            (endpoint / "done").touch()
+            (endpoint / "clock.txt").write_text(
+                "EpochNs=1700000000000000000\nUptimeSeconds=100.0\n",
+                encoding="ascii",
+            )
+            (endpoint / "tcp-events.status").write_text(
+                "exit_code=0\nelapsed_ns=10000000000\ncomplete=yes\n",
+                encoding="ascii",
+            )
+            marker = "summary,format,cpu_sequence,1,0,0,0,0\n"
+            events = (
+                "1700000000000000000,rto,inner,5201,40000,2,1,0\n"
+                "1700000000000000001,rto,inner,5201,40001,4,1,0\n"
+                "1700000000000000002,rto,inner,5201,40002,2,2,0\n"
+            )
+            aggregates = (
+                "@event_sequences[1, 1, 2]: 2\n"
+                "@event_sequences[1, 1, 4]: 1\n"
+            )
+            trace = (
+                ANALYZE.TCP_EVENTS_HEADER
+                + "\n"
+                + events
+                + marker
+                + aggregates
+            )
+            (endpoint / "tcp-events.csv").write_text(trace, encoding="ascii")
+
+            self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(
+                    "@event_sequences[1, 1, 2]: 2",
+                    "@event_sequences[1, 1, 2]: "
+                    + "1"
+                    + "0" * 100,
+                ),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_sequence_mismatch",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            last_event = (
+                "1700000000000000002,rto,inner,5201,40002,2,2,0\n"
+            )
+            for malformed in (
+                trace.replace(last_event, last_event.replace(",2,2,0", ",2,3,0")),
+                trace.replace(last_event, last_event.replace(",2,2,0", ",2,1,0")),
+                trace.replace(last_event, ""),
+                trace.replace("[1, 1, 2]: 2", "[1, 1, 2]: 3"),
+                trace.replace(last_event, last_event.replace(",2,2,0", ",2,2,1")),
+                trace.replace(
+                    events,
+                    (
+                        "1700000000000000002,rto,inner,5201,40002,2,2,0\n"
+                        "1700000000000000001,rto,inner,5201,40001,4,1,0\n"
+                        "1700000000000000000,rto,inner,5201,40000,2,1,0\n"
+                    ),
+                ),
+            ):
+                (endpoint / "tcp-events.csv").write_text(
+                    malformed,
+                    encoding="ascii",
+                )
+                self.assertIn(
+                    "events_sequence_mismatch",
+                    ANALYZE.tcp_event_telemetry_issues(endpoint),
+                )
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(marker, ""),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
             )
 
     def test_tcp_event_capture_anchor_is_attached_and_bounded(self) -> None:
@@ -1085,20 +1189,21 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 ANALYZE.tcp_event_telemetry_issues(endpoint),
             )
 
-    def test_tcp_event_summaries_use_atomic_aggregation(self) -> None:
+    def test_tcp_event_summaries_use_cpu_sequences(self) -> None:
         for event_id in (1, 2):
             for layer_id in (1, 2, 3):
                 self.assertIn(
-                    f"@event_counts[{event_id}, {layer_id}] = count();",
+                    f"@event_sequences[{event_id}, {layer_id}, $event_cpu]",
                     TCP_EVENTS,
                 )
-        self.assertNotIn("@inner_rto++", TCP_EVENTS)
-        self.assertNotIn("@inner_retrans++", TCP_EVENTS)
+        self.assertNotIn("@event_counts", TCP_EVENTS)
+        self.assertIn("$event_cpu = cpu;", TCP_EVENTS)
         self.assertIn(
-            'printf("summary,format,per_cpu_count,1,0,0,0,0\\n");',
+            'printf("summary,format,cpu_sequence,1,0,0,0,0\\n");',
             TCP_EVENTS,
         )
-        self.assertIn("print(@event_counts);", TCP_EVENTS)
+        self.assertNotIn("print(@event_sequences);", TCP_EVENTS)
+        self.assertNotIn("clear(@event_sequences);", TCP_EVENTS)
 
     def test_tcp_event_cutoff_precedes_every_probe_mutation(self) -> None:
         self.assertEqual(ANALYZE.MAX_TRACE_SUMMARY_LAG, 1)

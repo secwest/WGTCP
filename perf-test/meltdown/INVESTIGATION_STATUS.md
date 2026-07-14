@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-14 04:35 PDT (2026-07-14 11:35 UTC)
+Status cutoff: 2026-07-14 08:28 PDT (2026-07-14 15:28 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -46,8 +46,8 @@ valid/degraded UDP cell and three invalid cells. Exact separate reruns of the
 invalid cells remained invalid. Released inventory is now 102/102 complete: 94
 valid, 92 stable, two degraded, zero near-meltdown, zero meltdown, and eight
 invalid. Released counts remain unchanged below. Full audit inventory now
-contains 121 completed executions: 92 stable, two degraded, two near-meltdown,
-zero meltdown, and 25 invalid.
+contains 125 completed executions: 92 stable, three degraded, two
+near-meltdown, zero meltdown, and 28 invalid.
 
 Both corrected TCP repetitions forced outer TCP recovery. One exact invalid
 rerun exhibited all three formal meltdown conditions, but it remains unscored
@@ -99,6 +99,23 @@ replaces those scalars with versioned per-CPU `count()` aggregation and exact
 raw/summary equality. A 16-way live probe reconciled 800/800 generic events,
 and the full tracer reconciled 970/970 inner retransmission events.
 
+That first per-CPU-summary gate completed 4/4 but did not qualify. UDP r2 was
+valid/degraded; both TCP cells and UDP r1 were invalid. TCP r1/r2 forced
+168/175 outer recovery events and stalled in 57.3%/67.0% of bins, but one
+endpoint realized only 3.00%/1.63% loss, below the predeclared 3.80% minimum.
+TCP r1 also had a 341 ms preflight mean versus the 200 ms target. UDP r1 had
+one more server inner-RTO detail row than its per-CPU aggregate (93 versus 92).
+No same-timestamp pair explained that discrepancy.
+
+The next prospective fingerprint embeds monotonic sequence numbers in each
+event/layer/CPU detail stream and requires exact continuity through its terminal
+map value. This can distinguish missing or duplicate detail output without
+trusting another concurrently updated aggregate. A 2,000-event prototype and
+the initial 1,330-row full multi-flow tracer both produced continuous streams.
+After switching terminal-map collection to bpftrace's exit-time automatic map
+output, the final production-form tracer produced 957 continuous rows across
+eight event/layer/CPU streams.
+
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
 outer TCP carrier, and inner delivery, congestion control, retransmission
@@ -128,7 +145,7 @@ The current valid evidence does not meet the predeclared meltdown definition.
 It also does not rule out meltdown: no valid TCP cell has yet forced outer TCP
 recovery. The next full gate must retain the prospective completion, identity,
 topology, cutoff, and tunnel-preflight contracts under the separately
-fingerprinted per-CPU tracing policy.
+fingerprinted loss-detectable CPU-sequence tracing policy.
 
 ## 2. Objective and falsifiable definition
 
@@ -700,10 +717,14 @@ prospective valid reproduction is still required.**
 
 ## 12. Validation completed
 
-- 95 repository source-contract, analysis, matrix, and composite-integrity
+- 108 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
+- five recent burst campaigns containing 19 completed cells reanalyze without
+  validity, classification, invalid-reason, or telemetry-reason drift;
+- the final production-form CPU-sequence tracer emitted 957 rows across eight
+  streams, each exactly continuous through its terminal map value;
 - disposable-veth shaping produced parseable single-line qdisc JSON, accounted
   only handle `20:`, rate-limited traffic, and restored the baseline;
 - the writer-fix module built independently on both ARM endpoints with matching
@@ -779,14 +800,16 @@ selected cell. Recovery evidence preserves failed gates without promoting
 invalid records. No credentials, private keys, or host-specific connection
 files are included.
 
-## 15. Current host state at cutoff
+## 15. Most recently verified host state
 
 - Both dedicated test hosts are running the matching writer-fix module.
 - UDP and TCP test interfaces are configured.
 - Two TCP carrier streams are established.
-- Physical qdiscs are restored; no campaign impairment is active.
+- Physical qdiscs are restored; no campaign impairment, IFB, active marker,
+  restoration failure, or transient campaign unit remains.
 - No sampler or competitor unit is running.
-- Fresh TCP and UDP probes passed 10/10 with zero loss after the exact reruns.
+- The most recent post-campaign TCP and UDP controls passed 40/40 with zero
+  loss.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -796,9 +819,10 @@ files are included.
 
 Mechanism and breadth:
 
-1. predeclare and validate interval-complete workload termination plus a
-   quiescent tracer-summary window under a new fingerprint;
-2. rerun the matched `2/25/90/1` gate and require valid reproduction;
+1. deploy the committed loss-detectable tracer and rerun the matched
+   `2/25/90/1` gate under a new immutable audit directory;
+2. require all four matched cells valid plus TCP outer recovery before
+   releasing broader work;
 3. run burst-loss and outer-RTO cells and measure temporal coupling;
 4. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 5. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,

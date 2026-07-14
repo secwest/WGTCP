@@ -52,6 +52,9 @@ PER_CPU_SUMMARY_KEYS = {
 PER_CPU_SUMMARY_LINE = re.compile(
     r"^@event_counts\[(\d+),\s*(\d+)\]:\s*(\d+)$"
 )
+CPU_SEQUENCE_SUMMARY_LINE = re.compile(
+    r"^@event_sequences\[(\d+),\s*(\d+),\s*(\d+)\]:\s*(\d+)$"
+)
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -713,7 +716,11 @@ def tcp_event_telemetry_issues(
     summaries: dict[tuple[str, str], int] = {}
     per_cpu_summaries: dict[tuple[str, str], int] = {}
     per_cpu_marker_count = 0
+    cpu_sequence_summaries: dict[tuple[str, str, int], int] = {}
+    cpu_sequence_rows: dict[tuple[str, str, int], list[tuple[int, int]]] = {}
+    cpu_sequence_marker_count = 0
     event_counts: Counter[tuple[str, str]] = Counter()
+    nonzero_event_values = False
     capture_markers: list[tuple[int, int, int]] = []
     event_timestamps: list[int] = []
     for line_number, line in enumerate(lines[1:], start=2):
@@ -731,6 +738,31 @@ def tcp_event_telemetry_issues(
         if line.startswith("@event_counts["):
             issues.append(f"events_malformed_line_{line_number}")
             continue
+        cpu_sequence_match = CPU_SEQUENCE_SUMMARY_LINE.fullmatch(line)
+        if cpu_sequence_match:
+            numeric_key = (
+                int(cpu_sequence_match[1]),
+                int(cpu_sequence_match[2]),
+            )
+            event_key = PER_CPU_SUMMARY_KEYS.get(numeric_key)
+            key = (
+                event_key[0],
+                event_key[1],
+                int(cpu_sequence_match[3]),
+            ) if event_key is not None else None
+            sequence = int(cpu_sequence_match[4])
+            if (
+                key is None
+                or key in cpu_sequence_summaries
+                or sequence <= 0
+            ):
+                issues.append(f"events_malformed_line_{line_number}")
+            else:
+                cpu_sequence_summaries[key] = sequence
+            continue
+        if line.startswith("@event_sequences["):
+            issues.append(f"events_malformed_line_{line_number}")
+            continue
         parts = line.split(",")
         if len(parts) != 8:
             issues.append(f"events_malformed_line_{line_number}")
@@ -746,6 +778,16 @@ def tcp_event_telemetry_issues(
                 "0",
             ]:
                 per_cpu_marker_count += 1
+            elif parts[1:] == [
+                "format",
+                "cpu_sequence",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+            ]:
+                cpu_sequence_marker_count += 1
             elif (
                 parts[1] not in {"rto", "retrans"}
                 or parts[2] not in {"inner", "outer", "competitor"}
@@ -778,13 +820,40 @@ def tcp_event_telemetry_issues(
         ):
             issues.append(f"events_malformed_line_{line_number}")
         elif parts[1] in {"rto", "retrans"}:
-            event_counts[(parts[1], parts[2])] += 1
+            event_key = (parts[1], parts[2])
+            event_counts[event_key] += 1
+            nonzero_event_values = (
+                nonzero_event_values or parts[5:] != ["0", "0", "0"]
+            )
+            cpu_sequence_rows.setdefault(
+                (event_key[0], event_key[1], int(parts[5])),
+                [],
+            ).append((int(parts[6]), int(parts[7])))
             event_timestamps.append(int(parts[0]))
         else:
             event_timestamps.append(int(parts[0]))
 
-    if per_cpu_marker_count or per_cpu_summaries:
-        if per_cpu_marker_count != 1 or summaries:
+    if cpu_sequence_marker_count or cpu_sequence_summaries:
+        if (
+            cpu_sequence_marker_count != 1
+            or per_cpu_marker_count
+            or per_cpu_summaries
+            or summaries
+        ):
+            issues.append("events_summary_format")
+        elif set(cpu_sequence_rows) != set(cpu_sequence_summaries):
+            issues.append("events_sequence_mismatch")
+        elif any(
+            len(rows) != cpu_sequence_summaries[key]
+            or any(
+                sequence != expected or reserved != 0
+                for expected, (sequence, reserved) in enumerate(rows, start=1)
+            )
+            for key, rows in cpu_sequence_rows.items()
+        ):
+            issues.append("events_sequence_mismatch")
+    elif per_cpu_marker_count or per_cpu_summaries:
+        if per_cpu_marker_count != 1 or summaries or nonzero_event_values:
             issues.append("events_summary_format")
         elif any(
             per_cpu_summaries.get(key, 0) != event_counts[key]
@@ -792,7 +861,9 @@ def tcp_event_telemetry_issues(
         ):
             issues.append("events_summary_mismatch")
     else:
-        if set(summaries) != TCP_EVENT_SUMMARIES:
+        if nonzero_event_values:
+            issues.append("events_summary_format")
+        elif set(summaries) != TCP_EVENT_SUMMARIES:
             issues.append("events_summary")
         elif any(
             summaries[key] > event_counts[key]

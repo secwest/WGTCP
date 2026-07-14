@@ -67,9 +67,13 @@ A cell is invalid rather than negative evidence if any of these apply:
   samples do not cover the complete workload interval;
 - either endpoint sampler did not complete or BPF summaries do not reconcile
   with detailed emitted events. Legacy six-row scalar summaries retain their
-  historical one-final-event allowance. New traces use a versioned per-CPU
-  `count()` aggregation map and require exact equality; shared scalar increments
-  are not accepted as concurrency-safe. Prospectively, an attached-command
+  historical one-final-event allowance. New traces attach a monotonic sequence
+  to every event/layer/CPU stream and require every stream to be exactly
+  `1..N` through its terminal map value. Missing, duplicate, skipped,
+  reordered, wrong-CPU, or mixed-format rows therefore fail closed without
+  trusting a separate concurrent aggregate. Shared scalar increments are not
+  accepted as concurrency-safe.
+  Prospectively, an attached-command
   marker anchors the absolute monotonic BPF cutoff only after every probe is
   attached, and workload readiness requires that marker. Event probes stop one
   second before tracer exit so summaries run after a quiescent interval;
