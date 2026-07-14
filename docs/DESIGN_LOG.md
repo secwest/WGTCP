@@ -451,3 +451,16 @@ TCP repetition must record a scored outer retransmission or RTO. A validity
 failure is retained and rerun only in a separate campaign; absence of outer
 recovery fails the gate without tuning severity inside the completed
 fingerprint.
+
+**Gate result:** all four cells completed but failed validity before workload.
+The live qdisc matched `2/25/90/99` on both endpoints in every cell, while every
+tunnel preflight had 100% loss. Netem interprets the final arguments as `1-H`
+and `1-K`; `1-K=99%` therefore imposes 99% loss in the good state, yielding
+about 98.3% nominal stationary loss with the declared transition parameters.
+No scored delivery, outer recovery, or meltdown evidence was produced.
+
+The campaign retired one carrier per endpoint despite successful qdisc cleanup.
+The preparation-only recovery path restored both dedicated tunnels, two
+carriers per endpoint, and zero-loss TCP/UDP probes. The completed fingerprint
+is preserved unchanged. Any semantically corrected severity must be declared
+and committed as a new gate.
