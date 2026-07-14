@@ -41,6 +41,9 @@ RECOVERY_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-recovery.csv"
 )
 BURST_MATRIX = ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst.csv"
+BURST_RECOVERY_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-recovery.csv"
+)
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -185,6 +188,36 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertEqual({row["competitor"] for row in rows}, {"0"})
         self.assertEqual({row["repetitions"] for row in rows}, {"2"})
 
+    def test_burst_recovery_matrix_is_paired_and_predeclared(self) -> None:
+        with BURST_RECOVERY_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["stage"] for row in rows}, {"burst-recovery-smoke"})
+        self.assertEqual(
+            {row["name"] for row in rows},
+            {"ge2-25-90-1-r200-q1-16f"},
+        )
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"50"})
+        self.assertEqual({row["rtt_ms"] for row in rows}, {"200"})
+        self.assertEqual({row["queue_bdp"] for row in rows}, {"1"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"gemodel"})
+        self.assertEqual({row["loss_pct"] for row in rows}, {"0"})
+        self.assertEqual({row["burst_p"] for row in rows}, {"2"})
+        self.assertEqual({row["burst_r"] for row in rows}, {"25"})
+        self.assertEqual({row["burst_h"] for row in rows}, {"90"})
+        self.assertEqual({row["burst_k"] for row in rows}, {"1"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual({row["inner_cc"] for row in rows}, {"cubic"})
+        self.assertEqual({row["direction"] for row in rows}, {"reverse"})
+        self.assertEqual({row["competitor"] for row in rows}, {"0"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+
     def test_netem_loss_configuration_is_fail_closed(self) -> None:
         axes = {
             "loss_model": "gemodel",
@@ -244,6 +277,78 @@ class MeltdownAnalysisTest(unittest.TestCase):
             ),
             [],
         )
+
+    def test_netem_loss_counters_are_fail_closed(self) -> None:
+        axes = {
+            "loss_model": "gemodel",
+            "burst_p": "2",
+            "burst_r": "25",
+            "burst_h": "90",
+            "burst_k": "1",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+
+            def write_counters(name: str, packets: int, drops: int) -> None:
+                (endpoint / name).write_text(
+                    json.dumps(
+                        [
+                            {
+                                "kind": "netem",
+                                "handle": "40:",
+                                "packets": packets,
+                                "drops": drops,
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_counters("ifb-qdisc-pre.json", 100, 10)
+            write_counters("ifb-qdisc-post.json", 1024, 86)
+            metrics = ANALYZE.netem_counter_metrics(endpoint)
+            self.assertEqual(metrics["packets"], 924)
+            self.assertEqual(metrics["drops"], 76)
+            self.assertAlmostEqual(metrics["loss_fraction"], 0.076)
+            self.assertAlmostEqual(
+                ANALYZE.expected_netem_loss_fraction(axes),
+                0.07592592592592592,
+            )
+            self.assertEqual(ANALYZE.netem_counter_issues(endpoint, axes), [])
+
+            (endpoint / "ifb-qdisc-pre.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "netem",
+                            "handle": "40:",
+                            "drops": 10,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, axes),
+                ["netem_counter_window"],
+            )
+            write_counters("ifb-qdisc-pre.json", 100, 10)
+
+            write_counters("ifb-qdisc-post.json", 120, 990)
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, axes),
+                ["netem_loss_rate"],
+            )
+            write_counters("ifb-qdisc-post.json", 1100, 10)
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, axes),
+                ["netem_loss_not_realized"],
+            )
+            (endpoint / "ifb-qdisc-post.json").unlink()
+            self.assertEqual(
+                ANALYZE.netem_counter_issues(endpoint, axes),
+                ["netem_counter_window"],
+            )
 
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -21,12 +21,17 @@ All notable changes to this repository are documented here.
   contention rows on observed outer TCP retransmission or RTO.
 - Added a matched Gilbert-Elliott burst-recovery smoke at 50 Mb/s, 200 ms, and
   1x BDP that gates broader burst testing on valid observed outer recovery.
+- Added a separately fingerprinted corrected burst-recovery smoke with netem
+  `P/R/1-H/1-K` parameters `2/25/90/1` after the original good-state loss made
+  every preflight invalid.
 - Added 100 ms receiver tunnel-interface sampling, layered BPF
   retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
   carrier-tuple tracking, and cross-layer coupling metrics.
 - Added predeclared meltdown classification and strict per-cell validity checks.
 - Added fail-closed validation of the live netem random or Gilbert-Elliott loss
   model and its exact configured probabilities.
+- Added realized-loss validation from monotonic IFB netem packet/drop counters,
+  with a predeclared 0.5x-2x stationary-expectation band.
 - Added source, runtime build, matrix-axis, repetition, cell, and campaign
   fingerprints so resumed evidence cannot cross implementation or test-plan
   boundaries.

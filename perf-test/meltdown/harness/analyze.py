@@ -580,22 +580,121 @@ def find_qdisc(
     return find_qdisc_in(load_json(path, []), kind, handle_prefix)
 
 
-def qdisc_metric(qdisc: dict[str, Any] | None, key: str) -> int:
+def qdisc_metric(qdisc: dict[str, Any] | None, key: str) -> int | None:
     if not qdisc:
-        return 0
+        return None
+    value: Any = None
     if key in qdisc:
-        return as_int(qdisc.get(key))
-    stats = qdisc.get("stats") or qdisc.get("stats2") or {}
-    if isinstance(stats, dict):
-        if key in stats:
-            return as_int(stats.get(key))
-        basic = stats.get("basic") or {}
-        queue = stats.get("queue") or {}
-        if key in basic:
-            return as_int(basic.get(key))
-        if key in queue:
-            return as_int(queue.get(key))
-    return 0
+        value = qdisc.get(key)
+    else:
+        stats = qdisc.get("stats") or qdisc.get("stats2") or {}
+        if isinstance(stats, dict):
+            if key in stats:
+                value = stats.get(key)
+            else:
+                basic = stats.get("basic") or {}
+                queue = stats.get("queue") or {}
+                if key in basic:
+                    value = basic.get(key)
+                elif key in queue:
+                    value = queue.get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def qdisc_snapshot_delta(
+    endpoint: Path,
+    stem: str,
+    kind: str,
+    key: str,
+    handle_prefix: str,
+) -> int | None:
+    before = find_qdisc(
+        endpoint / f"{stem}-pre.json",
+        kind,
+        handle_prefix=handle_prefix,
+    )
+    after = find_qdisc(
+        endpoint / f"{stem}-post.json",
+        kind,
+        handle_prefix=handle_prefix,
+    )
+    if before is None or after is None:
+        return None
+    before_value = qdisc_metric(before, key)
+    after_value = qdisc_metric(after, key)
+    if before_value is None or after_value is None or after_value < before_value:
+        return None
+    return after_value - before_value
+
+
+def expected_netem_loss_fraction(axes: dict[str, str]) -> float | None:
+    model = axes.get("loss_model", "none")
+    if model == "none":
+        return 0.0
+    if model == "random":
+        expected = as_float(axes.get("loss_pct")) / 100.0
+        return expected if expected > 0 else None
+    if model != "gemodel":
+        return None
+
+    p = as_float(axes.get("burst_p")) / 100.0
+    r = as_float(axes.get("burst_r")) / 100.0
+    bad_loss = as_float(axes.get("burst_h")) / 100.0
+    good_loss = as_float(axes.get("burst_k")) / 100.0
+    if p + r <= 0:
+        return None
+    bad_state_fraction = p / (p + r)
+    return bad_state_fraction * bad_loss + (1.0 - bad_state_fraction) * good_loss
+
+
+def netem_counter_metrics(endpoint: Path) -> dict[str, int | float | None]:
+    packets = qdisc_snapshot_delta(
+        endpoint, "ifb-qdisc", "netem", "packets", "40:"
+    )
+    drops = qdisc_snapshot_delta(
+        endpoint, "ifb-qdisc", "netem", "drops", "40:"
+    )
+    total = (
+        packets + drops
+        if packets is not None and drops is not None
+        else None
+    )
+    return {
+        "packets": packets,
+        "drops": drops,
+        "loss_fraction": (
+            drops / total
+            if drops is not None and total is not None and total > 0
+            else None
+        ),
+    }
+
+
+def netem_counter_issues(endpoint: Path, axes: dict[str, str]) -> list[str]:
+    if axes.get("loss_model", "none") == "none":
+        return []
+    metrics = netem_counter_metrics(endpoint)
+    packets = metrics["packets"]
+    drops = metrics["drops"]
+    loss_fraction = metrics["loss_fraction"]
+    if packets is None or drops is None:
+        return ["netem_counter_window"]
+    if packets + drops <= 0:
+        return ["netem_path_unused"]
+    if drops <= 0 or loss_fraction is None:
+        return ["netem_loss_not_realized"]
+
+    expected = expected_netem_loss_fraction(axes)
+    if (
+        expected is None
+        or loss_fraction < expected * 0.5
+        or loss_fraction > min(1.0, expected * 2.0)
+    ):
+        return ["netem_loss_rate"]
+    return []
 
 
 def parse_timestamp_ns(value: str) -> int | None:
@@ -631,8 +730,9 @@ def qdisc_window_values(
             continue
         timestamp_ns = parse_timestamp_ns(str(row.get("timestamp", "")))
         qdisc = find_qdisc_in(row.get("qdisc"), kind, handle_prefix="20:")
-        if timestamp_ns is not None and qdisc is not None:
-            samples.append((timestamp_ns, qdisc_metric(qdisc, key)))
+        metric = qdisc_metric(qdisc, key)
+        if timestamp_ns is not None and metric is not None:
+            samples.append((timestamp_ns, metric))
     if not samples:
         return None
     timestamps = [sample[0] for sample in samples]
@@ -831,6 +931,7 @@ def impairment_configuration_issues(
         issues.append("egress_filters")
     if matching_filter_count(endpoint / "ingress-pre.json", port, True) < 2:
         issues.append("ingress_filters")
+    issues.extend(netem_counter_issues(endpoint, axes))
     return issues
 
 
@@ -975,6 +1076,40 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         if all(value is not None for value in queue_peak_backlogs)
         else None
     )
+    netem_endpoints = [
+        netem_counter_metrics(cell_dir / endpoint)
+        for endpoint in ("client", "server")
+    ]
+    netem_counter_complete = all(
+        metric[key] is not None
+        for metric in netem_endpoints
+        for key in ("packets", "drops")
+    )
+    netem_packets = (
+        sum(as_int(metric["packets"]) for metric in netem_endpoints)
+        if netem_counter_complete
+        else None
+    )
+    netem_drops = (
+        sum(as_int(metric["drops"]) for metric in netem_endpoints)
+        if netem_counter_complete
+        else None
+    )
+    netem_total = (
+        netem_packets + netem_drops
+        if netem_packets is not None and netem_drops is not None
+        else None
+    )
+    netem_loss_fraction = (
+        netem_drops / netem_total
+        if netem_drops is not None and netem_total is not None and netem_total > 0
+        else None
+    )
+    netem_loss_fractions = [
+        as_float(metric["loss_fraction"])
+        for metric in netem_endpoints
+        if metric["loss_fraction"] is not None
+    ]
     impairment_issues = [
         f"{endpoint}:{issue}"
         for endpoint in ("client", "server")
@@ -1114,6 +1249,20 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
                 if queue_peak_backlog is not None and queue_bytes
                 else None
             ),
+            "netem_packets": netem_packets,
+            "netem_drops": netem_drops,
+            "netem_expected_loss_fraction": expected_netem_loss_fraction(axes),
+            "netem_loss_fraction": netem_loss_fraction,
+            "netem_loss_fraction_min": (
+                min(netem_loss_fractions)
+                if len(netem_loss_fractions) == len(netem_endpoints)
+                else None
+            ),
+            "netem_loss_fraction_max": (
+                max(netem_loss_fractions)
+                if len(netem_loss_fractions) == len(netem_endpoints)
+                else None
+            ),
             **competitor_metrics,
             "tcp_carrier_samples": sum(
                 status["samples"] for status in carrier_endpoints.values()
@@ -1208,6 +1357,12 @@ CSV_FIELDS = [
     "queue_overlimits",
     "queue_peak_backlog_bytes",
     "queue_peak_backlog_fraction",
+    "netem_packets",
+    "netem_drops",
+    "netem_expected_loss_fraction",
+    "netem_loss_fraction",
+    "netem_loss_fraction_min",
+    "netem_loss_fraction_max",
     "competitor_goodput_mbps",
     "competitor_seconds",
     "tcp_carrier_min_count",
