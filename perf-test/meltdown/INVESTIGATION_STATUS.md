@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 17:05 PDT (2026-07-14 00:05 UTC)
+Status cutoff: 2026-07-13 17:35 PDT (2026-07-14 00:35 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -17,10 +17,12 @@ campaign reran those seven with complete evidence; all are valid/stable. The
 qualified composite is therefore 68/68 stable screening cells, and the combined
 calibration/screening inventory is 82/82 valid/stable.
 
-The next four matched lower-rate mechanism smoke cells are also valid/stable,
-but the predeclared overflow gate was not met: 1,077,876 shaped packets produced
-zero queue drops, inner/outer RTOs, or outer recovery. The 12 broader mechanism
-rows remain intentionally unrun pending a separately predeclared smaller queue.
+Four matched 0.25x-BDP mechanism-smoke cells were valid/stable, but their queue
+did not overflow, so the original 12 broader rows remain intentionally unrun.
+A separately predeclared 0.10x-BDP adaptive smoke then completed 4/4
+valid/stable cells. Both TCP repetitions recorded finite-queue overflow (60 and
+5 drops), satisfying the adaptive gate. The qualified inventory is now 90/90
+valid/stable, with no degraded, near-meltdown, meltdown, or invalid cell.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -375,7 +377,7 @@ campaign.
 
 ### 10.1 Runtime identity
 
-Both ARM endpoints independently produced and currently run:
+Calibration, screening, rerun qualification, and the 0.25x-BDP smoke used:
 
 - kernel: `6.8.0-1062-azure`;
 - module srcversion: `01DA86291E0FBD2CD3C940C`;
@@ -383,6 +385,17 @@ Both ARM endpoints independently produced and currently run:
   `05d0d5830adb04dfb16d80797b891a9cb1b45cc36bc6fd5eb82790aa372bbd6a`;
 - userspace tool SHA-256:
   `80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3`.
+
+The adaptive smoke was built independently on both endpoints from committed
+checkpoint `2b9513f` and currently runs:
+
+- module srcversion: `01DA86291E0FBD2CD3C940C`;
+- module SHA-256:
+  `771057ae270ae379e90bc9c31f8f8777e54556d8acbb71b8717e6a950dca275e`;
+- the same userspace tool hash above.
+
+The adaptive campaign has its own source/runtime fingerprint and is not merged
+into an earlier single-fingerprint campaign.
 
 ### 10.2 Clean calibration
 
@@ -469,11 +482,27 @@ sender-side queue peaked at 130,548 of 218,750 bytes (59.7%). HTB overlimits
 confirmed active rate shaping, but the finite child queue did not overflow.
 The predeclared gate therefore stopped the remaining 12 mechanism rows.
 
+### 10.6 Adaptive finite-queue smoke
+
+The separately predeclared adaptive gate used the same rate, RTT, flow count,
+duration, and no-loss model with a 0.10x-BDP (87,500-byte) queue:
+
+| Transport | Valid/stable | Goodput range | Queue drops | Peak sampled backlog | Inner/outer RTO |
+|---|---:|---:|---:|---:|---:|
+| TCP | 2/2 | 27.75-29.05 Mb/s | 60, 5 | 75.9-76.3% | 0 / 0 |
+| UDP control | 2/2 | 33.94-33.98 Mb/s | 749, 718 | 97.3% | 0 / 0 |
+
+Both TCP repetitions satisfied the overflow gate. No cell recorded an outer
+retransmission or recovery event, and all fitted goodput trends were positive.
+The first TCP repetition had 4.0% zero-delivery bins with a 100 ms longest
+stall, below the 20% threshold; the others had none. The 0.05x-BDP fallback was
+not run.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 86 valid calibration, screening, or mechanism-smoke cells meets
+- None of the 90 valid calibration, screening, or mechanism-smoke cells meets
   even one component of the predeclared full-meltdown definition.
 - No valid cell has an inner RTO or outer recovery event, so there is no
   cross-layer recovery coupling to attribute to classical TCP-over-TCP
@@ -487,17 +516,19 @@ The predeclared gate therefore stopped the remaining 12 mechanism rows.
 
 ### Conclusions not yet supported
 
-- The campaign does not rule out meltdown under actual sustained finite-queue
-  overflow, outer RTO, bidirectional contention, AQM/ECN, or endurance load.
+- The campaign does not rule out meltdown under heavier sustained overflow that
+  forces outer retransmission/RTO, bidirectional contention, AQM/ECN, or
+  endurance load.
 - The current results should not be generalized from two outer streams to a
   single-carrier or responder-only design.
 - The seven records in the initial campaign remain invalid and are not used as
   transport evidence; only their separate complete reruns enter the qualified
   composite.
 
-The current assessment is: **no meltdown was observed in qualified screening,
-but most cells did not create enough congestion to test the full feedback
-mechanism.**
+The current assessment is: **no meltdown was observed in 90 qualified cells.
+The adaptive smoke now proves finite-queue overflow, but it did not trigger
+outer TCP recovery, so the full nested recovery feedback mechanism remains to
+be exercised.**
 
 ## 12. Validation completed
 
@@ -516,6 +547,8 @@ mechanism.**
   executions completed;
 - all four mechanism-smoke executions completed valid/stable; the 12 broader
   rows were gated off because no queue overflow occurred;
+- all four adaptive-smoke executions completed valid/stable; both TCP
+  repetitions overflowed and the 0.05x-BDP fallback was gated off;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -523,7 +556,8 @@ mechanism.**
   competitor unit running;
 - each endpoint retained two established carriers and the matching module
   srcversion;
-- a fresh post-rerun TCP probe delivered 10/10 packets at 0.323 ms mean;
+- a fresh post-adaptive-smoke TCP probe delivered 10/10 packets at 0.319 ms
+  mean;
 - the temporary restricted access gateway is limited to its two forwarding
   sockets while mechanism testing remains active.
 
@@ -557,15 +591,15 @@ host-specific access files remain outside Git. They include:
 
 - writer concurrency traces and BPF atomic-validation evidence;
 - complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
-  and four-cell mechanism-smoke directories;
+  four-cell mechanism-smoke, and four-cell adaptive-smoke directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
 Git contains compact calibration, initial-screening, rerun, qualified composite,
-and mechanism-smoke inventories. The qualified directory includes a source
-fingerprint for every selected cell. No credentials, private keys, or
-host-specific connection files are included.
+mechanism-smoke, and adaptive-smoke inventories. The qualified directory
+includes a source fingerprint for every selected cell. No credentials, private
+keys, or host-specific connection files are included.
 
 ## 15. Current host state at cutoff
 
@@ -574,7 +608,7 @@ host-specific connection files are included.
 - Two TCP carrier streams are established.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
-- A fresh TCP probe passed with zero loss and 0.323 ms mean RTT.
+- A fresh TCP probe passed with zero loss and 0.319 ms mean RTT.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -584,8 +618,8 @@ host-specific connection files are included.
 
 Mechanism and breadth:
 
-1. predeclare and run a smaller-queue smoke based on the observed 59.7% peak
-   occupancy, and require actual finite-queue drops before broader rows;
+1. predeclare a broader adaptive matrix around the now-demonstrated overflow
+   boundary and require outer recovery before expanding expensive arms;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
@@ -610,3 +644,4 @@ Closeout:
 6. [`results/2026-07-13-wakeup-screening-rerun/REPORT.md`](results/2026-07-13-wakeup-screening-rerun/REPORT.md)
 7. [`results/2026-07-13-wakeup-screening-qualified/REPORT.md`](results/2026-07-13-wakeup-screening-qualified/REPORT.md)
 8. [`results/2026-07-13-mechanism-smoke/REPORT.md`](results/2026-07-13-mechanism-smoke/REPORT.md)
+9. [`results/2026-07-13-adaptive-smoke/REPORT.md`](results/2026-07-13-adaptive-smoke/REPORT.md)
