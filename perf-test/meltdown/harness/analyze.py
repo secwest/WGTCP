@@ -29,6 +29,8 @@ WORKLOAD_MIN_INTERVAL_FRACTION = 0.995
 WORKLOAD_MAX_INTERVAL_FRACTION = 1.005
 WORKLOAD_MAX_INTERVAL_GAP_S = 0.02
 WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S = 0.001
+BASELINE_PREFLIGHT_MAX_RTT_MS = 20.0
+IMPAIRMENT_VALIDATION_POLICIES = {"strict", "transport_aware"}
 FINAL_CONTROL_ERRORS = (
     re.compile(
         r"unable to receive results:\s*(?:Connection reset by peer|Broken pipe)?"
@@ -569,17 +571,87 @@ def longest_zero_run(values: list[float]) -> int:
     return longest
 
 
-def parse_ping(path: Path) -> dict[str, float | None]:
+def parse_ping(path: Path) -> dict[str, int | float | None]:
     try:
         text = path.read_text()
     except OSError:
-        return {"ping_loss_pct": None, "ping_rtt_mean_ms": None}
+        return {
+            "ping_transmitted": None,
+            "ping_received": None,
+            "ping_loss_pct": None,
+            "ping_rtt_mean_ms": None,
+        }
+    packets = re.search(
+        r"(\d+) packets transmitted,\s*(\d+) received",
+        text,
+    )
     loss = re.search(r"([\d.]+)% packet loss", text)
     rtt = re.search(r"=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)", text)
     return {
+        "ping_transmitted": int(packets.group(1)) if packets else None,
+        "ping_received": int(packets.group(2)) if packets else None,
         "ping_loss_pct": float(loss.group(1)) if loss else None,
         "ping_rtt_mean_ms": float(rtt.group(2)) if rtt else None,
     }
+
+
+def impairment_ping_validation(
+    cell_dir: Path, axes: dict[str, str]
+) -> tuple[dict[str, int | float | bool | None], list[str]]:
+    policy = axes.get("impairment_validation") or "strict"
+    policy_valid = policy in IMPAIRMENT_VALIDATION_POLICIES
+    tunnel = axes.get("tunnel")
+    target_rtt = as_float(axes.get("rtt_ms"))
+    ping = parse_ping(cell_dir / "preflight-ping.txt")
+    measured_rtt = ping["ping_rtt_mean_ms"]
+    transport_aware_tcp = (
+        policy_valid and policy == "transport_aware" and tunnel == "tcp"
+    )
+    rtt_valid = (
+        measured_rtt is not None
+        and measured_rtt >= max(0.0, target_rtt * 0.70)
+        and (
+            transport_aware_tcp
+            or measured_rtt <= target_rtt * 1.35 + 5.0
+        )
+    )
+
+    baseline = (
+        parse_ping(cell_dir / "preimpairment-ping.txt")
+        if policy_valid and policy == "transport_aware"
+        else {
+            "ping_transmitted": None,
+            "ping_received": None,
+            "ping_loss_pct": None,
+            "ping_rtt_mean_ms": None,
+        }
+    )
+    baseline_valid = (
+        baseline["ping_transmitted"] == 10
+        and baseline["ping_received"] == 10
+        and baseline["ping_loss_pct"] == 0.0
+        and baseline["ping_rtt_mean_ms"] is not None
+        and baseline["ping_rtt_mean_ms"] <= BASELINE_PREFLIGHT_MAX_RTT_MS
+    ) if policy_valid and policy == "transport_aware" else None
+
+    issues: list[str] = []
+    if not policy_valid:
+        issues.append("impairment_validation_policy")
+    if ping["ping_loss_pct"] is None or ping["ping_loss_pct"] >= 100:
+        issues.append("tunnel_preflight")
+    if baseline_valid is False:
+        issues.append("baseline_preflight")
+    if not rtt_valid:
+        issues.append("rtt_not_achieved")
+    return {
+        **ping,
+        "impaired_ping_rtt_valid": rtt_valid,
+        "baseline_ping_transmitted": baseline["ping_transmitted"],
+        "baseline_ping_received": baseline["ping_received"],
+        "baseline_ping_loss_pct": baseline["ping_loss_pct"],
+        "baseline_ping_rtt_mean_ms": baseline["ping_rtt_mean_ms"],
+        "baseline_preflight_valid": baseline_valid,
+    }, issues
 
 
 def tcp_carrier_stability(
@@ -1098,6 +1170,16 @@ def netem_counter_metrics(endpoint: Path) -> dict[str, int | float | None]:
     }
 
 
+def netem_loss_band_required(axes: dict[str, str]) -> bool:
+    return (
+        axes.get("loss_model", "none") != "none"
+        and not (
+            axes.get("impairment_validation") == "transport_aware"
+            and axes.get("tunnel") == "tcp"
+        )
+    )
+
+
 def netem_counter_issues(endpoint: Path, axes: dict[str, str]) -> list[str]:
     if axes.get("loss_model", "none") == "none":
         return []
@@ -1111,6 +1193,8 @@ def netem_counter_issues(endpoint: Path, axes: dict[str, str]) -> list[str]:
         return ["netem_path_unused"]
     if drops <= 0 or loss_fraction is None:
         return ["netem_loss_not_realized"]
+    if not netem_loss_band_required(axes):
+        return []
 
     expected = expected_netem_loss_fraction(axes)
     if (
@@ -1559,12 +1643,27 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         )
     ]
 
-    ping = parse_ping(cell_dir / "preflight-ping.txt")
-    measured_rtt = ping["ping_rtt_mean_ms"]
-    rtt_valid = (
-        measured_rtt is not None
-        and measured_rtt >= max(0.0, target_rtt * 0.70)
-        and measured_rtt <= target_rtt * 1.35 + 5.0
+    ping_metrics, ping_issues = impairment_ping_validation(cell_dir, axes)
+    expected_loss = expected_netem_loss_fraction(axes)
+    loss_band_required = netem_loss_band_required(axes)
+    loss_band_valid = (
+        all(
+            metric["loss_fraction"] is not None
+            and expected_loss is not None
+            and as_float(metric["loss_fraction"]) >= expected_loss * 0.5
+            and as_float(metric["loss_fraction"])
+            <= min(1.0, expected_loss * 2.0)
+            for metric in netem_endpoints
+        )
+        if loss_band_required
+        else None
+    )
+    loss_realized = all(
+        metric["packets"] is not None
+        and metric["drops"] is not None
+        and as_int(metric["packets"]) + as_int(metric["drops"]) > 0
+        and as_int(metric["drops"]) > 0
+        for metric in netem_endpoints
     )
 
     anomalies = kernel_anomalies(cell_dir / "client") + kernel_anomalies(cell_dir / "server")
@@ -1577,10 +1676,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         )
     if delivery["covered_bins"] < expected_bins * 0.80:
         invalid_reasons.append("missing_delivery_bins")
-    if ping["ping_loss_pct"] is None or ping["ping_loss_pct"] >= 100:
-        invalid_reasons.append("tunnel_preflight")
-    if not rtt_valid:
-        invalid_reasons.append("rtt_not_achieved")
+    invalid_reasons.extend(ping_issues)
     if impairment_issues:
         invalid_reasons.append("impairment_configuration")
     if not queue_window_complete:
@@ -1647,6 +1743,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
                 "duration_s",
                 "warmup_s",
                 "workload_completion",
+                "impairment_validation",
                 "inner_cc",
                 "direction",
                 "competitor",
@@ -1708,8 +1805,11 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             ),
             "netem_packets": netem_packets,
             "netem_drops": netem_drops,
-            "netem_expected_loss_fraction": expected_netem_loss_fraction(axes),
+            "netem_expected_loss_fraction": expected_loss,
             "netem_loss_fraction": netem_loss_fraction,
+            "netem_loss_realized_both_endpoints": loss_realized,
+            "netem_loss_band_required": loss_band_required,
+            "netem_loss_band_valid": loss_band_valid,
             "netem_loss_fraction_min": (
                 min(netem_loss_fractions)
                 if len(netem_loss_fractions) == len(netem_endpoints)
@@ -1746,7 +1846,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "tcp_carrier_tuple_changes": sum(
                 status["tuple_changes"] for status in carrier_endpoints.values()
             ),
-            **ping,
+            **ping_metrics,
         },
         "conditions": {
             "stall": stall_condition,
@@ -1764,6 +1864,7 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "workload_interval_max_boundary_error_s": (
                 WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S
             ),
+            "baseline_preflight_max_rtt_ms": BASELINE_PREFLIGHT_MAX_RTT_MS,
         },
         "valid": not invalid_reasons,
         "invalid_reasons": invalid_reasons,
@@ -1792,6 +1893,7 @@ CSV_FIELDS = [
     "flows",
     "duration_s",
     "workload_completion",
+    "impairment_validation",
     "inner_cc",
     "direction",
     "competitor",
@@ -1859,6 +1961,9 @@ CSV_FIELDS = [
     "netem_drops",
     "netem_expected_loss_fraction",
     "netem_loss_fraction",
+    "netem_loss_realized_both_endpoints",
+    "netem_loss_band_required",
+    "netem_loss_band_valid",
     "netem_loss_fraction_min",
     "netem_loss_fraction_max",
     "competitor_goodput_mbps",
@@ -1866,7 +1971,15 @@ CSV_FIELDS = [
     "tcp_carrier_min_count",
     "tcp_carrier_max_count",
     "tcp_carrier_tuple_changes",
+    "baseline_ping_transmitted",
+    "baseline_ping_received",
+    "baseline_ping_loss_pct",
+    "baseline_ping_rtt_mean_ms",
+    "baseline_preflight_valid",
+    "ping_transmitted",
+    "ping_received",
     "ping_rtt_mean_ms",
+    "impaired_ping_rtt_valid",
     "invalid_reasons",
 ]
 

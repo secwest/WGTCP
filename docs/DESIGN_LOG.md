@@ -576,3 +576,45 @@ The new `burst-qualified-smoke` is exactly two TCP and two UDP executions at 50
 Mb/s, 200 ms, 1x BDP, 16 flows, 60 seconds, and Gilbert-Elliott `2/25/90/1`.
 All four must be valid and at least one TCP repetition must record an outer
 retransmission or RTO before broader mechanism or endurance work is released.
+
+## DL-029: Separate transport response from impairment validity prospectively
+
+**Decision:** preserve every completed `burst-qualified-smoke` cell under its
+original strict rules and do not reduce severity to make the gate pass. Add one
+separately fingerprinted, matrix-explicit `transport_aware` gate at the
+unchanged `2/25/90/1`, 50 Mb/s, 200 ms, 1x-BDP, 16-flow, 60-second operating
+point.
+
+The loss-detectable base gate completed 4/4 under fingerprint `24c7e23c...`.
+Both UDP cells were valid; both TCP cells were invalid after their impaired
+inner ping RTT reached 693/572 ms. One TCP cell also adaptively realized only
+2.70% loss on one endpoint versus the strict 3.80% lower bound. Exact reruns
+remained invalid at 279/496 ms; the latter also retained only 7.35 seconds of
+interval output. Across the base gate, all 4,803 event rows in 79
+event/layer/CPU streams reconciled exactly. The TCP cells repeatedly forced
+outer recovery and long delivery stalls, but none is promoted or rescored.
+
+The old upper RTT and stationary-loss bands are coupled to the transport being
+measured. They run after loss is applied: outer TCP retransmission and
+head-of-line blocking inflate the inner ping RTT, while the stalled adaptive
+sender samples fewer loss-state packets than a stationary offered load. Exact
+qdisc delay/model parameters, monotonic IFB counters, nonzero traffic and
+drops, and matched UDP cells already provide independent impairment evidence.
+
+The prospective policy therefore requires a per-cell unshaped 10/10 zero-loss
+tunnel preflight at no more than 20 ms before applying impairment. After
+shaping, UDP keeps the strict RTT and per-endpoint 0.5x-2x stationary-loss
+bands. TCP keeps the liveness and 0.70x RTT lower bound, exact configuration,
+monotonic windows, and nonzero traffic/drop checks, but excess RTT and realized
+loss become published outcomes. The release gate remains all four cells valid
+plus TCP outer recovery. At most one exact rerun per invalid cell is allowed;
+failure then remains an obstructed gate. No further severity or validity
+relaxation will be used to obtain qualification.
+
+**Rationale:** lowering `P` would scale the expected and realized loss together,
+preserve the observed ratio failures, reduce the mechanism pressure, and create
+an unbounded severity-selection path. A single bounded policy correction at
+unchanged severity instead removes two transport-coupled validity checks while
+adding a clean per-cell control and retaining every independent fail-closed
+configuration, workload, topology, carrier, counter, telemetry, and cleanup
+contract.

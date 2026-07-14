@@ -35,6 +35,7 @@ meltdown/
   matrix-mechanism-burst.csv
   matrix-mechanism-burst-recovery.csv
   matrix-mechanism-burst-qualified.csv
+  matrix-mechanism-burst-transport-qualified.csv
   harness/
     install-host.sh
     setup-tunnels.sh
@@ -135,6 +136,17 @@ map value. Missing, duplicated, skipped, reordered, wrong-CPU, or mixed-format
 evidence therefore fails closed. Legacy scalar and per-CPU-count summaries
 retain their original compatibility semantics only when reanalyzing historical
 evidence.
+
+The separately fingerprinted
+`matrix-mechanism-burst-transport-qualified.csv` keeps the exact
+`2/25/90/1` severity but opts into `impairment_validation=transport_aware`.
+Every cell must first pass an unshaped zero-loss, at-most-20-ms tunnel
+preflight. After shaping, UDP retains the existing RTT and 0.5x-2x stationary
+loss bands. TCP must retain liveness, at least 0.7x configured RTT, exact live
+qdisc parameters, monotonic counters, and nonzero netem traffic and drops, but
+post-loss RTT amplification and the realized loss fraction are measured
+outcomes rather than upper-bounded validity controls. Historical and
+policy-absent cells remain strict and are never rescored.
 
 When a separate fingerprinted campaign reruns evidence-invalid cells, build an
 auditable qualified composite rather than copying over the original cells:

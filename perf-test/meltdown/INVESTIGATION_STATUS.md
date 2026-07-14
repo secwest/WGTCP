@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-14 08:28 PDT (2026-07-14 15:28 UTC)
+Status cutoff: 2026-07-14 09:29 PDT (2026-07-14 16:29 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -46,8 +46,8 @@ valid/degraded UDP cell and three invalid cells. Exact separate reruns of the
 invalid cells remained invalid. Released inventory is now 102/102 complete: 94
 valid, 92 stable, two degraded, zero near-meltdown, zero meltdown, and eight
 invalid. Released counts remain unchanged below. Full audit inventory now
-contains 125 completed executions: 92 stable, three degraded, two
-near-meltdown, zero meltdown, and 28 invalid.
+contains 131 completed executions: 92 stable, four degraded, three
+near-meltdown, zero meltdown, and 32 invalid.
 
 Both corrected TCP repetitions forced outer TCP recovery. One exact invalid
 rerun exhibited all three formal meltdown conditions, but it remains unscored
@@ -116,6 +116,31 @@ After switching terminal-map collection to bpftrace's exit-time automatic map
 output, the final production-form tracer produced 957 continuous rows across
 eight event/layer/CPU streams.
 
+The resulting full gate completed 4/4 under fingerprint `24c7e23c...`. UDP r1
+was valid/near-meltdown and UDP r2 valid/degraded. TCP r1/r2 forced 139/140
+outer-recovery events and stalled in 62.7%/78.8% of delivery bins, but their
+impaired preflight RTT reached 693/572 ms against the strict 200 ms target
+band; r2 also realized only 2.70% loss on one endpoint versus the 3.80%
+minimum. All 4,803 detail rows across 79 CPU-sequence streams reconciled.
+
+One exact rerun of each invalid TCP cell remained invalid. TCP r1 delivered
+0.466 Mb/s with 64.8% stalls and 184 outer-recovery events but missed the RTT
+upper bound by 3.9 ms. TCP r2 collapsed to 0.029 Mb/s with 96.0% stalls, 3.19
+inner RTOs per flow-minute, and 41 outer-recovery events, but produced only
+7.35 seconds of intervals and a 496 ms impaired preflight RTT. These records
+remain immutable invalid evidence; no further exact retry will be used to
+select a passing result.
+
+The next and final qualification correction keeps `2/25/90/1` severity
+unchanged and opts into a prospective `transport_aware` impairment policy.
+Every cell must first pass an unshaped 10/10 zero-loss, at-most-20-ms tunnel
+control. UDP retains the strict impaired RTT and stationary-loss bands. TCP
+retains impaired liveness, the RTT lower bound, exact qdisc configuration,
+monotonic counters, and nonzero traffic/drops, while excess RTT and adaptive
+realized loss become outcomes. The gate remains all four cells valid plus TCP
+outer recovery, allows at most one exact rerun per invalid cell, and will not
+be weakened again to obtain qualification.
+
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
 outer TCP carrier, and inner delivery, congestion control, retransmission
@@ -142,10 +167,11 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
 The current valid evidence does not meet the predeclared meltdown definition.
-It also does not rule out meltdown: no valid TCP cell has yet forced outer TCP
-recovery. The next full gate must retain the prospective completion, identity,
-topology, cutoff, and tunnel-preflight contracts under the separately
-fingerprinted loss-detectable CPU-sequence tracing policy.
+It also does not rule out meltdown: strict post-loss RTT and stationary-loss
+checks structurally exclude the strongest TCP responses. The next full gate
+retains the prospective completion, identity, topology, cutoff, sequence, and
+cleanup contracts while adding a clean pre-impairment control under the
+separately fingerprinted transport-aware policy above.
 
 ## 2. Objective and falsifiable definition
 
@@ -717,11 +743,11 @@ prospective valid reproduction is still required.**
 
 ## 12. Validation completed
 
-- 108 repository source-contract, analysis, matrix, and composite-integrity
+- 111 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
-- five recent burst campaigns containing 19 completed cells reanalyze without
+- seven recent burst campaigns containing 25 completed cells reanalyze without
   validity, classification, invalid-reason, or telemetry-reason drift;
 - the final production-form CPU-sequence tracer emitted 957 rows across eight
   streams, each exactly continuous through its terminal map value;
@@ -808,8 +834,8 @@ files are included.
 - Physical qdiscs are restored; no campaign impairment, IFB, active marker,
   restoration failure, or transient campaign unit remains.
 - No sampler or competitor unit is running.
-- The most recent post-campaign TCP and UDP controls passed 40/40 with zero
-  loss.
+- The most recent post-campaign TCP and UDP controls passed 10/10 with zero
+  loss at 0.303/0.211 ms mean RTT.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -819,8 +845,8 @@ files are included.
 
 Mechanism and breadth:
 
-1. deploy the committed loss-detectable tracer and rerun the matched
-   `2/25/90/1` gate under a new immutable audit directory;
+1. review, commit, and deploy the bounded transport-aware `2/25/90/1` gate
+   under a new immutable audit directory;
 2. require all four matched cells valid plus TCP outer recovery before
    releasing broader work;
 3. run burst-loss and outer-RTO cells and measure temporal coupling;
