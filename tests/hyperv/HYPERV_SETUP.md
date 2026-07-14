@@ -14,11 +14,11 @@ The recorded campaign used Windows 11 Pro, Hyper-V, Multipass 1.16.3 with the
 `hyperv` driver, and two Ubuntu 24.04 guests running kernel
 `6.8.0-124-generic`.
 
-The final full campaign `wg20260713T221904Z` used source HEAD
-`7c398d543158b5ef77d8c822b64f90bb99229a44`, base archive SHA-256
-`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`, and
+The final full campaign `wg20260714T010310Z` used source HEAD
+`83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
+`2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`, and
 Git-visible overlay SHA-256
-`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
+`40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a`.
 
 | Component | `wgtcp-a` | `wgtcp-b` |
 |---|---|---|
@@ -464,7 +464,8 @@ state, an existing same-named switch is a collision and provisioning stops.
 
 [`guest-bootstrap.sh`](guest-bootstrap.sh) installs `build-essential`, the
 matching kernel headers, `linux-modules-extra` when available, `libmnl-dev`,
-`iproute2`, `iperf3`, `tcpdump`, Python, and stock `wireguard-tools`. It checks
+`iproute2`, `iperf3`, `tcpdump`, Python, stock `wireguard-tools`, and the
+`nftables` and `conntrack` packages required by the NAT44 regression. It checks
 that `CONFIG_WIREGUARD=m`, proves the stock module can load and unload, and
 fails early when the image has a built-in driver that cannot be exchanged.
 
@@ -526,6 +527,7 @@ does not replace the snapshot manifest or host `provision-state.json`.
 | Building in the transferred tree left stale outputs and obscured provenance. | `rsync --delete` into an isolated guest build root and store a build manifest with the kernel release and source identity. |
 | Switching stock and fork modules could unload a driver with live interfaces. | `guest-module.sh` enumerates root and network-namespace WireGuard links and refuses to unload until owned links are removed. |
 | Interrupted tests left interfaces or an underlay down. | Each case writes ownership state before mutation; cleanup restores only that case's interfaces, namespaces, and underlay. A later run refuses abandoned ownership. |
+| A NAT test could accidentally alter host or VM management networking. | Build its client, router, server, forwarding sysctl, nftables table, and conntrack reset in owned PID-suffixed guest network namespaces; record veth names before their brief root-namespace creation and delete only recorded resources during trap or managed-case cleanup. |
 | Failure logs were too narrow to diagnose TCP state. | Capture public WireGuard selectors, listening sockets, established TCP details, and kernel messages after a per-case log reset; never collect private keys. |
 | Host Python discovery could select the Windows Store alias or hang. | The wrapper probes real `python.exe`/`py.exe -3` applications with a 10-second process timeout. |
 | A single failing case prevented useful independent coverage. | The runner supports `-KeepGoing`, repeatable `--only-case`, production/DEBUG TCP variants, a dedicated isolated fault-module case, and always performs best-effort owned cleanup. Bounded command probes run first, and loss of all guest command execution is classified as infrastructure failure and aborts even with `-KeepGoing`. |
@@ -566,15 +568,90 @@ python ./tests/hyperv/regression.py `
     --tcp-kernel-variant fork-debug
 ```
 
+Run the guest-local NAT44 regression by itself with:
+
+```powershell
+./tests/hyperv/Provision-HyperV.ps1
+python ./tests/hyperv/regression.py `
+    --only-case tcp-nat44-dual-reachable
+```
+
+### NAT44 topology, assertions, and cleanup
+
+`tcp-nat44-dual-reachable` invokes `tests/tcp-nat-netns.sh dual-reachable`
+independently on `wgtcp-a` and `wgtcp-b`. Each invocation creates three
+PID-suffixed namespaces and two veth pairs; it does not connect the two VMs or
+use their Hyper-V data-plane adapters:
+
+```text
+wgtcp-nc-<pid>                  wgtcp-nr-<pid>                 wgtcp-ns-<pid>
+private client                 NAT router                     public server
+10.240.0.2/24  <---------->  10.240.0.1/24
+                              192.0.2.1/24  <---------->      192.0.2.2/24
+wga 10.212.0.1/32                                             wgb 10.212.0.2/32
+listen 52221                                                  listen 52220
+                              public forward 52241 -> 52221
+```
+
+The private client routes through `10.240.0.1`. Only the router namespace has
+IPv4 forwarding enabled. Its namespace-local nftables table `ip wgtcp_nat`
+SNATs a client connection to `192.0.2.1:41001` and DNATs server connections to
+`192.0.2.1:52241` back to `10.240.0.2:52221`. Both peers configure explicit
+dial targets: the client uses `192.0.2.2:52220`, and the server uses the public
+forward `192.0.2.1:52241`.
+
+The pass criteria require all of the following on each guest:
+
+1. Tunnel pings succeed in both directions.
+2. Two-second persistent keepalives advance both peers' transmitted-byte
+   counters and traffic remains usable.
+3. nftables SNAT and DNAT packet counters are nonzero and `conntrack -L`
+   contains both expected translated TCP tuples.
+4. After the router namespace flushes its conntrack state and changes only the
+   outbound SNAT port from `41001` to `41002`, tunnel traffic reconnects in
+   both directions and the new translated tuple is established.
+5. The server's configured client endpoint remains
+   `192.0.2.1:52241`; neither observed SNAT source port is promoted into the
+   configured remote listen port.
+6. A live server `FwMark` change forces its outbound carrier to reconnect, the
+   router's forwarding chain counts a new SYN to the DNATed listener, and
+   bidirectional tunnel traffic remains usable.
+
+This topology is intentionally called `dual-reachable`: the private client's
+listen service is reachable through an explicit DNAT rule, so it does not test
+ordinary responder-only operation behind NAT without a forward. It also does
+not implement or prove authenticated accepted-socket promotion. After the
+source-port rebind, `old_accepted_carrier=retained|retired` records whether the
+old server-side accepted stream is still visible, but either value is accepted.
+Flushing middlebox state does not guarantee that an endpoint immediately
+receives FIN or RST, and deterministic peer-bound duplicate-carrier retirement
+belongs to the future promotion design.
+
+`nft` comes from the Ubuntu `nftables` package and `conntrack` from the Ubuntu
+`conntrack` package; `guest-bootstrap.sh` installs both explicitly. The test
+checks for those commands before creating resources. Forwarding changes,
+nftables rules, and `conntrack -F` execute with `ip netns exec` in the router
+namespace, never in the guest root namespace.
+
+Before each namespace or root-visible veth is created, its name is written to
+the case's auxiliary ownership directory. The script's `EXIT` trap prints
+namespace, socket, nftables, and conntrack diagnostics on failure, then deletes
+only those recorded namespaces and links. If the host runner is interrupted,
+`guest-node.sh cleanup RUN CASE wgt0` reads the same ownership record and
+removes any surviving resources. The PID suffix prevents parallel name
+collisions; creation also refuses a pre-existing name instead of adopting it.
+Neither cleanup path changes the Multipass management NIC, `path0`, `path1`,
+host Hyper-V switches, or host NAT policy.
+
 After source changes, rerun the provisioner before the regression. This creates
 and records a new source overlay; restoring a Multipass snapshot does not
 replace that provenance step. Machine-readable results and command logs remain
 under the ignored `tests/hyperv/results/<run-id>/` directory. The curated,
 committed outcome is [`RESULTS.md`](RESULTS.md).
 
-The valid brokered-host campaign `wg20260713T221904Z` started at
-2026-07-13 22:19:04 UTC and passed all 35 cases with no failures or skips in
-452.476 seconds across 533 recorded commands. Its preflight passed all 100
+The valid brokered-host campaign `wg20260714T010310Z` started at
+2026-07-14 01:03:10 UTC and passed all 36 cases with no failures or skips in
+558.520 seconds across 541 recorded commands. Its preflight passed all 107
 local source-contract checks on both Ubuntu 24.04 guests running kernel
 `6.8.0-124-generic`.
 
@@ -583,13 +660,14 @@ The expanded cases completed live configuration round trips through `showconf`,
 keeping secret-bearing files guest-local and mode 0600. They also preserved
 scoped link-local IPv6 endpoint zones and carried tunnel traffic over link-local
 outer TCP connections. The
-isolated fault artifact produced per-guest deltas of `80/4/4/2380` on
-`wgtcp-a` and `80/4/4/2378` on `wgtcp-b` for short
+isolated fault artifact produced per-guest deltas of `80/4/4/437` on
+`wgtcp-a` and `80/4/4/442` on `wgtcp-b` for short
 writes/prefixes/resynchronizations/queue drops, followed by successful traffic
 recovery after clearing the controls.
 
 The remaining validation boundary covers authenticated carrier promotion for
-arbitrary NAT ephemeral-port roaming, a cookie-equivalent TCP pre-authentication
+responder-only NAT without a forward, deterministic stale-carrier retirement,
+arbitrary NAT/provider behavior, a cookie-equivalent TCP pre-authentication
 cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
 coverage, long-duration multi-flow soak testing, and wider kernel-version and
 distribution breadth.

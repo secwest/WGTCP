@@ -15,14 +15,15 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
-> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260713T221904Z` passed
-> every recorded UDP and TCP case: **35 PASS, 0 FAIL, 0 SKIP** in 452.476
-> seconds across 533 logged commands. TCP coverage included asymmetric listen
+> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260714T010310Z` passed
+> every recorded UDP and TCP case: **36 PASS, 0 FAIL, 0 SKIP** in 558.520
+> seconds across 541 logged commands. TCP coverage included asymmetric listen
 > ports, configured migration, authenticated target learning, live route,
 > source-address, uplink, and `FwMark` reconnects, full-tunnel recursion
 > avoidance, IPv6/dual-stack and scoped link-local carriers, live configuration
 > application and SaveConfig serialization, a 40-second authenticated-carrier lifetime, and
-> isolated forced short-write/parser/queue-pressure recovery. That evidence
+> dual-reachable NAT44 with live source-port remapping, and isolated forced
+> short-write/parser/queue-pressure recovery. That evidence
 > covers the tested combinations and scenarios, not
 > every kernel release, controller, NAT, or hostile stream condition. TCP mode
 > remains experimental and is not a claim of complete WireGuard feature parity.
@@ -78,9 +79,13 @@ peer endpoint with that selected port.
 
 Give both peers bidirectional inbound TCP reachability or port forwarding on
 each peer's configured listen port. The ports may differ; the recorded
-asymmetric-listen-port case passed. The handshake path can still attempt a
-reverse TCP connection, so ordinary one-sided client-behind-NAT responder
-behavior and arbitrary NAT source-port changes are not yet established.
+asymmetric-listen-port case passed. A namespace-isolated NAT44 case also passed
+with a private peer behind SNAT, a stable external DNAT port for the reverse
+carrier, and a configured endpoint in both directions. It recovered when the
+private peer's translated source port changed from 41001 to 41002 without
+replacing the configured forwarded port. This is a dual-reachable topology;
+ordinary one-sided client-behind-NAT responder behavior without a reverse
+port-forward still requires authenticated accepted-carrier promotion.
 
 TCP mode currently binds a TCP listener and the normal WireGuard UDP sockets on
 the same numeric `ListenPort`. A TCP-only deployment must block that UDP port at
@@ -171,8 +176,19 @@ recorded topology.
 
 No path atomically promotes a provisional accepted socket into the configured
 peer. The current model therefore does not provide general responder-only
-roaming or NAT ephemeral-port parity; it can learn an authenticated remote IP
-only when the separately configured peer listen port remains reachable.
+roaming or one-sided NAT parity; it can learn an authenticated remote IP only
+when the separately configured peer listen port remains reachable.
+
+The recorded NAT44 case exercises that reachable-listen-port model directly.
+It passed SNAT, DNAT from external port 52241 to private listener 52221,
+bidirectional traffic, idle persistent keepalives, and recovery after a forced
+41001-to-41002 SNAT remap on both Ubuntu guests. The public peer continued to
+report configured port 52241, proving that the observed NAT source port did not
+contaminate future dial state. The old accepted 41001 socket remained locally
+visible after the new carrier and traffic recovered, so deterministic stale
+carrier retirement remains separate parity work. A live `FwMark` update then
+forced the public peer to reconnect through configured forward 52241; the
+router observed a new SYN and bidirectional traffic remained usable.
 
 TCP listeners, accepted sockets, and outbound sockets use the WireGuard
 device's retained creation namespace and carry its `FwMark`. Route, netdevice,
@@ -214,7 +230,7 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Potentially useful on TCP-friendly policy paths | Current reverse-dial behavior needs bidirectional reachability; authenticated carrier binding/promotion and arbitrary ephemeral-port parity remain design work |
+| Stateful firewall/NAT friendliness | Dual-reachable NAT44 with explicit reverse port-forwarding, keepalives, and one forced source-port remap passed on both guests | Ordinary one-sided NAT still needs accepted-carrier promotion; stale accepted sockets are not yet retired deterministically |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are
@@ -337,15 +353,16 @@ provisions isolated outer paths, builds production, DEBUG, and isolated
 fault-injection modules, and records timestamped JSON, Markdown, and per-command
 logs. The latest committed
 summary is in [`tests/hyperv/RESULTS.md`](tests/hyperv/RESULTS.md); run
-`wg20260713T221904Z` passed all 35 cases with no failures or skips in 452.476
-seconds across 533 logged commands. Its tested snapshot used base archive
-SHA-256 `5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`
+`wg20260714T010310Z` passed all 36 cases with no failures or skips in 558.520
+seconds across 541 logged commands. Its tested snapshot used HEAD
+`83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
+`2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`,
 and overlay SHA-256
-`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
-Both Ubuntu 24.04 guests ran Linux 6.8 and passed all 100 local source contracts
+`40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a`.
+Both Ubuntu 24.04 guests ran Linux 6.8 and passed all 107 local source contracts
 during preflight. The isolated fault case forced 80 short writes, four malformed
-prefixes, four successful parser resynchronizations, more than 2,300 drop-newest
-queue rejections, and clean bidirectional recovery on each guest. Build-time
+prefixes, four successful parser resynchronizations, 437/442 drop-newest queue
+rejections, and clean bidirectional recovery on each guest. Build-time
 `modinfo` checks prove the `tcp_test_*` controls are absent from production and
 ordinary DEBUG modules.
 Focused follow-up `wg20260713T225629Z` passed the actual `wg-quick` reload and
@@ -354,6 +371,17 @@ seconds. The exact follow-up overlay was
 `efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`;
 all 103 source contracts and reuse-only artifact verification passed on both
 guests.
+
+Strengthened NAT44 run `wg20260714T005957Z` passed on both guests for **1 PASS,
+0 FAIL, 0 SKIP** in 57.867 seconds. It verified exact nftables and conntrack
+SNAT/DNAT state, bidirectional tunnel traffic, idle keepalive activity, a live
+source-port remap from 41001 to 41002, and preservation of configured forwarded
+port 52241. A live mark change forced a reverse reconnect and each router
+counted a new SYN through that forward. Run it independently with:
+
+```powershell
+python .\tests\hyperv\regression.py --only-case tcp-nat44-dual-reachable
+```
 
 ## Diagnostics
 

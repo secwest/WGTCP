@@ -19,6 +19,10 @@ affects design and externally visible behavior.
   DEBUG-gated controls and read-only counters for forced short writes,
   deterministic malformed prefixes, parser resynchronization, and queue
   pressure. Production and ordinary DEBUG artifacts reject those parameters.
+- Added an isolated NAT44 namespace regression on both Hyper-V guests. It uses
+  explicit SNAT, a differently numbered DNAT port, conntrack inspection,
+  persistent-keepalive counters, and a forced translated-source-port change
+  without modifying either guest's root firewall or forwarding state.
 
 ### Changed
 
@@ -42,8 +46,8 @@ affects design and externally visible behavior.
 
 ### Validated
 
-- Passed 103 source contracts locally and on both Ubuntu guests. The recorded
-  full campaign passed its then-current 100-contract preflight on both guests.
+- Passed 107 source contracts locally and in the final campaign preflight on
+  both Ubuntu guests.
 - Built production, ordinary DEBUG, and isolated fault-injection modules with
   kernel warnings enabled; `modinfo` verified fault-parameter isolation.
 - Passed Hyper-V run `wg20260713T221904Z`: 35 PASS, 0 FAIL, 0 SKIP in
@@ -56,11 +60,23 @@ affects design and externally visible behavior.
   one-shot hostile case recorded 80 short writes and four prefix recoveries on
   each guest, plus 434/441 queue drops, then acknowledged production-module
   restoration.
+- Passed strengthened NAT44 run `wg20260714T005957Z`: 1 PASS, 0 FAIL, 0 SKIP
+  in 57.867 seconds. Both guests carried bidirectional tunnel traffic through
+  SNAT and DNAT, advanced keepalive counters while idle, recovered after the
+  client mapping changed from port 41001 to 41002, and retained the configured
+  forwarded dial port 52241. A live mark change then forced a reverse reconnect
+  and each router observed a new SYN through that preserved forward.
+- Passed final Hyper-V run `wg20260714T010310Z`: 36 PASS, 0 FAIL, 0 SKIP in
+  558.520 seconds across 541 recorded commands with no kernel-log failures.
+  The final isolated fault case restored the production module after recording
+  80 short writes, four prefix recoveries, and 437/442 queue drops.
 
 ### Known limitations
 
-- Authenticated carrier binding/promotion and general responder-only or NAT
-  ephemeral-port roaming are not implemented.
+- Authenticated carrier binding/promotion, ordinary responder-only NAT
+  operation without a reverse port-forward, and deterministic stale-carrier
+  retirement are not implemented. The passing NAT44 case requires a reachable
+  configured endpoint in both directions.
 - TCP handshakes still lack an enforced cookie-equivalent pre-authentication
   cost defense; accept caps do not prevent Noise CPU work.
 - VRF and namespace move/teardown behavior, MTU accounting, physical-carrier
