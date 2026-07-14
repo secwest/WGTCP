@@ -1,0 +1,9 @@
+stage,enabled,name,tunnel,rate_mbps,rtt_ms,queue_bdp,queue_kind,loss_model,loss_pct,burst_p,burst_r,burst_h,burst_k,flows,duration_s,warmup_s,inner_cc,direction,competitor,repetitions
+recovery-smoke,1,r35-q005-r200-16f,tcp,35,200,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery-smoke,1,r35-q005-r200-16f,udp,35,200,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery,1,r25-q005-r200-16f,tcp,25,200,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery,1,r25-q005-r200-16f,udp,25,200,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery,1,r35-q005-r400-16f,tcp,35,400,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery,1,r35-q005-r400-16f,udp,35,400,0.05,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,0,2
+recovery,1,r35-q010-r200-16f-comp,tcp,35,200,0.1,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,1,2
+recovery,1,r35-q010-r200-16f-comp,udp,35,200,0.1,bfifo,none,0,0,0,0,0,16,60,5,cubic,reverse,1,2

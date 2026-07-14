@@ -148,12 +148,19 @@ Per workload:
    finite-queue drops before a broader adaptive matrix is declared.
 6. `adaptive-fallback`: matched 0.05x-BDP cells run only if the 0.10x-BDP gate
    does not produce drops in both TCP repetitions.
-7. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+7. `recovery-smoke`: after the 0.10x-BDP gate overflowed without outer recovery,
+   matched 35 Mb/s/200 ms/0.05x-BDP cells. Both TCP repetitions must be valid
+   and overflow, and at least one must record an outer retransmission or RTO,
+   before the `recovery` rows run.
+8. `recovery`: matched 25 Mb/s/200 ms/0.05x-BDP, 35 Mb/s/400
+   ms/0.05x-BDP, and competing-flow 35 Mb/s/200 ms/0.10x-BDP cells. These 12
+   executions run only if `recovery-smoke` meets its outer-recovery gate.
+9. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
    original rows remain gated off by their failed 0.25x-BDP smoke.
-8. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
-9. `endurance`: selected 10-minute clean/high-risk matched runs.
-10. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-11. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+10. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
+11. `endurance`: selected 10-minute clean/high-risk matched runs.
+12. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+13. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and
