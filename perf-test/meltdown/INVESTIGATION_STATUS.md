@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 17:35 PDT (2026-07-14 00:35 UTC)
+Status cutoff: 2026-07-13 19:01 PDT (2026-07-14 02:01 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -21,8 +21,15 @@ Four matched 0.25x-BDP mechanism-smoke cells were valid/stable, but their queue
 did not overflow, so the original 12 broader rows remain intentionally unrun.
 A separately predeclared 0.10x-BDP adaptive smoke then completed 4/4
 valid/stable cells. Both TCP repetitions recorded finite-queue overflow (60 and
-5 drops), satisfying the adaptive gate. The qualified inventory is now 90/90
-valid/stable, with no degraded, near-meltdown, meltdown, or invalid cell.
+5 drops), satisfying the adaptive gate.
+
+The next 0.05x-BDP recovery smoke completed all four scheduled cells: two UDP
+controls are valid/stable, one TCP cell is valid/degraded, and one TCP cell is
+invalid because its final iperf results exchange failed. An exact retry
+reproduced the severe invalid result and remained invalid. The scheduled unique
+inventory is now 94/94 complete: 92 stable, one degraded, zero near-meltdown,
+zero meltdown, and one invalid. Including the exact retry, 95 executions are
+retained with two invalid execution records.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -498,12 +505,40 @@ The first TCP repetition had 4.0% zero-delivery bins with a 100 ms longest
 stall, below the 20% threshold; the others had none. The 0.05x-BDP fallback was
 not run.
 
+### 10.7 Outer-recovery smoke and invalid-cell retry
+
+The next separately fingerprinted gate reduced the queue to 0.05x BDP (43,750
+bytes). It required both TCP repetitions to be valid and overflow, with at
+least one outer retransmission or RTO:
+
+| Execution | Validity/class | Goodput | Stall fraction | Queue drops | Outer retrans/RTO |
+|---|---|---:|---:|---:|---:|
+| TCP r1 | valid/degraded | 14.54 Mb/s | 14.3% | 273 | 0 / 0 |
+| TCP r2 | invalid | 2.79 Mb/s | 42.7% | 528 | 0 / 0 |
+| UDP r1 | valid/stable | 33.18 Mb/s | 0% | 654 | 0 / 0 |
+| UDP r2 | valid/stable | 33.05 Mb/s | 0% | 672 | 0 / 0 |
+
+TCP r1 was degraded because it delivered 43.8% of its matched UDP control. It
+met none of the three primary meltdown conditions: its stall fraction remained
+below 20%, its fitted trend was strongly positive, and it had no inner RTO.
+
+TCP r2 completed the measurement intervals but iperf could not receive its
+final results and exited nonzero. A separate exact retry reproduced 2.93 Mb/s,
+34.5% stalls, 624 drops, and the same final-results failure; its server trace
+also had a two-event raw-minus-summary discrepancy. Both records remain
+invalid. Neither had a scored outer retransmission or RTO.
+
+The recovery gate therefore failed on both validity and mechanism. The 12
+broader lower-rate, higher-RTT, and contention executions remain unrun.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 90 valid calibration, screening, or mechanism-smoke cells meets
+- None of the 93 valid calibration, screening, or mechanism-smoke cells meets
   even one component of the predeclared full-meltdown definition.
+- One valid TCP cell is degraded because its goodput is below half of its
+  matched UDP control.
 - No valid cell has an inner RTO or outer recovery event, so there is no
   cross-layer recovery coupling to attribute to classical TCP-over-TCP
   meltdown.
@@ -525,10 +560,11 @@ not run.
   transport evidence; only their separate complete reruns enter the qualified
   composite.
 
-The current assessment is: **no meltdown was observed in 90 qualified cells.
-The adaptive smoke now proves finite-queue overflow, but it did not trigger
-outer TCP recovery, so the full nested recovery feedback mechanism remains to
-be exercised.**
+The current assessment is: **no meltdown was observed in 93 valid cells. One
+valid cell is degraded. Finite-queue overflow can now produce substantial
+TCP-specific stalls and throughput loss, but no valid cell has triggered outer
+TCP recovery, so the full nested recovery feedback mechanism remains to be
+exercised.**
 
 ## 12. Validation completed
 
@@ -549,6 +585,10 @@ be exercised.**
   rows were gated off because no queue overflow occurred;
 - all four adaptive-smoke executions completed valid/stable; both TCP
   repetitions overflowed and the 0.05x-BDP fallback was gated off;
+- all four recovery-smoke executions completed; three are valid, one is
+  invalid, and an exact retry of the invalid cell remained invalid;
+- the 12 broader recovery executions were gated off because both TCP
+  repetitions were not valid and no outer recovery occurred;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -556,7 +596,7 @@ be exercised.**
   competitor unit running;
 - each endpoint retained two established carriers and the matching module
   srcversion;
-- a fresh post-adaptive-smoke TCP probe delivered 10/10 packets at 0.319 ms
+- a fresh post-recovery-smoke TCP probe delivered 10/10 packets at 0.315 ms
   mean;
 - the temporary restricted access gateway is limited to its two forwarding
   sockets while mechanism testing remains active.
@@ -591,15 +631,17 @@ host-specific access files remain outside Git. They include:
 
 - writer concurrency traces and BPF atomic-validation evidence;
 - complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
-  four-cell mechanism-smoke, and four-cell adaptive-smoke directories;
+  four-cell mechanism-smoke, four-cell adaptive-smoke, four-cell
+  recovery-smoke, and one-cell exact-retry directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
 Git contains compact calibration, initial-screening, rerun, qualified composite,
-mechanism-smoke, and adaptive-smoke inventories. The qualified directory
-includes a source fingerprint for every selected cell. No credentials, private
-keys, or host-specific connection files are included.
+mechanism-smoke, adaptive-smoke, recovery-smoke, and invalid-retry inventories.
+The qualified directory includes a source fingerprint for every selected cell.
+Recovery evidence preserves the failed gate without promoting invalid records.
+No credentials, private keys, or host-specific connection files are included.
 
 ## 15. Current host state at cutoff
 
@@ -608,7 +650,7 @@ keys, or host-specific connection files are included.
 - Two TCP carrier streams are established.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
-- A fresh TCP probe passed with zero loss and 0.319 ms mean RTT.
+- A fresh TCP probe passed with zero loss and 0.315 ms mean RTT.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -618,8 +660,8 @@ keys, or host-specific connection files are included.
 
 Mechanism and breadth:
 
-1. run the predeclared 0.05x-BDP recovery smoke and require valid overflow plus
-   outer retransmission or RTO before the 12 broader recovery rows;
+1. predeclare and run a matched burst-loss smoke designed to force observable
+   outer retransmission or RTO before any broader recovery rows;
 2. run burst-loss and outer-RTO cells and measure temporal coupling;
 3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
 4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
@@ -645,3 +687,5 @@ Closeout:
 7. [`results/2026-07-13-wakeup-screening-qualified/REPORT.md`](results/2026-07-13-wakeup-screening-qualified/REPORT.md)
 8. [`results/2026-07-13-mechanism-smoke/REPORT.md`](results/2026-07-13-mechanism-smoke/REPORT.md)
 9. [`results/2026-07-13-adaptive-smoke/REPORT.md`](results/2026-07-13-adaptive-smoke/REPORT.md)
+10. [`results/2026-07-13-recovery-smoke/REPORT.md`](results/2026-07-13-recovery-smoke/REPORT.md)
+11. [`results/2026-07-13-recovery-smoke-r2-rerun/REPORT.md`](results/2026-07-13-recovery-smoke-r2-rerun/REPORT.md)

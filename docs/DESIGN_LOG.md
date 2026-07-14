@@ -419,3 +419,16 @@ a competing CUBIC flow. If it does not, those rows remain unrun and the
 investigation advances to separately fingerprinted burst-loss cells designed
 to force outer RTO. This prevents spending broader-cell budget on a regime
 that still lacks the recovery mechanism needed for causal meltdown evidence.
+
+**Gate result:** the gate did not pass. TCP repetition 1 was valid/degraded at
+14.54 Mb/s versus 33.18 Mb/s for UDP, with 14.3% zero-delivery bins and 273
+queue drops. TCP repetition 2 fell to 2.79 Mb/s with 42.7% zero-delivery bins
+and 528 drops, but its final iperf results exchange failed, making it invalid.
+Neither repetition recorded an outer retransmission or RTO.
+
+An exact retry of the invalid repetition reproduced 2.93 Mb/s, 34.5%
+zero-delivery bins, 624 drops, and the final-results failure. It also exceeded
+the tracer's one-event shutdown allowance by one additional event. The retry
+remains invalid and does not replace the original. The 12 broader recovery
+executions remain unrun; the next mechanism gate must force outer recovery
+directly rather than lowering the endogenous queue again.
