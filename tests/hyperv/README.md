@@ -77,6 +77,9 @@ execution before changing its networking. It then transfers and validates the
 lab netplan, stops the guest once to attach the two private adapters, and
 activates that netplan on the next boot. It then transfers the current source
 tree and runs the guest bootstrap and build steps.
+The bootstrap explicitly installs the `nftables` and `conntrack` Ubuntu
+packages used by the guest-local NAT44 case; `nft` and `conntrack` must both be
+available before that case can run.
 The same controlled stop disables Secure Boot and Dynamic Memory on these two
 managed VMs so the locally built unsigned test module can load and each guest
 retains its requested 8 GB. The source transfer is intentionally not a
@@ -131,6 +134,55 @@ python .\tests\hyperv\regression.py `
     --tcp-kernel-variant fork-debug
 ```
 
+### Guest-local NAT44 case
+
+Provision the current tree first so both guests have the NAT dependencies and
+test script, then run only the NAT case with:
+
+```powershell
+.\tests\hyperv\Provision-HyperV.ps1
+python .\tests\hyperv\regression.py `
+    --only-case tcp-nat44-dual-reachable
+```
+
+The runner executes an independent disposable topology inside each VM:
+
+| Role | Namespace | Outer address | WireGuard address |
+|---|---|---|---|
+| Private client | `wgtcp-nc-<pid>` | `10.240.0.2/24` | `10.212.0.1/32` |
+| NAT router | `wgtcp-nr-<pid>` | `10.240.0.1/24`, `192.0.2.1/24` | none |
+| Public server | `wgtcp-ns-<pid>` | `192.0.2.2/24` | `10.212.0.2/32` |
+
+The router applies SNAT to the client's outbound carrier and DNATs public TCP
+port `52241` to the client's configured listen port `52221`; the server listens
+on `52220`. Both WireGuard peers therefore retain an explicitly reachable dial
+target. On success the case proves bidirectional tunnel traffic, advancing
+persistent-keepalive counters, nonzero SNAT/DNAT counters, matching conntrack
+tuples, recovery after conntrack is flushed and the SNAT source port changes
+from `41001` to `41002`, and preservation of the configured forwarded port
+instead of learning either observed source port as the peer's listen port. A
+live `FwMark` change then forces the public peer's reverse carrier to reconnect;
+the router must count a new SYN through forward `52241` before traffic is
+revalidated.
+
+This is deliberately a `dual-reachable` contract. It does not establish a
+responder-only client behind NAT with no port forward, nor authenticated
+accepted-socket promotion. The `old_accepted_carrier=retained|retired` result
+is diagnostic rather than pass/fail: a conntrack reset does not guarantee an
+immediate close signal at the old endpoint, and peer-bound duplicate-carrier
+retirement remains design work.
+
+The completed topology's veth endpoints, addresses, routes, forwarding,
+nftables state, and conntrack mutation live inside PID-suffixed network
+namespaces. The veth pairs are necessarily created briefly in the guest root
+namespace before their endpoints are moved, but no pre-existing root
+configuration is changed and cleanup leaves no test links behind. The test
+records ownership before creation and removes those namespaces on `EXIT`; the
+host, Multipass management NIC, and both `WGTCP-Path*` NICs are not
+reconfigured. The managed-case cleanup path can remove recorded namespaces
+after an interrupted command using the exact `RUN/CASE` identifiers reported
+in the command log.
+
 The `tcp-debug-hostile-stream` case selects `wireguard-fork-fault.ko` and
 restores production inside one guest-side command. An `EXIT` trap covers normal
 failure and catchable termination, and the host requires an explicit restore
@@ -144,15 +196,16 @@ failure logs include public WireGuard state, listening and connected TCP
 sockets, and the kernel log emitted after the per-case reset; private keys are
 never collected.
 
-The 35 cases include preflight validation; all 16 combinations of stock/fork
-kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
+The registered cases include preflight validation; all 16 combinations of
+stock/fork kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
 authenticated roaming, random-port, and output tests; DEBUG initialization
 selftests; stock kernel capability and live-mode-change guards, including TCP
 listen-port mutation and random-port coupling; and TCP cases covering static
 traffic, asymmetric listen ports, stock-tool management, configuration round
 trips, configured underlay migration, full-tunnel live `FwMark` changes,
 route/source/uplink reconnects, ULA and scoped link-local IPv6 carriers,
-dual-stack listeners, authenticated-carrier lifetime, and isolated
+dual-stack listeners, authenticated-carrier lifetime, guest-local
+dual-reachable NAT44 with source-port rebinding, and isolated
 short-write/parser/queue-pressure faults with recovery.
 The latest committed campaign summary is in [`RESULTS.md`](RESULTS.md).
 
@@ -183,17 +236,17 @@ TCP connections.
 The hostile-stream case uses only the isolated fault module. After the tunnel
 is established, it forces real short writes, bounded garbage prefixes and
 parser resynchronization, and deterministic queue pressure. The recorded
-per-guest counter deltas were `80/4/4/2380` on `wgtcp-a` and `80/4/4/2378` on
+per-guest counter deltas were `80/4/4/437` on `wgtcp-a` and `80/4/4/442` on
 `wgtcp-b` for short writes/prefixes/resyncs/drops; normal traffic recovered on
 both guests after the controls were cleared.
 
-Run `wg20260713T221904Z` passed all of these checks for **35 PASS, 0 FAIL, 0
-SKIP** in 452.476 seconds, recording 533 commands. Its source identity is HEAD
-`7c398d543158b5ef77d8c822b64f90bb99229a44`, base archive SHA-256
-`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`, and
+Run `wg20260714T010310Z` passed all registered checks for **36 PASS, 0 FAIL,
+0 SKIP** in 558.520 seconds, recording 541 commands. Its source identity is
+HEAD `83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
+`2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`, and
 dirty overlay SHA-256
-`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
-Preflight passed all 100 local source-contract checks on each guest running
+`40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a`.
+Preflight passed all 107 local source-contract checks on each guest running
 Ubuntu 24.04 with kernel `6.8.0-124-generic`.
 
 The same campaign proved the live TCP listen-port guard returns `EBUSY`
@@ -210,8 +263,9 @@ then terminated by exact PID without stopping `multipassd` or either VM. The
 guest state was ownership-cleaned using the internal IDs from the logged
 successful `prepare` commands (`m13` for the first run and `m10` for the
 second). The next clean 32-case campaign passed, and the later expanded run
-above passed all 35 cases. These were control-client infrastructure aborts, not
-product failures or partial campaigns.
+passed all 35 cases. The final NAT-expanded run above passed all 36. These were
+control-client infrastructure aborts, not product failures or partial
+campaigns.
 
 When a host timeout leaves Multipass clients consuming CPU, inspect before
 terminating anything:

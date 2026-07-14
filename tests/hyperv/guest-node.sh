@@ -554,6 +554,15 @@ tcp-parity-netns)
 	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
 		bash "$source_root/tests/tcp-parity-netns.sh" "$mode"
 	;;
+tcp-nat-netns)
+	(( $# == 3 || $# == 4 )) || die "tcp-nat-netns RUN CASE MODE [SOURCE_ROOT]"
+	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
+	[[ $mode == dual-reachable ]] || die "invalid TCP NAT mode: $mode"
+	[[ -f $source_root/tests/tcp-nat-netns.sh ]] || die "TCP NAT netns test not found"
+	dir=$(new_auxiliary_state "$run_id" "$case_id")
+	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
+		bash "$source_root/tests/tcp-nat-netns.sh" "$mode"
+	;;
 cleanup)
 	(( $# == 3 )) || die "cleanup RUN CASE IFACE"
 	run_id=$1 case_id=$2 iface=$3

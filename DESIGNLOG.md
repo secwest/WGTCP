@@ -5,6 +5,69 @@ and known limitations. Update it in the same commit as every substantive design
 or behavioral change. Append a new entry when a decision changes; mark older
 entries as superseded instead of silently rewriting their history.
 
+## 2026-07-14: NAT44 validation stays narrower than carrier promotion
+
+### Dual-reachable NAT is a supported test topology
+
+**Decision:** Validate current TCP-over-NAT behavior with a private peer, an
+isolated router namespace, and a public peer inside each Ubuntu guest. The
+private peer is explicitly SNATed and has a stable external DNAT port that the
+public peer uses as its configured endpoint. Both configured peers therefore
+retain outbound reachability, matching the current two-carrier transport
+model.
+
+**Rationale:** This topology proves useful stateful-firewall and port-forward
+operation without treating an accepted provisional socket as if it had already
+been promoted to the authenticated peer. A no-forward, responder-only case
+would test a different and still-unimplemented carrier ownership design.
+
+**Evidence:** Hyper-V run `wg20260714T005957Z` passed independently on
+`wgtcp-a` and `wgtcp-b`. In each guest, nftables translated private outbound
+traffic from source port 41001 and DNATed public port 52241 to private listener
+52221. Bidirectional inner traffic passed, both peers advanced
+`PersistentKeepalive` transmit counters while otherwise idle, and conntrack
+contained both exact translations.
+
+### Observed NAT source ports do not become dial ports
+
+**Decision:** A live NAT mapping change is allowed to produce a new observed
+accepted source port, but the netlink-visible endpoint and future reverse dial
+target keep the operator-configured forwarded port.
+
+**Evidence:** The test flushed only the disposable router namespace's
+conntrack table, changed its SNAT rule from port 41001 to 41002, and drove
+traffic across the resulting TCP failure. A new 41002 carrier appeared,
+bidirectional tunnel traffic recovered on both guests, and `wg show endpoints`
+continued to report public port 52241 rather than either translated source
+port. A subsequent live `FwMark` change forced the public peer's normal
+outbound reconnect owner to dial again; a router-namespace counter observed a
+new SYN through forwarded port 52241 and bidirectional traffic remained usable.
+
+**Boundary:** The old accepted 41001 socket still appeared locally
+`ESTABLISHED` after the new mapping and overlay traffic were active, although
+it no longer had conntrack state. Immediate duplicate/stale-carrier retirement
+is therefore recorded as remaining work. The result also does not establish
+ordinary one-sided client-behind-NAT operation, double NAT without forwarding,
+or arbitrary provider NAT behavior.
+
+### NAT tests leave no persistent root networking changes
+
+**Decision:** Forwarding, nftables rules, and conntrack mutation live only in a
+dedicated router namespace. Namespace and veth ownership is recorded before
+creation, failures capture public WireGuard, socket, route, ruleset, and
+conntrack diagnostics, and cleanup deletes only recorded resources.
+
+**Rationale:** The regression must not alter Multipass management networking,
+the private Hyper-V switches, or either guest's root firewall and forwarding
+policy. Installing `nftables` and `conntrack` is persistent lab provisioning;
+the test topology itself is disposable.
+
+**Final campaign:** Run `wg20260714T010310Z` repeated this case inside the
+complete 36-case suite and finished **36 PASS, 0 FAIL, 0 SKIP** in 558.520
+seconds across 541 commands. Preflight passed all 107 source contracts on both
+guests, every kernel-log check was clean, and the hostile-stream case restored
+the production module afterward.
+
 ## 2026-07-13: TCP parity and lifecycle hardening
 
 ### UDP remains the compatibility baseline

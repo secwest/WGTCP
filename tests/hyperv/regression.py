@@ -655,6 +655,29 @@ class Suite:
             details["kernel_variant"] = self.args.tcp_kernel_variant
             return details
 
+    def tcp_nat_netns_case(self, mode: str) -> dict[str, object]:
+        case_id = f"tcp-nat-{mode}"
+        details: dict[str, object] = {"mode": mode, "guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                self.module(vm, self.args.tcp_kernel_variant)
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-nat-netns",
+                    self.run_id,
+                    case_id,
+                    mode,
+                    self.args.repo,
+                    label=f"tcp-nat-{mode}",
+                    timeout=max(self.args.timeout, 300),
+                )
+                guest_details[vm] = parse_fields(output)
+            details["guests"] = guest_details
+            details["kernel_variant"] = self.args.tcp_kernel_variant
+            return details
+
     def debug_selftest_case(self) -> dict[str, object]:
         self.module(self.args.vm_a, "fork-debug")
         status = parse_fields(
@@ -925,6 +948,10 @@ class Suite:
                 (
                     "tcp-authenticated-carrier-lifetime",
                     lambda: self.tcp_parity_netns_case("carrier-lifetime"),
+                ),
+                (
+                    "tcp-nat44-dual-reachable",
+                    lambda: self.tcp_nat_netns_case("dual-reachable"),
                 ),
                 ("tcp-debug-hostile-stream", self.tcp_fault_injection_case),
             ]

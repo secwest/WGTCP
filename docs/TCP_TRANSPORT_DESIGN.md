@@ -5,10 +5,11 @@
 | Field | Value |
 |---|---|
 | Upstream lineage | `jnathan/naked_gun@4211b00ef437`, imported into this repository |
-| Full-campaign source | HEAD `7c398d543158b5ef77d8c822b64f90bb99229a44`; base archive SHA-256 `5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`; dirty overlay SHA-256 `9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3` |
-| Latest full regression | `wg20260713T221904Z`: 35 PASS, 0 FAIL, 0 SKIP; 452.476 seconds; 533 commands |
+| Full-campaign source | HEAD `83d424cb0191bc2b90090c071728db6348f7b983`; base archive SHA-256 `2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`; dirty overlay SHA-256 `40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a` |
+| Latest full regression | `wg20260714T010310Z`: 36 PASS, 0 FAIL, 0 SKIP; 558.520 seconds; 541 commands |
 | Hardened follow-up source | Same HEAD/base archive; dirty overlay SHA-256 `efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7` |
 | Hardened follow-up | `wg20260713T225629Z`: config reload and hostile-stream PASS; production module restored on both guests |
+| NAT44 follow-up | `wg20260714T005957Z`: strengthened guest-local dual-reachable SNAT/DNAT case passed on both guests |
 | Scope | Linux kernel module, Linux generic-netlink control path, modified `wg` tools |
 | Maturity | Experimental research prototype |
 | Default transport | UDP |
@@ -178,14 +179,31 @@ The regression mode guard confirms that a rejected live update leaves both
 listeners present, then confirms that a link-down port-zero reconfiguration
 selects one random port shared by the TCP listener and companion UDP socket.
 
-Both peers need bidirectional inbound TCP reachability or port forwarding on
-their respective configured listen ports. The ports may differ; asymmetric
-listen ports passed in the recorded campaign. The handshake path can initiate a
-reverse connection instead of replying solely on the accepted stream, so
-conventional one-sided client-behind-NAT behavior and arbitrary NAT source-port
-changes are not established. A replacement configuration may change transport
-while link-down because it removes the old peers before creating peers for the
-new carrier.
+Both peers need bidirectional inbound TCP reachability or an explicit port
+forward to each peer's configured listen port. The ports may differ;
+asymmetric listen ports passed in the recorded campaign. Focused run
+`wg20260714T005957Z` also passed a guest-local, dual-reachable NAT44 topology:
+the private peer listened on `10.240.0.2:52221`, the router DNATed public
+`192.0.2.1:52241` to that configured listener, and the private peer's outbound
+connection to `192.0.2.2:52220` was SNATed first to source port `41001` and then
+to `41002` after the test flushed conntrack and replaced the SNAT rule. Both
+peers used two-second persistent keepalives, transfer counters advanced in both
+directions, and bidirectional tunneled pings recovered after the translation
+change. The public peer's configured dial port remained `52241`; neither
+observed SNAT source port replaced it. A live mark change then forced the
+public peer's outbound reconnect owner to dial again, and the router counted a
+new SYN through the preserved `52241` forward before traffic was revalidated.
+
+This is deliberately a narrow result. The topology gave the private peer an
+explicit inbound DNAT, so both peers remained independently dialable. The
+handshake path can initiate a reverse connection instead of replying solely on
+the accepted stream. Conventional responder-only operation behind NAT, with no
+inbound forward, still requires authenticated accepted-socket promotion and is
+unsupported. The run also retained the server's stale accepted `41001` carrier
+after the replacement `41002` carrier was established. Recovery therefore does
+not establish duplicate-carrier retirement, arbitrary NAT roaming, or general
+NAT parity. A replacement configuration may change transport while link-down
+because it removes the old peers before creating peers for the new carrier.
 
 TCP mode also opens the normal WireGuard UDP sockets on the same numeric
 `ListenPort` as the TCP listener. Operators seeking TCP-only exposure must block
@@ -381,20 +399,20 @@ their own compatibility validation.
   `tests/udp-compat-netns.sh` covers random ports, stock tools, output shape,
   bidirectional UDP traffic, and a TCP tunnel over a namespace-only underlay.
 
-The brokered 2026-07-13 Ubuntu 24.04/Linux 6.8 Hyper-V run
-`wg20260713T221904Z` passed all 16 combinations of stock/fork kernels and
+The brokered 2026-07-14 Ubuntu 24.04/Linux 6.8 Hyper-V run
+`wg20260714T010310Z` passed all 16 combinations of stock/fork kernels and
 stock/fork tools, every focused UDP compatibility case, and all recorded TCP
-cases: **35 PASS, 0 FAIL, 0 SKIP** in 452.476 seconds across 533 logged
+cases: **36 PASS, 0 FAIL, 0 SKIP** in 558.520 seconds across 541 logged
 commands. The mode guard rejected a live TCP listen-port change with `EBUSY`
 while both listeners remained present, then used a link-down port-zero
 reconfiguration to select the same random port for TCP and its companion UDP
 socket. The tested source snapshot used base archive SHA-256
-`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`
+`2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`
 and provisioned overlay SHA-256
-`9d107084a83ab3778b09e1de0ef87804b1ffea16d2d474009d57e9be247262a3`.
+`40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a`.
 See the [recorded results](../tests/hyperv/RESULTS.md). This establishes drop-in
 compatibility for the tested Linux combinations; third-party controllers and
-other kernel releases still require their own validation. All 100 local
+other kernel releases still require their own validation. All 107 local
 source-contract checks passed on each guest during preflight. The separate
 fault module then forced real short writes, deterministic malformed prefixes,
 successful parser resynchronization, queue-pressure drops, and clean recovery
@@ -402,6 +420,17 @@ on both guests without exposing those controls in production or ordinary DEBUG
 artifacts. Focused follow-up `wg20260713T225629Z` completed a real `wg-quick`
 save/down/up reload and repeated the one-shot hostile case; each guest-side
 command restored the production `fork` module before returning success.
+Focused NAT44 follow-up `wg20260714T005957Z` passed one isolated
+`tcp-nat44-dual-reachable` case in 57.476 seconds. Each guest independently
+created private, router, and public network namespaces; verified nftables DNAT
+from external port `52241` to configured internal port `52221` and SNAT to
+`41001`; advanced persistent-keepalive counters and bidirectional traffic;
+atomically changed SNAT to `41002`, flushed conntrack, and recovered
+bidirectional traffic without changing the configured `52241` dial port. A
+live mark change then forced a reverse dial and each router counted a new SYN
+through that forward. Both repetitions reported the old accepted `41001`
+carrier retained, so the result exposes rather than closes the
+duplicate-retirement gap.
 
 ### Remaining TCP parity and production work
 
@@ -477,10 +506,10 @@ References:
 | Static IPv4 endpoint | Cross-host smoke, stock-tool management, and deterministic stream-fault recovery passed | Longer soak, physical-carrier impairment, and kernel breadth |
 | Static IPv6 endpoint | Independent v4/v6 listeners plus ULA and scoped link-local IPv6 traffic passed | GUA breadth, namespace churn, VRF, and kernel breadth |
 | Responder with newly observed source | Unsupported; provisional sockets are bounded but never promoted | Implement atomic carrier-to-peer binding, publication, and retirement |
-| NAT with persistent keepalive | Standard timer retained | Validate long-lived TCP NAT behavior and half-open detection |
+| NAT with persistent keepalive | A short guest-local dual-reachable NAT44 case advanced two-second keepalives in both directions and recovered traffic after conntrack flush plus SNAT `41001` to `41002` replacement | Validate long-lived behavior, half-open detection, other NAT implementations, IPv6 translation, and responder-only/no-forward operation |
 | Configured peer IP changes | Two-underlay migration with both interfaces restarted passed | Test repeated churn, failure injection, and long-duration operation |
 | Authenticated peer IP changes | Future dial IP updates only after Noise authentication and passed the recorded topology | Add socket promotion, NAT, repeated churn, and hostile failure injection |
-| Peer source port changes | Live source is observed but never replaces the configured peer listen port | Add authenticated promotion or port advertisement for NAT ephemeral-port parity |
+| Peer source port changes | Forced SNAT `41001` to `41002` recovery preserved configured public port `52241`, but the stale accepted `41001` carrier remained established | Add atomic authenticated promotion, winner publication, and stale-carrier retirement for general NAT ephemeral-port parity |
 | Asymmetric listen ports | Passed with different configured ports | Broaden topology and failure-injection coverage |
 | Local uplink/address changes | Address and netdevice notifiers reconnect; source and uplink cases passed | Add repeated churn, namespace teardown, and route-race stress |
 | TCP network namespaces | Isolated IPv4, ULA IPv6, and scoped link-local IPv6 tunnels passed | Add GUA breadth, namespace teardown, device-move, and VRF coverage |
@@ -499,15 +528,28 @@ listen port, and queues a safe reconnect when that target changes. This
 preserves operator port configuration, but the ordering is why the target
 design requires an atomic carrier claim before endpoint mutation.
 
-Run `wg20260713T221904Z` completed with **35 PASS, 0 FAIL, 0 SKIP**. It passed
+Run `wg20260714T010310Z` completed with **36 PASS, 0 FAIL, 0 SKIP**. It passed
 configured two-underlay migration, authenticated address learning, asymmetric
 ports, live route, source-address, uplink and `FwMark` reconnect, full-tunnel
 recursion avoidance, ULA and scoped link-local IPv6 traffic, live configuration
-application plus SaveConfig serialization, a 40-second authenticated-carrier lifetime, and
-deterministic hostile-stream recovery. This does not establish accepted-socket
-promotion, responder-only NAT operation, arbitrary ephemeral-port roaming,
-VRF/namespace churn, physical-carrier impairment, or hostile repeated soak. See the
+application plus SaveConfig serialization, a 40-second authenticated-carrier
+lifetime, dual-reachable NAT44 remapping, and deterministic hostile-stream
+recovery. This does not establish accepted-socket promotion, responder-only
+NAT operation, arbitrary ephemeral-port roaming, VRF/namespace churn,
+physical-carrier impairment, or hostile repeated soak. See the
 [regression results](../tests/hyperv/RESULTS.md).
+
+Focused run `wg20260714T005957Z` adds narrower NAT evidence. On both guests, an
+isolated NAT44 router SNATed the private peer's outbound carrier from public
+source port `41001`, DNATed public port `52241` to private listen port `52221`,
+then forced a new public source port of `41002` by replacing conntrack and the
+SNAT rule. Two-second persistent keepalives advanced, bidirectional tunneled
+traffic recovered, and the configured `52241` peer port was preserved. The old
+accepted `41001` carrier remained visible after recovery. A forced reverse
+reconnect produced a new SYN through forward `52241` and kept traffic usable.
+This proves the specific dual-reachable, explicitly forwarded topology; it
+does not prove responder-only/no-forward promotion, stale-carrier retirement,
+arbitrary NAT roaming, or general NAT parity.
 
 ### Target complete-roaming algorithm
 
@@ -895,9 +937,13 @@ parity claim still requires every remaining item.
       churn, and long-duration teardown races pass across broader kernels.
 - [ ] A cookie-equivalent pre-authentication cost defense protects TCP-mode
       handshakes before Noise authentication.
-- [ ] Authenticated carrier binding/promotion, responder-only NAT,
-      persistent-keepalive NAT behavior, and arbitrary ephemeral-port roaming
-      pass for IPv4/IPv6.
+- [x] A short guest-local dual-reachable NAT44 case passes explicit DNAT
+      `52241` to `52221`, SNAT `41001` to `41002` replacement, two-second
+      keepalive advancement, configured-port preservation, and bidirectional
+      traffic recovery on both guests.
+- [ ] Authenticated carrier binding/promotion, responder-only/no-forward NAT,
+      stale-carrier retirement, long-lived keepalive and half-open behavior,
+      and arbitrary ephemeral-port roaming pass across IPv4/IPv6 and varied NATs.
 - [x] Remote dial IP, remote listen port, observed ephemeral source, and local
       route/source are represented separately.
 - [x] Recorded `FwMark`, full-tunnel recursion, live route/source/uplink,
@@ -940,9 +986,11 @@ For this snapshot:
 9. Do not rely on provisional peer promotion. The unsafe legacy block has been
    removed and no authenticated socket-transfer protocol is implemented.
 10. Treat configured migration, authenticated target learning, live reconnect,
-    asymmetric ports, IPv6, configuration round trips, and focused stream faults
-    as validated only for the recorded topology. Do not infer authenticated
-    carrier promotion, general NAT roaming, or hostile repeated-churn parity.
+    asymmetric ports, IPv6, configuration round trips, focused stream faults,
+    and dual-reachable NAT44 recovery as validated only for their recorded
+    topologies. The NAT case required explicit DNAT and retained a stale accepted
+    carrier. Do not infer authenticated carrier promotion, responder-only
+    operation, general NAT roaming, or hostile repeated-churn parity.
 11. Keep optional kernel diagnostics off except during isolated debugging;
    `WG_TCP_VERBOSE` can expose secrets and `WG_TCP_DIAG` is unrate-limited and
    can perturb measurements. Load `wireguard-fork-fault.ko` only in a serialized
@@ -950,4 +998,5 @@ For this snapshot:
 12. Treat the published performance tables as leads for replication, not as a
    production SLA or proof of TCP-over-TCP meltdown immunity.
 13. Provide bidirectional inbound TCP reachability on each peer's configured
-    port; do not assume ordinary one-sided NAT/responder behavior.
+    port, using an explicit port forward for a NATed peer. Do not assume ordinary
+    one-sided NAT/responder behavior without that forward.
