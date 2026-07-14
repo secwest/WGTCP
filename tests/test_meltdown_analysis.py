@@ -40,6 +40,7 @@ ADAPTIVE_MATRIX = (
 RECOVERY_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-recovery.csv"
 )
+BURST_MATRIX = ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst.csv"
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
@@ -156,6 +157,93 @@ class MeltdownAnalysisTest(unittest.TestCase):
             {"recovery-smoke"},
         )
         self.assertEqual({row["stage"] for row in rows[2:]}, {"recovery"})
+
+    def test_burst_matrix_is_paired_and_predeclared(self) -> None:
+        with BURST_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["stage"] for row in rows}, {"burst-smoke"})
+        self.assertEqual({row["name"] for row in rows}, {"ge-r200-q1-16f"})
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"50"})
+        self.assertEqual({row["rtt_ms"] for row in rows}, {"200"})
+        self.assertEqual({row["queue_bdp"] for row in rows}, {"1"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["loss_model"] for row in rows}, {"gemodel"})
+        self.assertEqual({row["loss_pct"] for row in rows}, {"0"})
+        self.assertEqual({row["burst_p"] for row in rows}, {"2"})
+        self.assertEqual({row["burst_r"] for row in rows}, {"25"})
+        self.assertEqual({row["burst_h"] for row in rows}, {"90"})
+        self.assertEqual({row["burst_k"] for row in rows}, {"99"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual({row["inner_cc"] for row in rows}, {"cubic"})
+        self.assertEqual({row["direction"] for row in rows}, {"reverse"})
+        self.assertEqual({row["competitor"] for row in rows}, {"0"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"2"})
+
+    def test_netem_loss_configuration_is_fail_closed(self) -> None:
+        axes = {
+            "loss_model": "gemodel",
+            "loss_pct": "0",
+            "burst_p": "2",
+            "burst_r": "25",
+            "burst_h": "90",
+            "burst_k": "99",
+        }
+        netem = {
+            "options": {
+                "loss-gemodel": {
+                    "p": 0.02,
+                    "r": 0.25,
+                    "1-h": 0.90,
+                    "1-k": 0.99,
+                }
+            }
+        }
+        self.assertEqual(
+            ANALYZE.netem_loss_configuration_issues(netem, axes),
+            [],
+        )
+
+        wrong_parameters = {
+            "options": {
+                "loss-gemodel": {
+                    "p": 0.03,
+                    "r": 0.25,
+                    "1-h": 0.90,
+                    "1-k": 0.99,
+                }
+            }
+        }
+        self.assertEqual(
+            ANALYZE.netem_loss_configuration_issues(wrong_parameters, axes),
+            ["netem_loss_parameters"],
+        )
+        self.assertEqual(
+            ANALYZE.netem_loss_configuration_issues(
+                {"options": {"loss-random": {"loss": 0.02}}},
+                axes,
+            ),
+            ["netem_loss_model"],
+        )
+        self.assertEqual(
+            ANALYZE.netem_loss_configuration_issues(
+                netem,
+                {"loss_model": "none"},
+            ),
+            ["netem_loss_model"],
+        )
+        self.assertEqual(
+            ANALYZE.netem_loss_configuration_issues(
+                {"options": {"loss-random": {"loss": 0.003}}},
+                {"loss_model": "random", "loss_pct": "0.3"},
+            ),
+            [],
+        )
 
     def test_json_loader_accepts_utf8_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

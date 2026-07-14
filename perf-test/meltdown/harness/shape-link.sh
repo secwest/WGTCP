@@ -133,8 +133,8 @@ queue_bytes="$(awk -v r="$RATE_MBPS" -v t="$RTT_MS" -v q="$QUEUE_BDP" \
 	'BEGIN { n=r*t*125*q; if (n < 16384) n=16384; printf "%.0f", n }')"
 one_way_ms="$(awk -v t="$RTT_MS" 'BEGIN { printf "%.3f", t/2 }')"
 
-printf '{"iface":"%s","ifb":"%s","peer_ip":"%s","rate_mbps":%s,"rtt_ms":%s,"queue_bdp":%s,"queue_bytes":%s,"queue_kind":"%s","loss_model":"%s"}\n' \
-	"$IFACE" "$IFB" "$PEER_IP" "$RATE_MBPS" "$RTT_MS" "$QUEUE_BDP" "$queue_bytes" "$QUEUE_KIND" "$LOSS_MODEL" > "$MARKER"
+printf '{"iface":"%s","ifb":"%s","peer_ip":"%s","rate_mbps":%s,"rtt_ms":%s,"queue_bdp":%s,"queue_bytes":%s,"queue_kind":"%s","loss_model":"%s","loss_pct":%s,"burst_p":%s,"burst_r":%s,"burst_h":%s,"burst_k":%s}\n' \
+	"$IFACE" "$IFB" "$PEER_IP" "$RATE_MBPS" "$RTT_MS" "$QUEUE_BDP" "$queue_bytes" "$QUEUE_KIND" "$LOSS_MODEL" "$LOSS_PCT" "$BURST_P" "$BURST_R" "$BURST_H" "$BURST_K" > "$MARKER"
 
 cleanup_failed_apply() {
 	rc=$?

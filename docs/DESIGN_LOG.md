@@ -432,3 +432,22 @@ the tracer's one-event shutdown allowance by one additional event. The retry
 remains invalid and does not replace the original. The 12 broader recovery
 executions remain unrun; the next mechanism gate must force outer recovery
 directly rather than lowering the endogenous queue again.
+
+### DL-026: Verify exogenous burst loss before using it as evidence
+
+**Status:** Accepted
+
+The endogenous 0.05x-BDP gate produced severe TCP-specific degradation but no
+observed outer TCP retransmission or RTO. The next separately fingerprinted
+gate therefore uses the previously declared Gilbert-Elliott candidate at 50
+Mb/s, 200 ms, 1x BDP, 16 inner flows, and parameters `2/25/90/99`. Two matched
+TCP/UDP repetitions produce four 60-second executions.
+
+All four executions must be valid before broader burst work is released. In
+addition to the existing rate, delay, queue, filter, telemetry, workload, and
+cleanup checks, the analyzer must match the live netem loss model and every
+Gilbert-Elliott probability against the matrix on both endpoints. At least one
+TCP repetition must record a scored outer retransmission or RTO. A validity
+failure is retained and rerun only in a separate campaign; absence of outer
+recovery fails the gate without tuning severity inside the completed
+fingerprint.

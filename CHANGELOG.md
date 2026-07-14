@@ -19,10 +19,14 @@ All notable changes to this repository are documented here.
   0.05x-BDP fallback after the 0.25x-BDP queue did not overflow.
 - Added a 0.05x-BDP recovery smoke that gates lower-rate, higher-RTT, and
   contention rows on observed outer TCP retransmission or RTO.
+- Added a matched Gilbert-Elliott burst-recovery smoke at 50 Mb/s, 200 ms, and
+  1x BDP that gates broader burst testing on valid observed outer recovery.
 - Added 100 ms receiver tunnel-interface sampling, layered BPF
   retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
   carrier-tuple tracking, and cross-layer coupling metrics.
 - Added predeclared meltdown classification and strict per-cell validity checks.
+- Added fail-closed validation of the live netem random or Gilbert-Elliott loss
+  model and its exact configured probabilities.
 - Added source, runtime build, matrix-axis, repetition, cell, and campaign
   fingerprints so resumed evidence cannot cross implementation or test-plan
   boundaries.
