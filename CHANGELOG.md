@@ -15,6 +15,8 @@ All notable changes to this repository are documented here.
 - Added a predeclared lower-rate mechanism matrix that gates broader testing on
   observed finite-queue overflow in matched 35 Mb/s/200 ms/0.25x-BDP smoke
   cells.
+- Added a separately fingerprinted 0.10x-BDP adaptive smoke with a gated
+  0.05x-BDP fallback after the 0.25x-BDP queue did not overflow.
 - Added 100 ms receiver tunnel-interface sampling, layered BPF
   retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
   carrier-tuple tracking, and cross-layer coupling metrics.
@@ -49,6 +51,8 @@ All notable changes to this repository are documented here.
   issuing another nonblocking receive and to reschedule bounded buffered work.
 - Changed campaign delivery and stall scoring from iperf block-completion
   intervals to receiver tunnel-interface counters.
+- Changed campaign analysis to report measurement-window sampled peak queue
+  backlog in bytes and as a fraction of the configured byte limit.
 - Changed the campaign topology to the implementation's supported
   dual-configured-endpoint mode and made both outer carrier tuples validity
   requirements.

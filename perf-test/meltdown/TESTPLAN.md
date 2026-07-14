@@ -132,7 +132,8 @@ Per workload:
 - first/last-quartile goodput and fitted trend;
 - stall fraction and longest zero-delivery run;
 - inner and outer RTO/retransmission rates;
-- finite-queue drops, overlimits, and backlog;
+- finite-queue drops and overlimits, plus sampled peak backlog in bytes and as a
+  fraction of the configured queue;
 - for short flows, p50/p95/p99/max completion time and failure rate.
 
 ## 6. Stages
@@ -142,11 +143,17 @@ Per workload:
 3. `boundary`: fine RTT sweep through 50-400 ms.
 4. `mechanism-smoke`: 35 Mb/s, 200 ms, 0.25x BDP matched cells that must
    demonstrate finite-queue overflow before broader mechanism testing.
-5. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells.
-6. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
-7. `endurance`: selected 10-minute clean/high-risk matched runs.
-8. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
-9. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
+5. `adaptive-smoke`: after the 0.25x-BDP gate did not overflow, matched 35
+   Mb/s/200 ms/0.10x-BDP cells. Both TCP repetitions must be valid and record
+   finite-queue drops before a broader adaptive matrix is declared.
+6. `adaptive-fallback`: matched 0.05x-BDP cells run only if the 0.10x-BDP gate
+   does not produce drops in both TCP repetitions.
+7. `mechanism`: matched 25/35 Mb/s, 200/400 ms, 0.25x/0.5x BDP cells. These
+   original rows remain gated off by their failed 0.25x-BDP smoke.
+8. `burst`: random onset and Gilbert-Elliott loss that can force outer RTO.
+9. `endurance`: selected 10-minute clean/high-risk matched runs.
+10. `dynamic`: clean-impaired-clean and 0/3% toggling epochs.
+11. `workload`: short-flow FCT, bidirectional, CC sensitivity, reverse-only,
    jitter, AQM/ECN, and competing CUBIC.
 
 Screening cells use 30-60 seconds and at least two repetitions. Key queue and

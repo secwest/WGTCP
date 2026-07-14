@@ -379,3 +379,19 @@ The sampled sender-side queue peaked at 130,548 of 218,750 bytes (59.7%);
 HTB recorded rate-shaper overlimits without child-queue overflow. The 12
 broader rows were therefore not run. The next adaptive step requires a
 separately fingerprinted smaller-queue predeclaration.
+
+### DL-024: Adapt queue depth without changing completed evidence
+
+**Status:** Accepted
+
+The completed 0.25x-BDP smoke peaked above the 0.10x-BDP byte limit that the
+same rate and RTT would configure. A new matrix therefore predeclares two
+matched TCP/UDP repetitions at 35 Mb/s, 200 ms, 16 flows, and 0.10x BDP
+(87,500 bytes). Both TCP repetitions must be valid and record finite-queue
+drops before declaring a broader adaptive mechanism matrix.
+
+If that gate does not overflow in both TCP repetitions, the same matrix
+predeclares a 0.05x-BDP fallback (43,750 bytes). The fallback is not run when
+the 0.10x-BDP gate passes. The analyzer now publishes measurement-window
+sampled peak backlog in bytes and as a fraction of the configured queue; queue
+drops remain the gate because discrete sampling can miss a transient peak.

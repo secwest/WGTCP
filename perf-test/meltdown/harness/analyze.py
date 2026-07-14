@@ -608,13 +608,13 @@ def parse_timestamp_ns(value: str) -> int | None:
         return None
 
 
-def qdisc_window_delta(
+def qdisc_window_values(
     endpoint: Path,
     kind: str,
     key: str,
     start_ns: int | None,
     end_ns: int | None,
-) -> int | None:
+) -> list[int] | None:
     if start_ns is None or end_ns is None:
         return None
     samples: list[tuple[int, int]] = []
@@ -645,7 +645,31 @@ def qdisc_window_delta(
         or end_ns - timestamps[end_index] > 500_000_000
     ):
         return None
-    return max(0, samples[end_index][1] - samples[start_index][1])
+    return [value for _, value in samples[start_index : end_index + 1]]
+
+
+def qdisc_window_delta(
+    endpoint: Path,
+    kind: str,
+    key: str,
+    start_ns: int | None,
+    end_ns: int | None,
+) -> int | None:
+    values = qdisc_window_values(endpoint, kind, key, start_ns, end_ns)
+    if values is None:
+        return None
+    return max(0, values[-1] - values[0])
+
+
+def qdisc_window_peak(
+    endpoint: Path,
+    kind: str,
+    key: str,
+    start_ns: int | None,
+    end_ns: int | None,
+) -> int | None:
+    values = qdisc_window_values(endpoint, kind, key, start_ns, end_ns)
+    return max(values) if values else None
 
 
 def htb_rate_mbps(path: Path) -> float | None:
@@ -892,6 +916,21 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     queue_packets = sum(value or 0 for value in queue_window["packets"])
     queue_drops = sum(value or 0 for value in queue_window["drops"])
     queue_overlimits = sum(value or 0 for value in queue_window["overlimits"])
+    queue_peak_backlogs = [
+        qdisc_window_peak(
+            cell_dir / endpoint,
+            queue_kind,
+            "backlog",
+            delivery["measurement_start_ns"],
+            delivery["measurement_end_ns"],
+        )
+        for endpoint in ("client", "server")
+    ]
+    queue_peak_backlog = (
+        max(value for value in queue_peak_backlogs if value is not None)
+        if all(value is not None for value in queue_peak_backlogs)
+        else None
+    )
     impairment_issues = [
         f"{endpoint}:{issue}"
         for endpoint in ("client", "server")
@@ -1021,6 +1060,12 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "queue_packets": queue_packets,
             "queue_drops": queue_drops,
             "queue_overlimits": queue_overlimits,
+            "queue_peak_backlog_bytes": queue_peak_backlog,
+            "queue_peak_backlog_fraction": (
+                queue_peak_backlog / queue_bytes
+                if queue_peak_backlog is not None and queue_bytes
+                else None
+            ),
             **competitor_metrics,
             "tcp_carrier_samples": sum(
                 status["samples"] for status in carrier_endpoints.values()
@@ -1109,6 +1154,8 @@ CSV_FIELDS = [
     "queue_packets",
     "queue_drops",
     "queue_overlimits",
+    "queue_peak_backlog_bytes",
+    "queue_peak_backlog_fraction",
     "competitor_goodput_mbps",
     "competitor_seconds",
     "tcp_carrier_min_count",
