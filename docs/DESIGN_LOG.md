@@ -529,21 +529,32 @@ emitted only after all probes are attached. `interval_complete` telemetry and
 workload readiness require that marker. Stop all BPF event probes at the
 resulting absolute monotonic cutoff while leaving bpftrace attached for one
 further second before END summaries. Every probe checks the cutoff before a
-counter update or event print. Keep the existing one-event historical summary
-allowance unchanged.
+counter update or event print. New evidence uses a versioned per-CPU `count()`
+aggregation map and requires exact raw/summary equality. Keep the existing
+one-event allowance only for historical scalar-summary traces.
 
 Before any impairment, bind the controller's server/client roles to the exact
 physical address and fixed local/peer TCP and UDP tunnel addresses on each
 endpoint. A role reversal must fail before shaping or workload rather than
 producing a locally terminated diagnostic execution.
 
+The first correctly routed qualifying gate showed why quiescence alone is
+insufficient: two pairs of server inner-RTO events shared identical nanosecond
+timestamps, and each pair lost one shared scalar increment. The detailed trace
+therefore exceeded the summary by exactly two even though all events preceded
+the cutoff by seconds. On the deployed bpftrace version, a 16-way concurrent
+probe validated per-CPU `count()` aggregation at exactly 800 raw and 800
+summarized events. The new format emits an explicit version marker and numeric
+event/layer keys; absent keys mean zero, mixed formats fail closed, and every
+present count must exactly match detailed output.
+
 **Rationale:** the failed TCP artifacts contain all 16 connected flows and
 59.9-60.0 seconds of continuous non-omitted intervals. Their failures occur
 during iperf's final results exchange, so strict success creates survivorship
 bias against the strongest collapses. Independently, server raw inner-RTO
-events exceeded END summaries by two to four events near tracer shutdown.
-Prospective independent completeness and quiescence address both limitations
-without promoting or reinterpreting any historical invalid cell.
+events exceeded END summaries by two to four events. Prospective independent
+completion, bounded capture, quiescence, and per-CPU aggregation address those
+limitations without promoting or reinterpreting any historical invalid cell.
 
 The new `burst-qualified-smoke` is exactly two TCP and two UDP executions at 50
 Mb/s, 200 ms, 1x BDP, 16 flows, 60 seconds, and Gilbert-Elliott `2/25/90/1`.

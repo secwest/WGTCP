@@ -960,6 +960,74 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 ANALYZE.tcp_event_telemetry_issues(endpoint),
             )
 
+    def test_tcp_event_per_cpu_summary_requires_exact_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            endpoint = Path(temporary)
+            (endpoint / "done").touch()
+            (endpoint / "clock.txt").write_text(
+                "EpochNs=1700000000000000000\nUptimeSeconds=100.0\n",
+                encoding="ascii",
+            )
+            (endpoint / "tcp-events.status").write_text(
+                "exit_code=0\nelapsed_ns=10000000000\ncomplete=yes\n",
+                encoding="ascii",
+            )
+            marker = "summary,format,per_cpu_count,1,0,0,0,0\n"
+            event = "1700000000000000000,rto,inner,5201,40000,0,0,0\n"
+            aggregate = "@event_counts[1, 1]: 2\n"
+            trace = ANALYZE.TCP_EVENTS_HEADER + "\n" + event * 2 + marker + aggregate
+            (endpoint / "tcp-events.csv").write_text(trace, encoding="ascii")
+
+            self.assertEqual(ANALYZE.tcp_event_telemetry_issues(endpoint), [])
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(": 2", ": 1"),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_mismatch",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(marker, marker * 2),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace.replace(marker, ""),
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            legacy = "summary,rto,inner,2,0,0,0,0\n"
+            (endpoint / "tcp-events.csv").write_text(
+                trace + legacy,
+                encoding="ascii",
+            )
+            self.assertIn(
+                "events_summary_format",
+                ANALYZE.tcp_event_telemetry_issues(endpoint),
+            )
+
+            (endpoint / "tcp-events.csv").write_text(
+                trace + "@event_counts[1, 1]: 2\n",
+                encoding="ascii",
+            )
+            self.assertTrue(
+                any(
+                    issue.startswith("events_malformed_line_")
+                    for issue in ANALYZE.tcp_event_telemetry_issues(endpoint)
+                )
+            )
+
     def test_tcp_event_capture_anchor_is_attached_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             endpoint = Path(temporary)
@@ -1018,16 +1086,19 @@ class MeltdownAnalysisTest(unittest.TestCase):
             )
 
     def test_tcp_event_summaries_use_atomic_aggregation(self) -> None:
-        for counter in (
-            "inner_rto",
-            "outer_rto",
-            "competitor_rto",
-            "inner_retrans",
-            "outer_retrans",
-            "competitor_retrans",
-        ):
-            self.assertIn(f"@{counter}++;", TCP_EVENTS)
-            self.assertNotIn(f"@{counter} = @{counter} + 1;", TCP_EVENTS)
+        for event_id in (1, 2):
+            for layer_id in (1, 2, 3):
+                self.assertIn(
+                    f"@event_counts[{event_id}, {layer_id}] = count();",
+                    TCP_EVENTS,
+                )
+        self.assertNotIn("@inner_rto++", TCP_EVENTS)
+        self.assertNotIn("@inner_retrans++", TCP_EVENTS)
+        self.assertIn(
+            'printf("summary,format,per_cpu_count,1,0,0,0,0\\n");',
+            TCP_EVENTS,
+        )
+        self.assertIn("print(@event_counts);", TCP_EVENTS)
 
     def test_tcp_event_cutoff_precedes_every_probe_mutation(self) -> None:
         self.assertEqual(ANALYZE.MAX_TRACE_SUMMARY_LAG, 1)

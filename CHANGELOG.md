@@ -62,6 +62,9 @@ All notable changes to this repository are documented here.
   process identity, and an attached-command BPF event cutoff with one second of
   pre-summary quiescence. The fixed iperf executable hash and JSON-reported
   client version are also reconciled.
+- Replaced concurrent shared-scalar BPF event summaries with versioned per-CPU
+  `count()` aggregation and exact raw/summary reconciliation while retaining
+  historical trace semantics.
 - Required explicit workload exit-status evidence and exact restarted process
   identity for both inner and selected competitor iperf servers.
 - Added a pre-impairment endpoint-role check that binds physical and fixed
