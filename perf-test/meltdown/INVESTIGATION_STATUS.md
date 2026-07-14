@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-13 21:53 PDT (2026-07-14 04:53 UTC)
+Status cutoff: 2026-07-14 00:40 PDT (2026-07-14 07:40 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -28,13 +28,10 @@ controls are valid/stable, one TCP cell is valid/degraded, and one TCP cell is
 invalid because its final iperf results exchange failed. An exact retry
 reproduced the severe invalid result and remained invalid.
 
-The separately fingerprinted Gilbert-Elliott burst-recovery smoke also
+The first separately fingerprinted Gilbert-Elliott burst-recovery smoke also
 completed all four scheduled cells, but every TCP and UDP preflight had 100%
 loss and no workload began. All four records are invalid. The active released
-inventory is now 98/98 complete: 93 valid, 92 stable, one degraded, zero
-near-meltdown, zero meltdown, and five invalid. The full provenance-preserving
-audit inventory retains 106 cell executions: 92 stable, one degraded, and 13
-invalid records.
+inventory after that gate was 98/98 complete.
 
 The live netem model and exact `2/25/90/99` probabilities matched the matrix on
 both endpoints. The failure was semantic rather than configurational: netem's
@@ -42,12 +39,21 @@ last argument is `1-K`, so `99%` imposed 99% loss in the good state. This gate
 provides no outer-recovery or meltdown evidence, and no broader rows are
 released.
 
-A new separately fingerprinted `2/25/90/1` burst-recovery smoke is predeclared
-but unrun. It retains 90% bad-state loss while reducing good-state loss to 1%,
-for 7.59% nominal stationary loss per impaired direction. Its four pending
-cells make the active released inventory 98/102 complete. Loss validity now
-also requires monotonic IFB netem counters, nonzero traffic and drops, and
-realized loss within 0.5x-2x the stationary expectation on each endpoint.
+The separately fingerprinted corrected `2/25/90/1` smoke retained 90%
+bad-state loss while reducing good-state loss to 1%, for 7.59% nominal
+stationary loss per impaired direction. Its complete campaign produced one
+valid/degraded UDP cell and three invalid cells. Exact separate reruns of the
+invalid cells remained invalid. Released inventory is now 102/102 complete: 94
+valid, 92 stable, two degraded, zero near-meltdown, zero meltdown, and eight
+invalid. Full audit inventory contains 113 completed executions: 92 stable, two
+degraded, and 19 invalid.
+
+Both corrected TCP repetitions forced outer TCP recovery. One exact invalid
+rerun exhibited all three formal meltdown conditions, but it remains unscored
+because the impairment broke iperf's final in-band results exchange. Repeated
+2-4 event tracer-summary discrepancies also expose a shutdown race. Existing
+records will not be rescored; a prospective source fingerprint must validate
+full interval completion independently and quiesce probes before summaries.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -75,9 +81,9 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
 The current valid evidence does not meet the predeclared meltdown definition.
-It also does not rule out meltdown: no valid cell has yet forced outer TCP
+It also does not rule out meltdown: no valid TCP cell has yet forced outer TCP
 recovery. The next mechanism gate must use a separately fingerprinted,
-semantically corrected burst severity that preserves tunnel preflight while
+prospective completion and tracing policy that preserves tunnel preflight while
 forcing retransmission or RTO.
 
 ## 2. Objective and falsifiable definition
@@ -575,17 +581,56 @@ the preparation-only path against the isolated matching runtime restored two
 carriers per endpoint. Fresh 10-packet TCP and UDP probes then had zero loss at
 0.37 ms and 0.29 ms mean RTT, respectively.
 
+### 10.9 Corrected burst-recovery smoke and invalid-cell rerun
+
+The corrected gate changed only netem's good-state loss from `1-K=99%` to 1%.
+Both hosts first passed exact disposable-veth verification and cleanup. A
+pre-workload launch then found the server-side inner iperf service absent; its
+0/4 incomplete manifest is retained as diagnostic rather than cell evidence.
+Preparation-only recovery restored the service, matching runtime, two carriers,
+and clean tunnel controls before the complete campaign:
+
+| Execution | Validity/class | Goodput | Stalls | Trend | Inner RTO/flow-min | Outer retrans/RTO |
+|---|---|---:|---:|---:|---:|---:|
+| TCP r1 | invalid | 0.95 Mb/s | 57.7% | significant decline | 0.00 | 181 / 25 |
+| TCP r2 | invalid | 0.027 Mb/s | 96.7% | positive | 1.56 | 33 / 13 |
+| UDP r1 | valid/degraded | 4.10 Mb/s | 0.2% | flat | 5.69 | 4 / 0 |
+| UDP r2 | invalid | 3.77 Mb/s | 0% | significant decline | 6.25 | 2 / 0 |
+
+TCP r1 failed its final in-band results exchange and one endpoint's realized
+loss band. TCP r2 failed finalization and had a two-event tracer-summary
+discrepancy. UDP r2 had a four-event discrepancy. All three were rerun exactly
+under their original fingerprints:
+
+| Rerun | Goodput | Stalls | Trend | Inner RTO/flow-min | Invalid reason |
+|---|---:|---:|---:|---:|---|
+| TCP r1 | 0.073 Mb/s | 93.7% | significant decline | 1.31 | workload finalization |
+| TCP r2 | 0.81 Mb/s | 64.0% | positive | 1.19 | workload finalization; realized loss |
+| UDP r2 | 3.76 Mb/s | 0.7% | positive | 7.19 | tracer summary mismatch |
+
+TCP r1's rerun met all three formal meltdown conditions and recorded 29 outer
+retransmissions plus 17 outer RTOs. It remains invalid and unscored: all 16
+flows produced 59.9 seconds of non-omitted intervals, but the impaired in-band
+control channel could not receive final results. The existing validity rule is
+not changed after observing that result.
+
+The tracer mismatches are also reproducible: detailed inner-RTO events exceed
+their END summaries by two to four events while the trace exits cleanly. The
+next prospective fingerprint must prove full interval execution without
+depending on final in-band control delivery and stop event collection before a
+quiescent summary interval. Existing evidence remains invalid.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 93 valid calibration, screening, or mechanism-smoke cells meets
-  even one component of the predeclared full-meltdown definition.
-- One valid TCP cell is degraded because its goodput is below half of its
-  matched UDP control.
-- No valid cell has an inner RTO or outer recovery event, so there is no
-  cross-layer recovery coupling to attribute to classical TCP-over-TCP
-  meltdown.
+- None of the 94 valid calibration, screening, or mechanism cells meets all
+  three components of the predeclared full-meltdown definition.
+- One valid TCP cell and one valid UDP control are degraded.
+- No valid TCP cell has both inner RTO and outer recovery evidence, so valid
+  evidence does not yet establish classical nested recovery coupling.
+- Invalid corrected-burst TCP cells repeatedly forced outer recovery. One exact
+  invalid rerun met all three meltdown conditions but cannot be promoted.
 - The severe pre-fix 16-flow collapse was a deterministic writer-notification
   defect with no outer loss or recovery, not classical meltdown.
 - The writer repair restores clean 16-flow throughput and remains responsive
@@ -595,20 +640,19 @@ carriers per endpoint. Fresh 10-packet TCP and UDP probes then had zero loss at
 
 ### Conclusions not yet supported
 
-- The campaign does not rule out meltdown under heavier sustained overflow that
-  forces outer retransmission/RTO, bidirectional contention, AQM/ECN, or
-  endurance load.
+- The campaign does not establish meltdown until a prospective valid execution
+  reproduces the observed signature without relying on a failed final control
+  exchange or raced tracer summary.
 - The current results should not be generalized from two outer streams to a
   single-carrier or responder-only design.
 - The seven records in the initial campaign remain invalid and are not used as
   transport evidence; only their separate complete reruns enter the qualified
   composite.
 
-The current assessment is: **no meltdown was observed in 93 valid cells. One
-valid cell is degraded. Finite-queue overflow can now produce substantial
-TCP-specific stalls and throughput loss, but no valid cell has triggered outer
-TCP recovery, so the full nested recovery feedback mechanism remains to be
-exercised.**
+The current assessment is: **no meltdown is established in 94 valid cells. Two
+valid cells are degraded. Corrected burst loss demonstrably triggers outer TCP
+recovery, and one invalid exact rerun exhibits the full signature, but
+prospective valid reproduction is still required.**
 
 ## 12. Validation completed
 
@@ -698,8 +742,7 @@ files are included.
 - Two TCP carrier streams are established.
 - Physical qdiscs are restored; no campaign impairment is active.
 - No sampler or competitor unit is running.
-- Fresh TCP and UDP probes passed with zero loss and 0.37 ms and 0.29 ms mean
-  RTT, respectively.
+- Fresh TCP and UDP probes passed 10/10 with zero loss after the exact reruns.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -709,11 +752,12 @@ files are included.
 
 Mechanism and breadth:
 
-1. run the predeclared `2/25/90/1` burst-recovery smoke and require valid
-   observed outer retransmission or RTO;
-2. run burst-loss and outer-RTO cells and measure temporal coupling;
-3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
-4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
+1. predeclare and validate interval-complete workload termination plus a
+   quiescent tracer-summary window under a new fingerprint;
+2. rerun the matched `2/25/90/1` gate and require valid reproduction;
+3. run burst-loss and outer-RTO cells and measure temporal coupling;
+4. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
+5. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
    dynamics, and selected 10-minute endurance tests.
 
 Closeout:
@@ -738,3 +782,6 @@ Closeout:
 9. [`results/2026-07-13-adaptive-smoke/REPORT.md`](results/2026-07-13-adaptive-smoke/REPORT.md)
 10. [`results/2026-07-13-recovery-smoke/REPORT.md`](results/2026-07-13-recovery-smoke/REPORT.md)
 11. [`results/2026-07-13-recovery-smoke-r2-rerun/REPORT.md`](results/2026-07-13-recovery-smoke-r2-rerun/REPORT.md)
+12. [`results/2026-07-13-burst-smoke/REPORT.md`](results/2026-07-13-burst-smoke/REPORT.md)
+13. [`results/2026-07-14-burst-recovery-smoke/REPORT.md`](results/2026-07-14-burst-recovery-smoke/REPORT.md)
+14. [`results/2026-07-14-burst-recovery-invalid-rerun/REPORT.md`](results/2026-07-14-burst-recovery-invalid-rerun/REPORT.md)
