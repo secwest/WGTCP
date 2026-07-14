@@ -54,6 +54,9 @@ BURST_TRANSPORT_QUALIFIED_MATRIX = (
     / "meltdown"
     / "matrix-mechanism-burst-transport-qualified.csv"
 )
+BURST_BREADTH_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-breadth.csv"
+)
 
 
 def workload_document(
@@ -97,6 +100,12 @@ def workload_document(
 
 
 class MeltdownAnalysisTest(unittest.TestCase):
+    def test_published_axes_bind_campaign_and_cell_fingerprints(self) -> None:
+        self.assertEqual(
+            ANALYZE.PUBLISHED_AXIS_FIELDS[-2:],
+            ("campaign_fingerprint", "cell_fingerprint"),
+        )
+
     def test_mechanism_matrix_is_paired_and_predeclared(self) -> None:
         with MECHANISM_MATRIX.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
@@ -344,6 +353,174 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertEqual({row["direction"] for row in rows}, {"reverse"})
         self.assertEqual({row["competitor"] for row in rows}, {"0"})
 
+    def test_burst_breadth_matrix_is_paired_and_bounded(self) -> None:
+        with BURST_BREADTH_MATRIX.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(sum(int(row["repetitions"]) for row in rows), 20)
+        self.assertEqual({row["enabled"] for row in rows}, {"1"})
+        self.assertEqual({row["stage"] for row in rows}, {"burst-breadth"})
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["rate_mbps"] for row in rows}, {"50"})
+        self.assertEqual({row["queue_bdp"] for row in rows}, {"1"})
+        self.assertEqual({row["queue_kind"] for row in rows}, {"bfifo"})
+        self.assertEqual({row["flows"] for row in rows}, {"16"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"60"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"5"})
+        self.assertEqual(
+            {row["workload_completion"] for row in rows},
+            {"interval_complete"},
+        )
+        self.assertEqual(
+            {row["impairment_validation"] for row in rows},
+            {"transport_aware"},
+        )
+        self.assertEqual({row["inner_cc"] for row in rows}, {"cubic"})
+        self.assertEqual({row["direction"] for row in rows}, {"reverse"})
+        self.assertEqual({row["competitor"] for row in rows}, {"0"})
+
+        actual = [
+            (
+                row["name"],
+                row["tunnel"],
+                row["rtt_ms"],
+                row["loss_model"],
+                row["loss_pct"],
+                row["burst_p"],
+                row["burst_r"],
+                row["burst_h"],
+                row["burst_k"],
+                row["repetitions"],
+            )
+            for row in rows
+        ]
+        self.assertEqual(
+            actual,
+            [
+                (
+                    "random7p5-r200-q1-16f",
+                    "tcp",
+                    "200",
+                    "random",
+                    "7.5",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "2",
+                ),
+                (
+                    "random7p5-r200-q1-16f",
+                    "udp",
+                    "200",
+                    "random",
+                    "7.5",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "2",
+                ),
+                (
+                    "ge1-25-90-1-r200-q1-16f",
+                    "tcp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "1",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge1-25-90-1-r200-q1-16f",
+                    "udp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "1",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge1-12p5-90-1-r200-q1-16f",
+                    "tcp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "1",
+                    "12.5",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge1-12p5-90-1-r200-q1-16f",
+                    "udp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "1",
+                    "12.5",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge2-25-90-1-r400-q1-16f",
+                    "tcp",
+                    "400",
+                    "gemodel",
+                    "0",
+                    "2",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge2-25-90-1-r400-q1-16f",
+                    "udp",
+                    "400",
+                    "gemodel",
+                    "0",
+                    "2",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge4-25-90-1-r200-q1-16f",
+                    "tcp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "4",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+                (
+                    "ge4-25-90-1-r200-q1-16f",
+                    "udp",
+                    "200",
+                    "gemodel",
+                    "0",
+                    "4",
+                    "25",
+                    "90",
+                    "1",
+                    "2",
+                ),
+            ],
+        )
+
     def test_netem_loss_configuration_is_fail_closed(self) -> None:
         axes = {
             "loss_model": "gemodel",
@@ -525,6 +702,11 @@ class MeltdownAnalysisTest(unittest.TestCase):
             self.assertEqual(issues, [])
             self.assertTrue(metrics["baseline_preflight_valid"])
             self.assertTrue(metrics["impaired_ping_rtt_valid"])
+            baseline, valid = ANALYZE.baseline_preflight(
+                cell / "preimpairment-ping.txt"
+            )
+            self.assertTrue(valid)
+            self.assertTrue(baseline["baseline_preflight_valid"])
 
             _, strict_issues = ANALYZE.impairment_ping_validation(
                 cell,
@@ -541,6 +723,8 @@ class MeltdownAnalysisTest(unittest.TestCase):
             write_ping("preimpairment-ping.txt", 10, 0.4)
             _, baseline_issues = ANALYZE.impairment_ping_validation(cell, axes)
             self.assertEqual(baseline_issues, ["baseline_preflight"])
+            _, valid = ANALYZE.baseline_preflight(cell / "preimpairment-ping.txt")
+            self.assertFalse(valid)
 
             write_ping("preimpairment-ping.txt", 0, 0.4, 9, 9)
             _, baseline_issues = ANALYZE.impairment_ping_validation(cell, axes)
@@ -561,8 +745,51 @@ class MeltdownAnalysisTest(unittest.TestCase):
             'if ($impairmentValidation -eq "transport_aware")'
         )
         baseline = ORCHESTRATOR.index("preimpairment-ping.txt", policy)
+        validation = ORCHESTRATOR.index("$baselinePreflight =", baseline)
         shape = ORCHESTRATOR.index("$serverShaped = $true", baseline)
         self.assertLess(baseline, shape)
+        self.assertLess(validation, shape)
+        self.assertIn('"safety_stopped"', ORCHESTRATOR)
+        self.assertIn('"safety baseline failed:', ORCHESTRATOR)
+        self.assertIn('"safety shaping failed:', ORCHESTRATOR)
+        self.assertIn('"safety runtime identity failed:', ORCHESTRATOR)
+        self.assertIn("Write-CampaignSafetyStop", ORCHESTRATOR)
+        self.assertIn("campaign_fingerprint = $CampaignFingerprint", ORCHESTRATOR)
+        self.assertIn("Assert-ExistingCampaignIdentity", ORCHESTRATOR)
+        self.assertIn(
+            "existing campaign identity or selection differs; use a fresh directory",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "existing incomplete or mismatched artifacts for $cellId",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "existing campaign contains partial cell evidence; use a fresh directory",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "existing manifest completion state differs from cell evidence",
+            ORCHESTRATOR,
+        )
+        self.assertIn('"cell.env"', ORCHESTRATOR)
+        self.assertIn("$_.Name -ceq $cellId", ORCHESTRATOR)
+        self.assertNotIn(
+            "Remove-Item -Recurse -Force $localCell",
+            ORCHESTRATOR,
+        )
+        self.assertIn('--exclude="__pycache__"', ORCHESTRATOR)
+        self.assertIn('$_.Extension -notin @(".pyc", ".pyo")', ORCHESTRATOR)
+        latch = ORCHESTRATOR.index(
+            "Test-Path -LiteralPath $campaignSafetyStopPath"
+        )
+        results_initialization = ORCHESTRATOR.index(
+            "New-Item -ItemType Directory -Force -Path "
+            "(Join-Path $ResultsDir \"cells\")"
+        )
+        self.assertLess(latch, results_initialization)
+        self.assertIn('"shape_restoration"', ORCHESTRATOR)
+        self.assertIn('"unstable_tcp_carriers"', ORCHESTRATOR)
         self.assertIn(
             '"impairment_validation=$impairmentValidation"',
             ORCHESTRATOR,

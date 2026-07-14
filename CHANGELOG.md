@@ -90,6 +90,18 @@ All notable changes to this repository are documented here.
   TCP outer recovery. The provenance-bound composite contains three degraded
   cells and one near-meltdown cell; neither TCP cell meets the full formal
   meltdown definition.
+- Added the fixed 20-execution burst-breadth matrix released by that gate. It
+  compares matched TCP/UDP independent loss, lower and higher stationary
+  Gilbert-Elliott loss, longer bursts at the qualified stationary loss, and
+  doubled RTT without changing the qualified center reference.
+- Added a fingerprint-bound campaign safety latch. Clean-control acquisition
+  and validation now finish before shaping, while shaping, restoration, kernel,
+  and carrier safety failures stop the campaign and prevent that directory from
+  being resumed or targeted.
+- Made resume fail closed on campaign, selection, or cell-fingerprint drift and
+  on any partial or mismatched local cell directory. Generated Python bytecode
+  is excluded from source identity and deployment, so it cannot stale or
+  overwrite completed evidence.
 
 ### Changed
 
