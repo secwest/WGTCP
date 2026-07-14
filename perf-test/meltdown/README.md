@@ -111,7 +111,10 @@ cell is skipped when `cell.json`, `cell.complete`, and a matching
 `cell.fingerprint` all exist. Changes to campaign sources, test plan, matrix
 axes, repetition, module, tool, or common fixed-path endpoint iperf version and
 executable hash make the prior cell stale. Campaign analysis also requires a
-complete manifest listing every expected fingerprint. Targeted `-Cell` runs
+complete manifest listing every expected fingerprint. Before impairment, the
+runner also binds each controller endpoint to its declared physical address and
+fixed local/peer TCP and UDP tunnel addresses, so reversed host roles fail
+closed. Targeted `-Cell` runs
 retain exact cell fingerprints but their manifests set
 `targeted_selection=true` and `qualifying_complete=false`; they cannot
 constitute a complete gate. Raw artifacts stay under the gitignored `cells/`

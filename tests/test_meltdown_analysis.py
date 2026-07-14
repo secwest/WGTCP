@@ -1327,6 +1327,25 @@ class MeltdownAnalysisTest(unittest.TestCase):
             ORCHESTRATOR,
         )
         self.assertIn(
+            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-a" $PrivateIpB',
+            ORCHESTRATOR,
+        )
+        self.assertIn('$expectedPrivateIpA = "10.20.1.6"', ORCHESTRATOR)
+        self.assertIn('$expectedPrivateIpB = "10.20.1.7"', ORCHESTRATOR)
+        self.assertIn("Get-TopologyVerificationCommand", ORCHESTRATOR)
+        self.assertIn(
+            '$PrivateIpA "10.99.1.1" "10.99.1.2" "10.99.0.1" "10.99.0.2"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '$PrivateIpB "10.99.1.2" "10.99.1.1" "10.99.0.2" "10.99.0.1"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
             '$workloadRcPath = Join-Path $localCell "workload.rc"',
             ORCHESTRATOR,
         )
@@ -1350,6 +1369,18 @@ class MeltdownAnalysisTest(unittest.TestCase):
             "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverUnit)"
         )
         self.assertLess(restart_index, sampler_index)
+        topology_index = ORCHESTRATOR.index(
+            '$PrivateIpA "10.99.1.1" "10.99.1.2" "10.99.0.1" "10.99.0.2"'
+        )
+        runtime_index = ORCHESTRATOR.index("$loadedSrcA = @(")
+        self.assertLess(topology_index, runtime_index)
+        identity_index = ORCHESTRATOR.index(
+            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA'
+        )
+        package_index = ORCHESTRATOR.index(
+            '$archive = Join-Path $env:TEMP "wgtcp-meltdown-$PID.tar.gz"'
+        )
+        self.assertLess(identity_index, package_index)
 
     def test_sampler_emits_one_json_object_per_qdisc_sample(self) -> None:
         self.assertIn(

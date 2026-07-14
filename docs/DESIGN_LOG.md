@@ -532,6 +532,11 @@ further second before END summaries. Every probe checks the cutoff before a
 counter update or event print. Keep the existing one-event historical summary
 allowance unchanged.
 
+Before any impairment, bind the controller's server/client roles to the exact
+physical address and fixed local/peer TCP and UDP tunnel addresses on each
+endpoint. A role reversal must fail before shaping or workload rather than
+producing a locally terminated diagnostic execution.
+
 **Rationale:** the failed TCP artifacts contain all 16 connected flows and
 59.9-60.0 seconds of continuous non-omitted intervals. Their failures occur
 during iperf's final results exchange, so strict success creates survivorship

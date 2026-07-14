@@ -83,6 +83,8 @@ A cell is invalid rather than negative evidence if any of these apply:
   SHA-256, every selected restarted inner or competitor server process
   executable and hash, matrix-axis, repetition, cell, or campaign fingerprints
   do not match;
+- controller host roles, physical addresses, or fixed local/peer TCP and UDP
+  tunnel addresses do not match the declared server/client topology;
 - a competing-flow cell lacks a successful, nonzero, sufficiently long
   competitor workload;
 - qdisc restoration was not verified before result publication;
