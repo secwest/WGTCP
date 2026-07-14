@@ -1,6 +1,6 @@
 # WireguardTCP TCP Meltdown Investigation - Interim Status
 
-Status cutoff: 2026-07-14 09:29 PDT (2026-07-14 16:29 UTC)
+Status cutoff: 2026-07-14 11:08 PDT (2026-07-14 18:08 UTC)
 
 This is an interim engineering record, not the final campaign report. It
 documents the repository, host, harness, implementation, measurements, and
@@ -43,11 +43,9 @@ The separately fingerprinted corrected `2/25/90/1` smoke retained 90%
 bad-state loss while reducing good-state loss to 1%, for 7.59% nominal
 stationary loss per impaired direction. Its complete campaign produced one
 valid/degraded UDP cell and three invalid cells. Exact separate reruns of the
-invalid cells remained invalid. Released inventory is now 102/102 complete: 94
-valid, 92 stable, two degraded, zero near-meltdown, zero meltdown, and eight
-invalid. Released counts remain unchanged below. Full audit inventory now
-contains 131 completed executions: 92 stable, four degraded, three
-near-meltdown, zero meltdown, and 32 invalid.
+invalid cells remained invalid. That historical released inventory was 102/102
+complete: 94 valid, 92 stable, two degraded, zero near-meltdown, zero meltdown,
+and eight invalid.
 
 Both corrected TCP repetitions forced outer TCP recovery. One exact invalid
 rerun exhibited all three formal meltdown conditions, but it remains unscored
@@ -141,6 +139,23 @@ realized loss become outcomes. The gate remains all four cells valid plus TCP
 outer recovery, allows at most one exact rerun per invalid cell, and will not
 be weakened again to obtain qualification.
 
+That bounded gate is now qualified. The complete base campaign produced three
+valid/degraded cells and one invalid TCP cell. TCP r2 is the first valid TCP
+execution with forced outer recovery: 1.092 Mb/s, 73.3% stalled bins, and 129
+outer-recovery events. The sole allowed exact rerun replaced TCP r1 with a
+valid/near-meltdown execution at 0.236 Mb/s, 73.2% stalled bins, a significant
+decline (`t=-6.91`), and 143 outer-recovery events. Its inner RTO rate was only
+0.0625 per flow-minute, so it was not meltdown.
+
+The provenance-bound composite selects those two valid TCP cells and both valid
+UDP controls. It is 4/4 valid: three degraded and one near-meltdown, with zero
+meltdown or invalid cells. Its campaign and cell fingerprints, runtime identity,
+selected source hashes, and sole replacement reconcile. The released inventory
+is now 106/106 complete: 98 valid, 92 stable, five degraded, one near-meltdown,
+zero meltdown, and eight invalid. Full audit inventory contains 136 completed
+executions: 103 valid (92 stable, seven degraded, four near-meltdown, zero
+meltdown) and 33 invalid.
+
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
 outer TCP carrier, and inner delivery, congestion control, retransmission
@@ -167,11 +182,12 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
 The current valid evidence does not meet the predeclared meltdown definition.
-It also does not rule out meltdown: strict post-loss RTT and stationary-loss
-checks structurally exclude the strongest TCP responses. The next full gate
-retains the prospective completion, identity, topology, cutoff, sequence, and
-cleanup contracts while adding a clean pre-impairment control under the
-separately fingerprinted transport-aware policy above.
+The qualified transport-aware gate now establishes valid outer TCP recovery and
+severe delivery stalls without structurally rejecting TCP's post-loss RTT or
+adaptive realized-loss response. It still does not rule out meltdown: the two
+valid TCP repetitions split the remaining conditions rather than satisfying all
+three in one execution. Broader burst, mechanism, workload, and endurance work
+is now released under the same prospective evidence contracts.
 
 ## 2. Objective and falsifiable definition
 
@@ -707,15 +723,44 @@ next prospective fingerprint must prove full interval execution without
 depending on final in-band control delivery and stop event collection before a
 quiescent summary interval. Existing evidence remains invalid.
 
+### 10.10 Qualified transport-aware burst gate
+
+The final bounded qualification kept the same `2/25/90/1`, 50 Mb/s, 200 ms,
+1x-BDP, 16-flow, 60-second operating point. Every cell first passed an unshaped
+10/10 zero-loss control. The complete base campaign produced:
+
+| Execution | Validity/class | Goodput | Stalls | Trend | Inner RTO/flow-min | Outer recovery |
+|---|---|---:|---:|---|---:|---:|
+| TCP r1 | invalid | n/a | n/a | n/a | 0 | 0 |
+| TCP r2 | valid/degraded | 1.092 Mb/s | 73.3% | increasing | 0.688 | 129 |
+| UDP r1 | valid/degraded | 3.908 Mb/s | 0% | flat | 5.125 | 1 |
+| UDP r2 | valid/degraded | 3.822 Mb/s | 0% | increasing | 5.688 | 7 |
+
+TCP r1 failed before meaningful workload evidence with workload-completion,
+delivery-bin, queue-counter-window, and shaped-class-use failures. The single
+allowed exact rerun of that cell was valid/near-meltdown: 0.236 Mb/s, 73.2%
+stalled bins, an eight-second longest stall, a 20.5% fitted decline with
+`t=-6.91`, 143 outer-recovery events, and only 0.0625 inner RTO events per
+flow-minute. The full 59.9-second interval evidence passed through the
+predeclared final-control fallback.
+
+The qualified composite replaces only that invalid TCP r1 base record. All four
+selected cells are valid; TCP outer recovery is present; and 5,264 selected
+sequence-bearing event rows across 89 event/layer/CPU streams reconcile exactly
+through their terminal values. The gate therefore releases broader work without
+changing severity, eligibility, or any historical classification.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 94 valid calibration, screening, or mechanism cells meets all
-  three components of the predeclared full-meltdown definition.
-- One valid TCP cell and one valid UDP control are degraded.
-- No valid TCP cell has both inner RTO and outer recovery evidence, so valid
-  evidence does not yet establish classical nested recovery coupling.
+- None of the 98 valid released calibration, screening, or mechanism cells
+  meets all three components of the predeclared full-meltdown definition.
+- Valid TCP outer recovery is now established prospectively in two executions.
+  Both have severe delivery stalls, and TCP r2 also has inner RTO/outer-recovery
+  coupling, but neither has all three formal meltdown conditions.
+- The released inventory contains five degraded and one near-meltdown valid
+  cells.
 - Invalid corrected-burst TCP cells repeatedly forced outer recovery. One exact
   invalid rerun met all three meltdown conditions but cannot be promoted.
 - The severe pre-fix 16-flow collapse was a deterministic writer-notification
@@ -727,19 +772,19 @@ quiescent summary interval. Existing evidence remains invalid.
 
 ### Conclusions not yet supported
 
-- The campaign does not establish meltdown until a prospective valid execution
-  reproduces the observed signature without relying on a failed final control
-  exchange or raced tracer summary.
+- The campaign does not establish formal meltdown until one prospective valid
+  execution simultaneously meets the stall, declining-goodput, and inner-RTO
+  thresholds with outer-recovery attribution.
 - The current results should not be generalized from two outer streams to a
   single-carrier or responder-only design.
 - The seven records in the initial campaign remain invalid and are not used as
   transport evidence; only their separate complete reruns enter the qualified
   composite.
 
-The current assessment is: **no meltdown is established in 94 valid cells. Two
-valid cells are degraded. Corrected burst loss demonstrably triggers outer TCP
-recovery, and one invalid exact rerun exhibits the full signature, but
-prospective valid reproduction is still required.**
+The current assessment is: **no meltdown is established in 98 valid released
+cells. The qualified transport-aware gate prospectively establishes outer TCP
+recovery and severe nested stalls, with one valid near-meltdown result, but no
+valid execution meets all three formal meltdown conditions.**
 
 ## 12. Validation completed
 
@@ -770,6 +815,11 @@ prospective valid reproduction is still required.**
   repetitions were not valid and no outer recovery occurred;
 - all four Gilbert-Elliott burst-smoke cells completed invalid at 100%
   preflight loss, with exact live loss configuration and no workload evidence;
+- the bounded transport-aware base completed 4/4 with three valid cells, and
+  its one allowed exact TCP rerun completed valid/near-meltdown;
+- the transport-aware composite contains 4/4 valid rows, three base
+  fingerprints and one exact replacement fingerprint, verified analyzed-result
+  hashes, and TCP outer recovery;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -814,17 +864,20 @@ host-specific access files remain outside Git. They include:
 - writer concurrency traces and BPF atomic-validation evidence;
 - complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
   four-cell mechanism-smoke, four-cell adaptive-smoke, four-cell
-  recovery-smoke, one-cell exact-retry, and four-cell burst-smoke directories;
+  recovery-smoke, one-cell exact-retry, four-cell burst-smoke, four-cell
+  transport-aware base, one-cell exact transport rerun, and qualified
+  transport composite directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
 Git contains compact calibration, initial-screening, rerun, qualified composite,
 mechanism-smoke, adaptive-smoke, recovery-smoke, invalid-retry, and burst-smoke
-inventories. The qualified directory includes a source fingerprint for every
-selected cell. Recovery evidence preserves failed gates without promoting
-invalid records. No credentials, private keys, or host-specific connection
-files are included.
+inventories, plus the transport-aware base, exact replacement, and qualified
+transport composite. Each qualified directory includes a source fingerprint for
+every selected cell. Recovery evidence preserves failed gates without promoting
+invalid records. No credentials, private keys, or host-specific connection files
+are included.
 
 ## 15. Most recently verified host state
 
@@ -835,7 +888,7 @@ files are included.
   restoration failure, or transient campaign unit remains.
 - No sampler or competitor unit is running.
 - The most recent post-campaign TCP and UDP controls passed 10/10 with zero
-  loss at 0.303/0.211 ms mean RTT.
+  loss at 0.428/0.210 ms mean RTT.
 - The temporary restricted access gateway is running only for the active
   mechanism investigation and exposes only two restricted forwarding sockets.
 - Restricted test access/services and tunnel state still require final
@@ -845,13 +898,11 @@ files are included.
 
 Mechanism and breadth:
 
-1. review, commit, and deploy the bounded transport-aware `2/25/90/1` gate
-   under a new immutable audit directory;
-2. require all four matched cells valid plus TCP outer recovery before
-   releasing broader work;
-3. run burst-loss and outer-RTO cells and measure temporal coupling;
-4. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
-5. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
+1. predeclare and commit the broader burst-loss and outer-RTO matrix now released
+   by the qualified transport-aware gate;
+2. run those cells and measure temporal coupling;
+3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
+4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
    dynamics, and selected 10-minute endurance tests.
 
 Closeout:
@@ -879,3 +930,6 @@ Closeout:
 12. [`results/2026-07-13-burst-smoke/REPORT.md`](results/2026-07-13-burst-smoke/REPORT.md)
 13. [`results/2026-07-14-burst-recovery-smoke/REPORT.md`](results/2026-07-14-burst-recovery-smoke/REPORT.md)
 14. [`results/2026-07-14-burst-recovery-invalid-rerun/REPORT.md`](results/2026-07-14-burst-recovery-invalid-rerun/REPORT.md)
+15. [`results/2026-07-14-burst-transport-qualified-smoke/REPORT.md`](results/2026-07-14-burst-transport-qualified-smoke/REPORT.md)
+16. [`results/2026-07-14-burst-transport-qualified-rerun/REPORT.md`](results/2026-07-14-burst-transport-qualified-rerun/REPORT.md)
+17. [`results/2026-07-14-burst-transport-qualified-composite/REPORT.md`](results/2026-07-14-burst-transport-qualified-composite/REPORT.md)

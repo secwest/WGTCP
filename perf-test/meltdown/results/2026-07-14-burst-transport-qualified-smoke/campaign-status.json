@@ -1,0 +1,32 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T17:54:08.1330667Z",
+  "expected_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "matrix_expected_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "targeted_selection": false,
+  "qualifying_complete": true,
+  "completed_cells": [
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r1",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "fa67fca2da8eccc0636d5b7a6898a7765067cf2bce308f60d14157077806ebed",
+  "cell_fingerprints": {
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r1": "d60c5672360879c10f74da17a1e4b18d1386f4aecbf372e59adb2f1ac32baaba",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-tcp-r2": "907ffce33aa040a5afda8615601550b8c386e21b84827d012cc496b435078a0b",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r1": "2e1fe092c91b08482ba41922a59a96760b89d1b0f67aafef87361973deb5d0af",
+    "burst-transport-qualified-smoke-ge2-25-90-1-r200-q1-16f-udp-r2": "68c043d607df6f348b1574f8efb04c3b7fd8f356279f467cbdf70f622426b3c0"
+  }
+}

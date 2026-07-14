@@ -618,3 +618,32 @@ unchanged severity instead removes two transport-coupled validity checks while
 adding a clean per-cell control and retaining every independent fail-closed
 configuration, workload, topology, carrier, counter, telemetry, and cleanup
 contract.
+
+## DL-030: Publish the bounded replacement as a provenance-bound composite
+
+**Decision:** apply the one predeclared exact replacement only to the invalid TCP
+r1 base cell and publish the resulting four-cell qualified composite. Do not
+count the composite as a new execution, do not replace any valid base cell, and
+do not reinterpret the invalid base record.
+
+The complete base campaign produced three valid/degraded cells and one invalid
+TCP cell. TCP r2 was the first valid TCP execution with forced outer recovery:
+1.092 Mb/s, 73.3% stalled delivery bins, and 129 outer-recovery events. Its
+delivery trend increased and its inner RTO rate was 0.688 per flow-minute, so it
+was not meltdown. The one allowed exact TCP r1 rerun was valid/near-meltdown at
+0.236 Mb/s, with 73.2% stalled bins, a significant decline (`t=-6.91`), and 143
+outer-recovery events. Its inner RTO rate was only 0.0625 per flow-minute, so it
+also was not meltdown.
+
+The composite selects the rerun only for TCP r1 and retains the three valid base
+cells. All source hashes, campaign and cell fingerprints, runtime identity, and
+matrix axes reconcile. Its classifications are three degraded and one
+near-meltdown, with zero meltdown or invalid cells. The qualified released
+inventory therefore increases by four valid selected cells, while the full
+audit inventory separately retains every base and rerun execution.
+
+**Rationale:** this is the bounded selection rule committed before results. It
+establishes valid outer TCP recovery without optional stopping or a
+post-observation threshold change, clears the prospective burst qualification
+gate, and preserves the conclusion that no valid execution yet meets all three
+formal meltdown conditions.

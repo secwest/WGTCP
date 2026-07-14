@@ -49,7 +49,8 @@ All notable changes to this repository are documented here.
   68-cell qualified composite, plus the 0.25x- and 0.10x-BDP mechanism smoke
   gates, the failed 0.05x-BDP outer-recovery gate and invalid-cell retry, and
   the four invalid preflight-only Gilbert-Elliott burst-smoke cells, corrected
-  burst-recovery gate, and exact invalid-cell rerun.
+  burst-recovery gate, exact invalid-cell rerun, bounded transport-aware gate,
+  exact TCP replacement, and qualified four-cell composite.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.
@@ -85,6 +86,10 @@ All notable changes to this repository are documented here.
   RTT/loss bands and exact TCP impairment/counter checks, and measures
   post-loss TCP RTT amplification and adaptive realized loss as outcomes
   without rescoring historical evidence.
+- Qualified the transport-aware burst gate with four valid cells and observed
+  TCP outer recovery. The provenance-bound composite contains three degraded
+  cells and one near-meltdown cell; neither TCP cell meets the full formal
+  meltdown definition.
 
 ### Changed
 
