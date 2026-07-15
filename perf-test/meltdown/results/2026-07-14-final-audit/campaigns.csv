@@ -1,0 +1,23 @@
+campaign,role,stable,degraded,near_meltdown,meltdown,invalid,total,audit_included
+campaign-wakeup-calibration-20260713,raw post-repair calibration,14,0,0,0,0,14,true
+campaign-wakeup-screening-20260713,raw initial screening,61,0,0,0,7,68,true
+campaign-wakeup-screening-rerun-20260713,raw exact screening reruns,7,0,0,0,0,7,true
+campaign-mechanism-smoke-20260713,raw mechanism gate,4,0,0,0,0,4,true
+campaign-adaptive-smoke-20260713,raw adaptive gate,4,0,0,0,0,4,true
+campaign-recovery-smoke-20260713,raw recovery gate,2,1,0,0,1,4,true
+campaign-recovery-smoke-r2-rerun-20260713,raw exact recovery rerun,0,0,0,0,1,1,true
+campaign-burst-smoke-v2-20260713,raw burst preflight gate,0,0,0,0,4,4,true
+campaign-burst-recovery-smoke-v2-20260713,raw corrected burst gate,0,1,0,0,3,4,true
+campaign-burst-recovery-invalid-rerun-20260714,raw corrected burst reruns,0,0,0,0,3,3,true
+campaign-burst-qualified-smoke-20260714,raw strict prospective gate,0,0,0,0,4,4,true
+campaign-burst-qualified-smoke-percpu-v1-20260714,raw per-CPU gate,0,1,0,0,3,4,true
+campaign-burst-qualified-smoke-role-corrected-v2-20260714,raw role-corrected gate,0,0,2,0,2,4,true
+campaign-burst-qualified-smoke-sequence-v3-20260714,raw sequence gate,0,1,1,0,2,4,true
+campaign-burst-qualified-smoke-sequence-invalid-rerun-v1-20260714,raw sequence reruns,0,0,0,0,2,2,true
+campaign-burst-transport-qualified-smoke-v1-20260714,raw transport-aware gate,0,3,0,0,1,4,true
+campaign-burst-transport-qualified-smoke-invalid-rerun-v1-20260714,raw transport-aware rerun,0,0,1,0,0,1,true
+campaign-burst-breadth-v1-20260714,raw breadth base,0,7,7,0,6,20,true
+campaign-burst-breadth-invalid-rerun-v1-20260714,raw breadth reruns,0,3,2,0,1,6,true
+campaign-88b7173-calibration-v2-20260713,superseded pre-writer-repair calibration,7,4,0,0,3,14,false
+campaign-wakeup-screening-qualified-20260713,screening composite duplicates selected rows,68,0,0,0,0,68,false
+campaign-burst-transport-qualified-composite-v1-20260714,transport composite duplicates selected rows,0,3,1,0,0,4,false

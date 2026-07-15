@@ -1,0 +1,54 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T22:47:21.2972976Z",
+  "expected_cells": [
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r1",
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r2",
+    "burst-breadth-random7p5-r200-q1-16f-udp-r1",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-udp-r1",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-tcp-r2",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-tcp-r2"
+  ],
+  "matrix_expected_cells": [
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r1",
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r2",
+    "burst-breadth-random7p5-r200-q1-16f-udp-r1",
+    "burst-breadth-random7p5-r200-q1-16f-udp-r2",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-udp-r1",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-udp-r2",
+    "burst-breadth-ge1-12p5-90-1-r200-q1-16f-tcp-r1",
+    "burst-breadth-ge1-12p5-90-1-r200-q1-16f-tcp-r2",
+    "burst-breadth-ge1-12p5-90-1-r200-q1-16f-udp-r1",
+    "burst-breadth-ge1-12p5-90-1-r200-q1-16f-udp-r2",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-tcp-r1",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-tcp-r2",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-udp-r1",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-udp-r2",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-tcp-r1",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-tcp-r2",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-udp-r1",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-udp-r2"
+  ],
+  "targeted_selection": true,
+  "qualifying_complete": false,
+  "completed_cells": [
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r1",
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r2",
+    "burst-breadth-random7p5-r200-q1-16f-udp-r1",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-udp-r1",
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-tcp-r2",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-tcp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "4d0c179c8aaee73a6b05b2aaf663d7a5a6a2468175e2d4a5b80e3228f49b1dfb",
+  "cell_fingerprints": {
+    "burst-breadth-ge2-25-90-1-r400-q1-16f-tcp-r2": "86e091c6e9c01471beb146a05e3f855a53c4eaf711f63fae8baacda9d284eb2f",
+    "burst-breadth-ge1-25-90-1-r200-q1-16f-udp-r1": "7012c0a2bc9d5e87ed28043bc3843fcdcd94edddbb3a49134d00ba30ee9018dd",
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r1": "f0e9019627da8253df2662ee9361b7c493083a7c3e97ff42a61d43fddd6fd981",
+    "burst-breadth-random7p5-r200-q1-16f-tcp-r2": "6217512a5724768b6112e1e7b12b2b14fa9c0a2ccd98b2f8b28819b0751a094e",
+    "burst-breadth-ge4-25-90-1-r200-q1-16f-tcp-r2": "bd8abea7ef955c6a50a99afca0648e347f82b664020cb29d51452452430fd326",
+    "burst-breadth-random7p5-r200-q1-16f-udp-r1": "7e4479a55d672bcdb4ee358fb44581152e55c36bb9877540029940dba0430a46"
+  }
+}
