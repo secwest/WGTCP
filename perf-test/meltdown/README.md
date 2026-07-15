@@ -5,6 +5,16 @@ not exercise: offered load fills a finite carrier queue, overflow loss stalls
 the outer TCP connection, and those stalls trigger congestion responses in
 inner TCP flows.
 
+This is a causal stress campaign, not a prevalence study. All 82 clean
+calibration and finite-queue/RTT screening cells were valid/stable. Severe
+behavior appeared only in the deliberately harsh breadth envelope: 16
+saturated CUBIC flows, a 50 Mb/s 1x-BDP FIFO, 200-400 ms RTT, and persistent
+random or burst loss. No valid execution was formal meltdown. The lowest
+demonstrated severe profile used 4.42% nominal stationary burst loss at 200 ms;
+the unrun 0.3% random-loss row means the lower onset is unknown. See
+[`../../docs/TCP_MELTDOWN.md`](../../docs/TCP_MELTDOWN.md) for the calibrated
+operator-facing conclusion.
+
 The existing [`../REPORT.md`](../REPORT.md) remains useful application-level
 evidence, but it does not establish or exclude meltdown. It used exogenous
 random loss and aggregate averages. This directory adds:
@@ -43,6 +53,12 @@ simultaneously meets the predeclared stall, declining-goodput, and inner-RTO
 conditions. See
 [`results/2026-07-14-final-audit/`](results/2026-07-14-final-audit/).
 
+Across the nine valid logical TCP breadth cells, longest continuous
+zero-delivery runs were 0.7-40.2 seconds (median 6.3 seconds) in 60-second
+workloads. At the lowest severe profile, repetitions stalled for at most 0.7
+and 6.3 seconds while spending 52.8% and 62.2% of the full measurement window
+with no delivery.
+
 ## Layout
 
 ```text
@@ -64,7 +80,7 @@ meltdown/
     shape-link.sh
     sample-endpoint.sh
     tcp-events.bt
-    analyze.py
+    analyze.py              # cell/campaign analysis and raw stall timelines
   orchestrator/
     run-campaign.ps1
   results/<campaign>/
@@ -131,6 +147,56 @@ repetitions without replacing already-qualified evidence:
   -Cell boundary-rtt300-16f-tcp-r2,boundary-rtt300-16f-udp-r2 `
   -ResultsDir .\results\2026-07-13-targeted-rerun
 ```
+
+### Reanalyze a reproduced campaign
+
+Raw campaign directories contain `cell.env`, `iperf3.json`, per-endpoint
+`interface-series.csv`, qdisc/socket/BPF data, and the completion markers needed
+by the fail-closed analyzer.
+
+```powershell
+python .\harness\analyze.py cell `
+  .\results\<campaign>\cells\<cell>
+
+python .\harness\analyze.py campaign `
+  .\results\<campaign> `
+  --csv .\results\<campaign>\cells.csv `
+  --report .\results\<campaign>\REPORT.md
+```
+
+### Explore zero-delivery stalls
+
+The `stalls` command reuses the analyzer's exact receiver selection, first-data
+anchor, warm-up exclusion, 100 ms alignment, and coverage rules. It refuses to
+join runs across missing delivery samples. JSON and CSV rows include exact
+start/end nanoseconds and mark runs touching either measurement boundary as
+censored.
+
+```powershell
+# JSON summary plus every contiguous zero-delivery interval.
+python .\harness\analyze.py stalls `
+  .\results\<campaign>\cells\<cell>
+
+# CSV interval timeline for plotting or correlation with BPF/qdisc events.
+python .\harness\analyze.py stalls `
+  .\results\<campaign>\cells\<cell> `
+  --csv .\results\<campaign>\<cell>-stalls.csv
+```
+
+Committed compact summaries can be explored without raw artifacts:
+
+```powershell
+Import-Csv .\results\2026-07-14-burst-breadth\cells.csv |
+  Where-Object { $_.tunnel -eq 'tcp' } |
+  Sort-Object { [int]$_.longest_stall_ms } -Descending |
+  Format-Table cell_id,valid,classification,goodput_mbps,
+  stall_fraction_100ms,longest_stall_ms,outer_recovery_events
+```
+
+Raw `cells/` artifacts remain gitignored because socket and qdisc series can be
+large. Reproducing a campaign creates those files locally for event-level
+analysis; published `cells.csv` files retain the comparable stall fraction,
+longest stall, loss, recovery, validity, and classification fields.
 
 Campaign execution is resume-safe only across identical evidence identities. A
 cell is skipped when `cell.json`, `cell.complete`, and a matching

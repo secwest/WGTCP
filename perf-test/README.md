@@ -9,6 +9,13 @@ geographies, architectures, and packet-loss conditions.
 tunnel, per workload × per link-distance tier, with throughput / latency /
 CPU and TCP-vs-UDP percentage deltas.
 
+For the separate physical-carrier TCP-over-TCP stress campaign, calibrated
+conclusions, and raw-stall workflow, see
+[`../docs/TCP_MELTDOWN.md`](../docs/TCP_MELTDOWN.md) and
+[`meltdown/README.md`](meltdown/README.md). That campaign is a causal
+corner-case investigation, not a statement that ordinary modern paths
+typically enter meltdown.
+
 While a campaign is in flight, run `harness/refresh-report.ps1` in a side
 terminal to keep `REPORT.md` and `matrix.csv` updated as cells finish:
 

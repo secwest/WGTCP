@@ -850,6 +850,51 @@ class MeltdownAnalysisTest(unittest.TestCase):
             self.assertEqual(result["covered_bins"], 1)
             self.assertEqual(result["bps"], [8000.0])
 
+    def test_zero_delivery_runs_preserve_exact_bin_boundaries(self) -> None:
+        runs = ANALYZE.zero_delivery_runs(
+            [0.0, 0.0, 8000.0, 0.0, 16000.0, 0.0, 0.0, 0.0],
+            measurement_start_ns=1_000_000_000,
+        )
+
+        self.assertEqual(
+            runs,
+            [
+                {
+                    "start_bin": 0,
+                    "end_bin_exclusive": 2,
+                    "start_ns": 1_000_000_000,
+                    "end_ns": 1_200_000_000,
+                    "start_s": 0.0,
+                    "end_s": 0.2,
+                    "duration_ms": 200,
+                    "left_censored": True,
+                    "right_censored": False,
+                },
+                {
+                    "start_bin": 3,
+                    "end_bin_exclusive": 4,
+                    "start_ns": 1_300_000_000,
+                    "end_ns": 1_400_000_000,
+                    "start_s": 0.3,
+                    "end_s": 0.4,
+                    "duration_ms": 100,
+                    "left_censored": False,
+                    "right_censored": False,
+                },
+                {
+                    "start_bin": 5,
+                    "end_bin_exclusive": 8,
+                    "start_ns": 1_500_000_000,
+                    "end_ns": 1_800_000_000,
+                    "start_s": 0.5,
+                    "end_s": 0.8,
+                    "duration_ms": 300,
+                    "left_censored": False,
+                    "right_censored": True,
+                },
+            ],
+        )
+
     def test_missing_completion_policy_preserves_strict_exit_rule(self) -> None:
         axes = {
             "workload_rc": "1",

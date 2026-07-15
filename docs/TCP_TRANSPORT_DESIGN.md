@@ -741,19 +741,18 @@ for unrelated inner flows. If outer recovery is slow enough for inner TCP to
 time out, both layers can retransmit and reduce their windows. Queue growth and
 repeated timeouts are commonly called TCP-over-TCP meltdown.
 
-No design using one reliable ordered stream can make this risk disappear. The
-goal is bounded, observable degradation and a clear choice to retain UDP where
-its datagram semantics are preferable.
+One reliable ordered stream necessarily retains this mechanism, but that is
+not a claim about how often deployed networks trigger it. The completed
+campaign found all clean finite-queue and no-loss 100-400 ms RTT screening
+cells stable. Severe behavior appeared only in a deliberately extreme
+combination of 16 saturated inner flows, 200-400 ms RTT, a 1x-BDP FIFO, and
+persistent random or burst loss. No valid execution reached formal meltdown.
 
-The legacy real-world application tests motivated a more specific working
-hypothesis: severe TCP-over-TCP meltdown may be a narrower, path- and
-workload-dependent condition than broad warnings first suggest. Harmful
-interaction may require a particular conjunction of outer loss or congestion,
-head-of-line blocking, enough multiplexed inner traffic and queue growth, and
-recovery delays long enough to engage both retransmission timers. That legacy
-campaign did not impair or instrument the physical outer TCP carrier, so it
-neither demonstrates general meltdown resilience nor locates those boundary
-conditions.
+The lowest demonstrated severe profile used 4.42% nominal stationary
+Gilbert-Elliott loss at 200 ms. Its longest continuous stalls were 0.7 and 6.3
+seconds. The 0.3% random-loss onset row was not run, so this point is not a
+universal threshold. See [`TCP_MELTDOWN.md`](TCP_MELTDOWN.md) for the measured
+operating envelope and replication index.
 
 ### Implemented properties that can help
 
@@ -888,11 +887,14 @@ declining-goodput and inner-RTO conditions occur in different executions. No
 valid execution meets all three formal conditions.
 
 The full raw-execution audit is 162: 122 valid (92 stable, 17 degraded,
-13 near-meltdown), zero meltdown, and 40 invalid. This demonstrates severe
-degradation and nested recovery interaction, not immunity. An invalid earlier
-rerun met all three conditions and remains unscored. The breadth composite is
-also stopped because one cell remained invalid after its sole allowed rerun.
-See
+13 near-meltdown), zero meltdown, and 40 invalid. The nine valid logical TCP
+breadth cells had longest continuous stalls from 0.7 to 40.2 seconds, with a
+6.3-second median. Those results demonstrate severe degradation in the
+deliberately impaired stress envelope, not a common outcome on healthy modern
+paths. An invalid earlier rerun met all three conditions and remains unscored.
+The breadth composite is also stopped because one cell remained invalid after
+its sole allowed rerun. See
+[`TCP_MELTDOWN.md`](TCP_MELTDOWN.md),
 [`INVESTIGATION_STATUS.md`](../perf-test/meltdown/INVESTIGATION_STATUS.md) and
 the
 [`final audit`](../perf-test/meltdown/results/2026-07-14-final-audit/).
@@ -901,14 +903,16 @@ the
 
 Before making a resilience claim, extend the fixed evidence contracts to:
 
-1. 10-minute and multi-hour endurance with post-impairment recovery measured
+1. A predeclared onset sweep below the 4.42%-nominal burst profile, including
+   the previously unrun 0.3% random-loss row.
+2. 10-minute and multi-hour endurance with post-impairment recovery measured
    against the clean baseline.
-2. Reordering, jitter, blackout, reverse-only impairment, fq_codel/AQM, ECN,
+3. Reordering, jitter, blackout, reverse-only impairment, fq_codel/AQM, ECN,
    competing traffic, bidirectional traffic, and multiple inner congestion
    controls.
-3. Short-flow completion, fairness, route changes, reconnect, rekey, and
+4. Short-flow completion, fairness, route changes, reconnect, rekey, and
    authenticated roaming.
-4. Exported production queue age, drop high-water marks, cwnd, RTT/RTO,
+5. Exported production queue age, drop high-water marks, cwnd, RTT/RTO,
    retransmission, parser-resync, and reconnect counters.
 
 ## Benefits analysis
@@ -917,7 +921,7 @@ Before making a resilience claim, extend the fixed evidence contracts to:
 |---|---|---|
 | Connectivity where UDP is blocked | Networks that permit raw TCP to the configured port | This is not HTTP/TLS camouflage and may still be blocked by policy or DPI |
 | Reuse of WireGuard identity and crypto | Operators wanting the same keys, peers, AllowedIPs, rekey, and keepalives | Both endpoints need the modified Linux implementation |
-| Potential outer-loss recovery | Non-congestive carrier loss where ordered reliable delivery is valuable | The mechanistic campaign validates recovery but also severe stalls; it does not establish general resilience |
+| Potential outer-loss recovery | Non-congestive carrier loss where ordered reliable delivery is valuable | Recovery was stable on clean paths; severe stalls appeared in deliberately extreme loss/latency/concurrency cells, and the lower onset remains unmeasured |
 | Reliable delivery for inner UDP | Bulk or transactional UDP where completeness matters more than timeliness | Changes datagram loss semantics; late data may be worse than dropped data for real-time media |
 | Long-lived connection through stateful policy | TCP-friendly firewalls/NATs | Requires connection limits, keepalive validation, and half-open detection |
 | Operational choice | Separate TCP and UDP interfaces can serve different routes | Mode is device-wide, with additional configuration and resource cost |

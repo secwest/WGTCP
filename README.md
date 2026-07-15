@@ -246,7 +246,9 @@ validation.
 
 ## Performance and TCP-over-TCP behavior
 
-The repository contains two distinct evidence sets.
+The repository contains two distinct evidence sets. The calibrated conclusion
+and replication index are in
+[`docs/TCP_MELTDOWN.md`](docs/TCP_MELTDOWN.md).
 
 The legacy application-level Azure campaign compares TCP-WG and UDP-WG across
 x64/arm64, four latency tiers, and configured loss values from 0% to 20%. These
@@ -266,53 +268,46 @@ contain striking results. Examples include:
 No classic nested-TCP throughput collapse is visible in those application
 tables, including the 60-second bulk runs. That legacy harness impaired the
 WireGuard interface rather than demonstrably impairing and instrumenting the
-physical outer TCP carrier, so it does not establish general meltdown
-resilience or locate the boundary conditions.
+physical outer TCP carrier, so it cannot locate an outer-loss boundary.
 
 The report records a contrary stability event as well: a prolonged arm64,
 high-latency, configured 10-20% loss test wedged the VM network stack until a
 hard reboot. A later 360-second cap avoided the condition but did not establish
 a root-cause fix.
 
-The newer mechanistic campaign tests the physical carrier path directly with
-selective finite queues, delay, random and Gilbert-Elliott loss, matched UDP
-controls, 16 inner flows, and synchronized delivery, qdisc, socket, carrier, and
-inner/outer retransmission telemetry. Its released pre-breadth inventory is
-106/106 complete: 98 valid (92 stable, five degraded, one near-meltdown), zero
-meltdown, and eight invalid.
+The newer mechanistic campaign tests the physical carrier path directly. Its
+82 clean calibration and finite-queue/RTT screening cells are all valid/stable.
+No-loss 16-flow TCP controls at 200-400 ms delivered about 47 Mb/s with
+essentially no zero-delivery stalls.
 
-The subsequent 20-execution breadth base and six exact invalid-cell reruns add
-26 raw executions. Nineteen are valid (10 degraded and nine near-meltdown) and
-seven are invalid. Among the nine valid logical TCP breadth cells, goodput is
-0.07-1.09 Mb/s, 52.8%-94.0% of 100 ms bins stall, and every cell records outer
-recovery. Two pair stalls with significant decline but no qualifying inner-RTO
-rate; three pair stalls with a qualifying inner-RTO rate but no significant
-decline; four meet only the stall condition. No valid cell combines all three
-predeclared formal-meltdown conditions.
+Severe behavior appeared only after combining a 50 Mb/s, 1x-BDP FIFO with 16
+continuously backlogged CUBIC flows, 200-400 ms RTT, and persistent random or
+Gilbert-Elliott loss. The lowest demonstrated severe profile had 4.42% nominal
+stationary burst loss at 200 ms; its two valid TCP repetitions delivered
+0.73-1.09 Mb/s, stalled in 52.8%-62.2% of 100 ms bins, and had longest
+continuous stalls of 0.7 and 6.3 seconds. Across all nine valid logical TCP
+breadth cells, longest stalls ranged from 0.7 to 40.2 seconds.
 
-Across every post-repair raw campaign, the audit contains 162 executions:
-122 valid (92 stable, 17 degraded, 13 near-meltdown), zero meltdown, and
-40 invalid. One earlier invalid corrected-burst rerun met all three conditions,
-but invalid evidence is never promoted. The breadth composite is also
-permanently disqualified because one random-loss TCP cell remained invalid
-after its sole allowed rerun.
+This is an extreme laboratory corner, not evidence that healthy modern
+networks commonly enter meltdown. It can resemble transient conditions on
+congested mobile, interfered Wi-Fi, satellite, mobility-handoff, or overloaded
+tunnel paths. The planned 0.3% random-loss onset row was not run, so the exact
+lower threshold is unknown.
 
-The defensible conclusion is therefore not that TCP-over-TCP effects are
-absent. Severe degradation, head-of-line stalls, inner timeouts, and outer
-recovery are demonstrated. Formal meltdown is not established because no valid
-execution contains the required stall, declining-goodput, and inner-RTO
-conditions together. Endurance, AQM/ECN, dynamic recovery, reordering, blackout,
-roaming, and broader workload tests remain before any resilience claim.
+Across all 162 post-repair raw executions, 122 are valid: 92 stable, 17
+degraded, 13 near-meltdown, and zero formal meltdown. No valid execution
+simultaneously contains the required stall, declining-goodput, and inner-RTO
+conditions. The campaign demonstrates a narrow failure mechanism, not its
+prevalence and not general immunity.
 
 The traffic evidence applies to its recorded runtime fingerprint. The later
 parity/lifecycle integration was contract-tested and built identically on both
 ARM hosts, but it was not loaded for another traffic campaign.
 
-See [`perf-test/REPORT.md`](perf-test/REPORT.md) for the published tables and
-[`perf-test/meltdown/INVESTIGATION_STATUS.md`](perf-test/meltdown/INVESTIGATION_STATUS.md)
-and
-[`perf-test/meltdown/results/2026-07-14-final-audit/`](perf-test/meltdown/results/2026-07-14-final-audit/)
-for the mechanistic evidence and inventory.
+See [`perf-test/REPORT.md`](perf-test/REPORT.md) for the legacy application
+tables and [`perf-test/meltdown/`](perf-test/meltdown/README.md) for the
+replicable mechanistic harness, raw-stall analysis workflow, and evidence
+inventory.
 
 ## Repository structure
 
@@ -321,10 +316,12 @@ kernel/                       WireGuard kernel module with TCP transport
 tools/                        Modified WireGuard userland tools
 include/uapi/                 Additive Linux transport UAPI
 docs/TCP_TRANSPORT_DESIGN.md  Detailed architecture and parity design
+docs/TCP_MELTDOWN.md          Calibrated meltdown scope and replication index
 DESIGNLOG.md                  Chronological architectural decisions
 CHANGELOG.md                  User-visible changes and validation history
 docs/                         Relay and tunnel setup notes from the source branch
 perf-test/                    Performance plan, harness, reports, and matrices
+perf-test/meltdown/           Mechanistic carrier impairment and stall harness
 BIG-WireguardTCP-Patch        Combined patch from historical stock WireGuard
 ```
 
