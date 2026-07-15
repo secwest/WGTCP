@@ -390,6 +390,56 @@ class Suite:
                 "kernel_variant": self.args.tcp_kernel_variant,
             }
 
+    def tcp_asymmetric_ports_case(self) -> dict[str, object]:
+        case_id = "tcp-asymmetric"
+        port_a, port_b = "52020", "52021"
+        with self.managed_pair(case_id, failure_collect=("fork", "fork")):
+            self.module(self.args.vm_a, self.args.tcp_kernel_variant)
+            self.module(self.args.vm_b, self.args.tcp_kernel_variant)
+            node_a, node_b, address_a, address_b = self.prepare_pair(
+                case_id, "fork", "fork", "tcp", 225, port_a, port_b
+            )
+            if node_a["listen_port"] != port_a or node_b["listen_port"] != port_b:
+                raise Failure("TCP listeners did not retain their asymmetric configured ports")
+            self.helper(self.args.vm_a, "guest-node.sh", "listener", "wgt0", "tcp")
+            self.helper(self.args.vm_b, "guest-node.sh", "listener", "wgt0", "tcp")
+            self.helper(self.args.vm_a, "guest-node.sh", "wait-ping", "wgt0", address_b, 60)
+            self.helper(self.args.vm_b, "guest-node.sh", "wait-ping", "wgt0", address_a, 60)
+            path_a = parse_fields(
+                self.helper(
+                    self.args.vm_a,
+                    "guest-node.sh",
+                    "tcp-asymmetric-path",
+                    self.args.path0_a,
+                    self.args.path0_b,
+                    port_a,
+                    port_b,
+                    label="verify-asymmetric-tcp",
+                )
+            )
+            path_b = parse_fields(
+                self.helper(
+                    self.args.vm_b,
+                    "guest-node.sh",
+                    "tcp-asymmetric-path",
+                    self.args.path0_b,
+                    self.args.path0_a,
+                    port_b,
+                    port_a,
+                    label="verify-reverse-asymmetric-tcp",
+                )
+            )
+            self.collect_pair("fork", "fork")
+            return {
+                "port_a": int(port_a),
+                "port_b": int(port_b),
+                "path_a": path_a.get("tcp_path", ""),
+                "path_b": path_b.get("tcp_path", ""),
+                "forward": "pass",
+                "reverse": "pass",
+                "kernel_variant": self.args.tcp_kernel_variant,
+            }
+
     def tcp_stock_management_case(self) -> dict[str, object]:
         case_id = "tcp-stock-management"
         with self.managed_pair(case_id, failure_collect=("fork", "fork")):
@@ -582,6 +632,52 @@ class Suite:
                 )
             return {"vms_tested": [self.args.vm_a, self.args.vm_b]}
 
+    def tcp_parity_netns_case(self, mode: str) -> dict[str, object]:
+        case_id = f"tcp-parity-{mode}"
+        details: dict[str, object] = {"mode": mode, "guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                self.module(vm, self.args.tcp_kernel_variant)
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-parity-netns",
+                    self.run_id,
+                    case_id,
+                    mode,
+                    self.args.repo,
+                    label=f"tcp-parity-{mode}",
+                    timeout=max(self.args.timeout, 240),
+                )
+                guest_details[vm] = parse_fields(output)
+            details["guests"] = guest_details
+            details["kernel_variant"] = self.args.tcp_kernel_variant
+            return details
+
+    def tcp_nat_netns_case(self, mode: str) -> dict[str, object]:
+        case_id = f"tcp-nat-{mode}"
+        details: dict[str, object] = {"mode": mode, "guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                self.module(vm, self.args.tcp_kernel_variant)
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-nat-netns",
+                    self.run_id,
+                    case_id,
+                    mode,
+                    self.args.repo,
+                    label=f"tcp-nat-{mode}",
+                    timeout=max(self.args.timeout, 300),
+                )
+                guest_details[vm] = parse_fields(output)
+            details["guests"] = guest_details
+            details["kernel_variant"] = self.args.tcp_kernel_variant
+            return details
+
     def debug_selftest_case(self) -> dict[str, object]:
         self.module(self.args.vm_a, "fork-debug")
         status = parse_fields(
@@ -599,6 +695,34 @@ class Suite:
             "unloadable": True,
             "initialization_selftests": "pass",
         }
+
+    def tcp_fault_injection_case(self) -> dict[str, object]:
+        case_id = "tcp-fault-injection"
+        details: dict[str, object] = {"guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-parity-netns",
+                    self.run_id,
+                    case_id,
+                    "fault-injection",
+                    self.args.repo,
+                    label="tcp-fault-injection",
+                    timeout=max(self.args.timeout, 240),
+                )
+                fields = parse_fields(output)
+                if fields.get("restored_kernel_variant") != "fork":
+                    raise Failure(
+                        f"{vm} did not confirm production-module restoration"
+                    )
+                guest_details[vm] = fields
+            details["guests"] = guest_details
+            details["kernel_variant"] = "fork-fault"
+            details["restored_kernel_variant"] = "fork"
+            return details
 
     def stock_capability_case(self) -> dict[str, object]:
         case_id = "stock-capability"
@@ -794,8 +918,42 @@ class Suite:
                     self.mode_rejection_case,
                 ),
                 ("tcp-smoke", self.tcp_case),
+                ("tcp-asymmetric-listen-ports", self.tcp_asymmetric_ports_case),
                 ("tcp-stock-tool-management", self.tcp_stock_management_case),
+                (
+                    "tcp-config-roundtrip",
+                    lambda: self.tcp_parity_netns_case("config-roundtrip"),
+                ),
                 ("tcp-configured-path-change", self.tcp_configured_path_change_case),
+                (
+                    "tcp-full-tunnel-live-fwmark",
+                    lambda: self.tcp_parity_netns_case("fwmark"),
+                ),
+                (
+                    "tcp-route-change",
+                    lambda: self.tcp_parity_netns_case("route"),
+                ),
+                (
+                    "tcp-source-address-uplink-change",
+                    lambda: self.tcp_parity_netns_case("source-uplink"),
+                ),
+                (
+                    "tcp-ipv6-dual-stack",
+                    lambda: self.tcp_parity_netns_case("ipv6"),
+                ),
+                (
+                    "tcp-ipv6-link-local-scope",
+                    lambda: self.tcp_parity_netns_case("ipv6-link-local"),
+                ),
+                (
+                    "tcp-authenticated-carrier-lifetime",
+                    lambda: self.tcp_parity_netns_case("carrier-lifetime"),
+                ),
+                (
+                    "tcp-nat44-dual-reachable",
+                    lambda: self.tcp_nat_netns_case("dual-reachable"),
+                ),
+                ("tcp-debug-hostile-stream", self.tcp_fault_injection_case),
             ]
         )
 

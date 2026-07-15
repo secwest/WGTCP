@@ -15,19 +15,81 @@ die() {
 	exit 1
 }
 
+verify_module_metadata() {
+	local actual_root error= module variant
+
+	actual_root=$(mktemp -d)
+	for variant in wireguard-fork wireguard-fork-debug wireguard-fork-fault; do
+		module=$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant
+		if ! modinfo "$module.ko" >"$actual_root/$variant.modinfo"; then
+			error="could not inspect $variant"
+			break
+		fi
+		if ! modinfo -p "$module.ko" >"$actual_root/$variant.params"; then
+			error="could not inspect parameters for $variant"
+			break
+		fi
+		if ! cmp -s "$actual_root/$variant.modinfo" "$module.modinfo"; then
+			error="saved modinfo does not match $variant"
+			break
+		fi
+		if ! cmp -s "$actual_root/$variant.params" "$module.params"; then
+			error="saved parameter manifest does not match $variant"
+			break
+		fi
+	done
+	rm -rf "$actual_root"
+	[[ -z $error ]] || die "$error"
+
+	for variant in wireguard-fork wireguard-fork-debug; do
+		if grep -q '^tcp_test_' \
+			"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant.params"; then
+			die "fault parameters leaked into $variant"
+		fi
+	done
+	for parameter in max_send_bytes garbage_prefix_bytes queue_limit \
+			write_delay_ms short_writes injected_prefixes resyncs queue_drops; do
+		grep -q "^tcp_test_$parameter:" \
+			"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.params" || \
+			die "fault module is missing tcp_test_$parameter"
+	done
+}
+
 verify() {
 	local missing=0 path
 	for path in \
 		"$ARTIFACT_ROOT/bin/wg-stock" \
 		"$ARTIFACT_ROOT/bin/wg-fork" \
 		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork.ko" \
-		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-debug.ko"; do
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-debug.ko" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.ko" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork.modinfo" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-debug.modinfo" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.modinfo" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork.params" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-debug.params" \
+		"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.params" \
+		"$ARTIFACT_ROOT/manifest.json"; do
 		if [[ ! -e $path ]]; then
 			printf 'guest-build: missing artifact: %s\n' "$path" >&2
 			missing=1
 		fi
 	done
 	(( missing == 0 )) || return 1
+	verify_module_metadata
+	python3 - "$ARTIFACT_ROOT/manifest.json" "$KERNEL_RELEASE" <<'PY'
+import json
+import pathlib
+import sys
+
+path, expected_kernel = sys.argv[1:]
+manifest = json.loads(pathlib.Path(path).read_text())
+if manifest.get("kernel_release") != expected_kernel:
+    raise SystemExit(
+        f"guest-build: manifest kernel {manifest.get('kernel_release')!r} "
+        f"does not match {expected_kernel!r}"
+    )
+PY
 	printf 'guest-build: artifacts verified for %s\n' "$KERNEL_RELEASE"
 }
 
@@ -79,9 +141,18 @@ make -C "$KERNEL_BUILD" M="$BUILD_ROOT/kernel" CONFIG_WIREGUARD=m \
 install -m 0644 "$BUILD_ROOT/kernel/wireguard.ko" \
 	"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-debug.ko"
 
-for variant in wireguard-fork wireguard-fork-debug; do
+make -C "$KERNEL_BUILD" M="$BUILD_ROOT/kernel" CONFIG_WIREGUARD=m clean
+make -C "$KERNEL_BUILD" M="$BUILD_ROOT/kernel" CONFIG_WIREGUARD=m \
+	CONFIG_WIREGUARD_DEBUG=y EXTRA_CFLAGS=-DWG_TCP_FAULT_INJECTION \
+	W=1 -j"$(nproc)" modules
+install -m 0644 "$BUILD_ROOT/kernel/wireguard.ko" \
+	"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.ko"
+
+for variant in wireguard-fork wireguard-fork-debug wireguard-fork-fault; do
 	modinfo "$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant.ko" \
 		>"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant.modinfo"
+	modinfo -p "$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant.ko" \
+		>"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/$variant.params"
 done
 
 python3 - "$ARTIFACT_ROOT/manifest.json" "$SOURCE_ROOT" "$KERNEL_RELEASE" <<'PY'

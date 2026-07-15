@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 import importlib.util
 import io
 from pathlib import Path
@@ -122,6 +122,61 @@ class HyperVRunnerContractTests(unittest.TestCase):
         self.assertEqual(len(suite.results), 1)
         self.assertEqual(suite.results[0]["name"], "preflight")
         self.assertIn("ssh connection failed", suite.abort_reason)
+
+    def test_tcp_parity_cases_are_independently_selectable(self):
+        names = [
+            "tcp-asymmetric-listen-ports",
+            "tcp-full-tunnel-live-fwmark",
+            "tcp-route-change",
+            "tcp-source-address-uplink-change",
+            "tcp-ipv6-dual-stack",
+            "tcp-authenticated-carrier-lifetime",
+            "tcp-nat44-dual-reachable",
+            "tcp-debug-hostile-stream",
+        ]
+        suite = Harness({})
+        suite.args.only_case = names
+
+        self.assertEqual(run_quietly(suite), 0)
+        self.assertEqual(suite.cases_run, names)
+
+    def test_fault_case_requires_guest_side_production_restore(self):
+        suite = REGRESSION.Suite.__new__(REGRESSION.Suite)
+        suite.args = SimpleNamespace(
+            vm_a="wgtcp-a",
+            vm_b="wgtcp-b",
+            timeout=180,
+            repo="/home/ubuntu/WireguardTCP",
+        )
+        suite.run_id = "contract"
+        suite.infrastructure_failure = None
+        suite.managed_pair = lambda _case_id: nullcontext()
+        suite.helper = lambda *_args, **_kwargs: (
+            "status=pass\nrestored_kernel_variant=fork\n"
+        )
+
+        details = suite.tcp_fault_injection_case()
+
+        self.assertEqual(details["kernel_variant"], "fork-fault")
+        self.assertEqual(details["restored_kernel_variant"], "fork")
+
+    def test_fault_case_rejects_missing_guest_side_restore(self):
+        suite = REGRESSION.Suite.__new__(REGRESSION.Suite)
+        suite.args = SimpleNamespace(
+            vm_a="wgtcp-a",
+            vm_b="wgtcp-b",
+            timeout=180,
+            repo="/home/ubuntu/WireguardTCP",
+        )
+        suite.run_id = "contract"
+        suite.infrastructure_failure = None
+        suite.managed_pair = lambda _case_id: nullcontext()
+        suite.helper = lambda *_args, **_kwargs: "status=pass\n"
+
+        with self.assertRaisesRegex(
+            REGRESSION.Failure, "did not confirm production-module restoration"
+        ):
+            suite.tcp_fault_injection_case()
 
     def test_ssh_failure_is_classified_after_command_log_is_written(self):
         with tempfile.TemporaryDirectory() as directory:

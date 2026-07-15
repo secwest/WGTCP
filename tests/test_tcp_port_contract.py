@@ -37,11 +37,7 @@ class TcpPortContract(unittest.TestCase):
         open_device = section(
             self.device, "static int wg_open(", "static int wg_pm_notification("
         )
-        tcp_failure = section(
-            open_device,
-            "ret = wg_tcp_listener_socket_init(wg, wg->incoming_port);",
-            "mutex_lock(&wg->device_update_lock);",
-        )
+        tcp_failure = open_device[open_device.index("err_tcp_open:") :]
 
         self.assertIn("wg_socket_reinit(wg, NULL, NULL);", tcp_failure)
         self.assertIn("wg->incoming_port = requested_port;", tcp_failure)

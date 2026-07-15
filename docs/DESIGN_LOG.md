@@ -133,7 +133,7 @@ processing can mark that exact stream authenticated.
 
 ### DL-010: Extend authenticated temporary-carrier lifetime without promotion
 
-**Status:** Accepted
+**Status:** Superseded by the upstream parity lifecycle
 
 Pre-authentication controls remain:
 
@@ -141,10 +141,12 @@ Pre-authentication controls remain:
 - 30-second absolute deadline;
 - 128 provisional entries per device.
 
-After the exact stream carries a valid Noise handshake, it remains a temporary
-receive carrier with a 180-second activity-based idle deadline and no
-pre-authentication absolute cap. Authentication does not promote or transfer
-the socket.
+The investigation initially retained an authenticated temporary receive carrier
+with a 180-second activity-based idle deadline and no pre-authentication
+absolute cap. The later parity lifecycle replaced that policy: valid Noise
+traffic releases the exact connection's admission accounting, and the tracked
+carrier remains until socket close or device teardown. Authentication still
+does not promote or transfer the socket.
 
 This repairs five-second carrier rotation while preserving bounded
 pre-authentication exposure and avoiding an unsynchronized ownership transfer.

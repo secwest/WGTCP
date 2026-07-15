@@ -60,13 +60,14 @@ enum packet_state {
 
 struct packet_cb {
 	u64 nonce;
-	u64 tcp_stream_id;
+	u64 tcp_connection_id;
 	struct noise_keypair *keypair;
 	atomic_t state;
 	u32 mtu;
 	__be16 frag_id;
 	__be16 frag_off;
 	u8 ds;
+	u8 outer_ipproto;
 };
 
 #define PACKET_CB(skb) ((struct packet_cb *)((skb)->cb))

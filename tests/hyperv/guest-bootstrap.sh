@@ -25,6 +25,7 @@ fi
 
 packages=(
 	build-essential
+	conntrack
 	iperf3
 	iproute2
 	iputils-ping
@@ -32,6 +33,7 @@ packages=(
 	kmod
 	libmnl-dev
 	linux-headers-"$(uname -r)"
+	nftables
 	pkg-config
 	python3
 	rsync

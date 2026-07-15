@@ -8,6 +8,7 @@ STATE_ROOT=${WG_TEST_STATE_ROOT:-/var/lib/wireguardtcp}
 KERNEL_RELEASE=$(uname -r)
 FORK_MODULE=$STATE_ROOT/artifacts/modules/$KERNEL_RELEASE/wireguard-fork.ko
 FORK_DEBUG_MODULE=$STATE_ROOT/artifacts/modules/$KERNEL_RELEASE/wireguard-fork-debug.ko
+FORK_FAULT_MODULE=$STATE_ROOT/artifacts/modules/$KERNEL_RELEASE/wireguard-fork-fault.ko
 VARIANT_FILE=/run/wireguardtcp-module-variant
 
 die() {
@@ -71,9 +72,10 @@ stock)
 		die "stock WireGuard is built into this kernel and cannot be switched"
 	printf 'stock\n' >"$VARIANT_FILE"
 	;;
-fork|fork-debug)
+fork|fork-debug|fork-fault)
 	module_path=$FORK_MODULE
 	[[ $ACTION == fork-debug ]] && module_path=$FORK_DEBUG_MODULE
+	[[ $ACTION == fork-fault ]] && module_path=$FORK_FAULT_MODULE
 	[[ -f $module_path ]] || die "fork module not built: $module_path"
 	unload_current
 	dependencies=$(modinfo -F depends "$module_path") || \
@@ -96,7 +98,7 @@ fork|fork-debug)
 	printf '%s\n' "$ACTION" >"$VARIANT_FILE"
 	;;
 *)
-	die "usage: $0 {stock|fork|fork-debug|status}"
+	die "usage: $0 {stock|fork|fork-debug|fork-fault|status}"
 	;;
 esac
 

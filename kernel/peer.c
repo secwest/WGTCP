@@ -104,22 +104,22 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	peer->tcp_outbound_callbacks_set = false;
 	peer->tcp_outbound_remove_scheduled = false;
 	peer->tcp_reconnect_requested = false;
+	peer->tcp_stopping = false;
+	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_roaming_connection_id = 0;
 	peer->tcp_inbound_remove_scheduled = false;
 	peer->peer_endpoint_set = false;
 
 	// Initialize the spinlock for protecting TCP-related state
 	spin_lock_init(&peer->tcp_lock);
+	spin_lock_init(&peer->tcp_read_lock);
+	spin_lock_init(&peer->tcp_write_lock);
 
 	// Initialize the skb queue for the TX send queue
 	skb_queue_head_init(&peer->send_queue);
 
 	// Initialize the spinlock for the TX send queue
 	spin_lock_init(&peer->send_queue_lock);
-
-	spin_lock_init(&peer->tcp_read_lock);
-	spin_lock_init(&peer->tcp_write_lock);
-	peer->tcp_read_worker_scheduled = false;
-	peer->tcp_write_worker_scheduled = false;
 
 	// Initialize the list head for pending connection list
 	INIT_LIST_HEAD(&peer->pending_connection_list);
@@ -212,7 +212,9 @@ static void peer_make_dead(struct wg_peer *peer)
 	 */
 	cancel_delayed_work(&peer->tcp_outbound_remove_work);
 	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_outbound_remove_socket = NULL;
 	peer->tcp_reconnect_requested = false;
+	peer->tcp_stopping = true;
 	cancel_delayed_work(&peer->tcp_inbound_remove_work);
 	peer->tcp_inbound_remove_scheduled = false;
 	cancel_delayed_work(&peer->tcp_retry_work);
