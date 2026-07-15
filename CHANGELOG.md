@@ -46,7 +46,7 @@ affects design and externally visible behavior.
 - Added lifecycle, roaming, and stream contracts for accepted-connection
   provenance, admission accounting, listener handoff, and buffered record
   draining.
-- Added the interim investigation report and design decision log.
+- Added the investigation report and design decision log.
 - Added compact reviewable evidence for the 14-cell clean calibration, 68-cell
   initial finite-queue/RTT screening, seven-cell qualification rerun, and final
   68-cell qualified composite, plus the 0.25x- and 0.10x-BDP mechanism smoke
@@ -54,6 +54,9 @@ affects design and externally visible behavior.
   the four invalid preflight-only Gilbert-Elliott burst-smoke cells, corrected
   burst-recovery gate, exact invalid-cell rerun, bounded transport-aware gate,
   exact TCP replacement, and qualified four-cell composite.
+- Added compact evidence for the complete 20-execution burst-breadth base, six
+  exact invalid-cell reruns, the permanently stopped composite path, and a
+  reproducible 162-execution inclusion/exclusion ledger.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.
@@ -145,6 +148,9 @@ affects design and externally visible behavior.
   already-qualified cells.
 - Updated the TCP transport design for authenticated temporary carriers and
   buffered-record drain ordering.
+- Reconciled performance documentation with the completed mechanistic campaign,
+  separating the 106-cell released selection, 162 raw executions, and the
+  non-qualifying 20-cell breadth state.
 - Removed plaintext VM passwords and private keys from legacy node
   documentation and its generated patch artifact.
 
@@ -186,13 +192,18 @@ affects design and externally visible behavior.
 - Completed the four-cell 35 Mb/s/200 ms/0.25x-BDP mechanism smoke as
   valid/stable. It recorded zero queue drops and therefore correctly stopped
   the 12 broader mechanism rows at their predeclared overflow gate.
+- Completed all 20 burst-breadth base executions and six exact reruns. The base
+  has 14 valid and six invalid records; reruns add five valid and one remaining
+  invalid record. No valid execution is formal meltdown.
 
 ### Known limitations
 
-- Most 50 Mb/s queue cells did not overflow because observed TCP delivery was
-  about 47 Mb/s. Lower-rate/contention, burst, dynamics, workload, and endurance
-  stages remain; no interim result should be presented as the final meltdown
-  conclusion.
+- The breadth phase demonstrates severe stalls, outer recovery, degradation,
+  and near-meltdown behavior, but no valid execution satisfies all three formal
+  conditions. AQM/ECN, dynamics, workload breadth, and endurance remain before
+  any general resilience claim.
+- The latest parity/lifecycle integration passed contracts and matching ARM
+  compilation but was not loaded for the recorded traffic campaign.
 - At high concurrency the bounded internal writer queue can still reject new
   frames during sustained overload. This is distinct from the repaired stranded
   queue and must be reported separately from outer TCP meltdown.

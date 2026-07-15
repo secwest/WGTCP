@@ -5,6 +5,37 @@ and known limitations. Update it in the same commit as every substantive design
 or behavioral change. Append a new entry when a decision changes; mark older
 entries as superseded instead of silently rewriting their history.
 
+## 2026-07-14: Meltdown conclusions use separate evidence inventories
+
+### Severe degradation is not promoted to formal meltdown
+
+**Decision:** Report the pre-breadth released selection, the raw-execution
+audit, and the stopped breadth selection separately. A valid execution is
+`meltdown` only when its 100 ms stall fraction, significant fitted goodput
+decline, and inner-RTO rate all cross the thresholds predeclared in
+`perf-test/meltdown/TESTPLAN.md`. Invalid executions are retained but never
+promoted, even when their observed metrics cross all three thresholds.
+
+**Evidence:** The 106-cell released selection contains 98 valid cells,
+including five degraded and one near-meltdown. The 162-execution post-repair
+audit contains 122 valid cells: 92 stable, 17 degraded, 13 near-meltdown, and
+zero meltdown, plus 40 invalid records. The breadth base and bounded reruns
+leave a logical 20-cell state of 19 valid and one invalid. Every valid TCP
+breadth cell has severe stalls and outer recovery, but significant decline and
+qualifying inner RTO occur in different executions.
+
+**Consequence:** Documentation must not describe the results as either
+meltdown immunity or absence of TCP-over-TCP effects. It may state that severe
+degradation and near-meltdown behavior are demonstrated, while formal meltdown
+is not established in valid evidence.
+
+### Runtime claims stop at the measured source fingerprint
+
+**Decision:** Traffic conclusions remain attached to the recorded campaign
+runtime. The later upstream parity/lifecycle integration may be described as
+contract-tested and identically ARM-built, but not as traffic-qualified until
+that candidate is loaded and exercised separately.
+
 ## 2026-07-14: NAT44 validation stays narrower than carrier promotion
 
 ### Dual-reachable NAT is a supported test topology
@@ -178,9 +209,11 @@ resilience results, but must not claim general TCP-over-TCP meltdown immunity.
 The current evidence supports only the narrower conclusion that meltdown may
 occur under a smaller set of conditions than commonly assumed.
 
-**Follow-up:** Run controlled loss, congestion, queue, reorder, blackout,
-multi-flow, forced-short-write, parser-resynchronization, and multi-hour soak
-campaigns before broadening the claim.
+**Status (partially superseded 2026-07-14):** Controlled physical-carrier loss,
+finite queues, 16-flow load, forced short writes, parser resynchronization, and
+inner/outer recovery telemetry are now complete. Reorder, blackout, broader
+workloads, dynamic recovery, and multi-hour soak remain before broadening the
+claim. See "Meltdown conclusions use separate evidence inventories" above.
 
 ### Hyper-V control recovery uses exact ownership
 

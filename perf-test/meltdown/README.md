@@ -22,6 +22,27 @@ must not be changed after inspecting a campaign. The current implementation,
 environment, evidence, and blockers are recorded in
 [`INVESTIGATION_STATUS.md`](INVESTIGATION_STATUS.md).
 
+## Current evidence
+
+The fixed campaign has completed its clean, finite-queue, recovery, qualified
+burst, and 20-execution burst-breadth stages. The pre-breadth released selection
+is 106/106 complete: 98 valid (92 stable, five degraded, one near-meltdown),
+zero meltdown, and eight invalid.
+
+The breadth base completed 20/20 executions; six evidence-invalid cells were
+rerun exactly once. The resulting 26 raw executions contain 19 valid outcomes
+(10 degraded and nine near-meltdown), zero meltdown, and seven invalid. One
+random-loss TCP cell remained invalid after its sole rerun, so the all-valid
+breadth composite is stopped rather than repaired by changing a gate or adding
+another retry.
+
+The full post-repair raw-execution audit is 162 executions: 122 valid
+(92 stable, 17 degraded, 13 near-meltdown), zero meltdown, and 40 invalid.
+Severe nested stalls and outer recovery are established, but no valid execution
+simultaneously meets the predeclared stall, declining-goodput, and inner-RTO
+conditions. See
+[`results/2026-07-14-final-audit/`](results/2026-07-14-final-audit/).
+
 ## Layout
 
 ```text
@@ -60,6 +81,9 @@ meltdown/
     provenance.csv
     cells.csv
     REPORT.md
+  results/2026-07-14-final-audit/
+    campaigns.csv          # raw-execution inclusion/exclusion ledger
+    README.md
 ```
 
 ## Safety model

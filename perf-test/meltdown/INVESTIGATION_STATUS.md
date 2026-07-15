@@ -1,12 +1,13 @@
-# WireguardTCP TCP Meltdown Investigation - Interim Status
+# WireguardTCP TCP Meltdown Investigation - Breadth Conclusion
 
-Status cutoff: 2026-07-14 12:40 PDT (2026-07-14 19:40 UTC)
+Status cutoff: 2026-07-14 22:19 PDT (2026-07-15 05:19 UTC)
 
-This is an interim engineering record, not the final campaign report. It
-documents the repository, host, harness, implementation, measurements, and
-conclusions reached so far. Clean-path qualification and the finite-queue/RTT
-screening matrix are complete and qualified; stronger congestion, mechanism,
-and endurance stages remain.
+This engineering record documents the repository, host, harness,
+implementation, measurements, and conclusions through the fixed
+burst-breadth phase. It is a final statement for the completed breadth
+protocol, not a general resilience certification. Separately predeclared
+endurance, AQM/ECN, dynamics, and workload-breadth stages remain optional
+follow-up work.
 
 ## 1. Executive summary
 
@@ -152,16 +153,31 @@ UDP controls. It is 4/4 valid: three degraded and one near-meltdown, with zero
 meltdown or invalid cells. Its campaign and cell fingerprints, runtime identity,
 selected source hashes, and sole replacement reconcile. The released inventory
 is now 106/106 complete: 98 valid, 92 stable, five degraded, one near-meltdown,
-zero meltdown, and eight invalid. Full audit inventory contains 136 completed
-executions: 103 valid (92 stable, seven degraded, four near-meltdown, zero
-meltdown) and 33 invalid.
+zero meltdown, and eight invalid. At that pre-breadth checkpoint, the raw audit
+contained 136 completed executions: 103 valid (92 stable, seven degraded, four
+near-meltdown, zero meltdown) and 33 invalid.
 
-The released broader stage is now fixed before execution. It adds 20 matched
-TCP/UDP executions around the qualified center reference: independent 7.5%
-loss, lower-loss `1/25/90/1`, longer-burst `1/12.5/90/1`, doubled-RTT
-`2/25/90/1`, and higher-loss `4/25/90/1`. Profiles, order, two repetitions,
-completion and impairment policies, retry bound, and safety stop rule are
-predeclared in `matrix-mechanism-burst-breadth.csv` and `TESTPLAN.md`.
+The released broader stage completed all 20 matched TCP/UDP executions around
+the qualified center reference: independent 7.5% loss, lower-loss
+`1/25/90/1`, longer-burst `1/12.5/90/1`, doubled-RTT `2/25/90/1`, and
+higher-loss `4/25/90/1`. The base contains 14 valid cells (seven degraded and
+seven near-meltdown) and six invalid cells. All six invalid cells consumed
+their sole exact rerun: five became valid (three degraded and two
+near-meltdown), while random-loss TCP r1 remained invalid on the fixed
+interval-duration contract.
+
+The logical 20-cell breadth state is therefore 19 valid: 10 degraded, nine
+near-meltdown, zero stable, zero meltdown, and one invalid. The fail-closed
+merger cannot produce an all-valid composite, and no further rerun or gate
+change is allowed. Across the base and rerun directories, all 26 executions
+completed with empty orchestration `failed_cells` lists and no campaign safety
+latch; their seven evidence-invalid classifications remain counted separately.
+
+The post-repair raw-execution audit is now 162 executions: 122 valid
+(92 stable, 17 degraded, 13 near-meltdown), zero meltdown, and 40 invalid. The
+released selection remains 106/106 complete with 98 valid (92 stable, five
+degraded, one near-meltdown) and eight invalid because breadth did not produce
+an all-valid qualified composite.
 
 The test design and most of the campaign machinery now exercise the right
 mechanism: offered load fills a finite queue, queue overflow or delay stalls the
@@ -188,13 +204,18 @@ sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 47 Mb/s over TCP and 48.59 Mb/s over UDP, including 16-flow TCP. The former
 1,024-frame stranded residue disappeared in direct 1/2/4/8/16-flow tracing.
 
-The current valid evidence does not meet the predeclared meltdown definition.
-The qualified transport-aware gate now establishes valid outer TCP recovery and
-severe delivery stalls without structurally rejecting TCP's post-loss RTT or
-adaptive realized-loss response. It still does not rule out meltdown: the two
-valid TCP repetitions split the remaining conditions rather than satisfying all
-three in one execution. Broader burst, mechanism, workload, and endurance work
-is now released under the same prospective evidence contracts.
+The valid breadth evidence demonstrates severe TCP-over-TCP effects. All nine
+valid logical TCP cells stall in 52.8%-94.0% of 100 ms bins and record 56-150
+outer-recovery events. Two pair stalls with significant decline but no
+qualifying inner-RTO rate; three pair stalls with a qualifying inner-RTO rate
+but no significant decline; four meet only the stall condition. No valid
+execution combines all three formal meltdown conditions.
+
+The latest upstream parity/lifecycle work was merged after traffic collection.
+That integrated tree passes 157 contracts and builds identically on both ARM
+hosts, but it was compiled only and was not loaded for another traffic
+campaign. Empirical conclusions remain bound to the recorded campaign
+fingerprint and runtime identity.
 
 ## 2. Objective and falsifiable definition
 
@@ -226,9 +247,10 @@ results.
 
 - Repository: `secwest/WireguardTCP`
 - Working branch: `dragosruiu-microsoft-tcp-meltdown-investigation`
-- Current upstream `main`: `e827d5f`
-- Shared ARM lifetime integration: merge `377f4af`, authored by
+- Current upstream `main`: `c1d898a`
+- Latest-main source integration: merge `551a30c`, authored by
   `Dragos Ruiu <dr@secwest.net>`
+- Regenerated combined-patch checkpoint: `4fdb487`
 - Git author for this investigation checkpoint:
   `Dragos Ruiu <dr@secwest.net>`
 - Investigation commit policy: no Copilot tags or trailers
@@ -237,11 +259,13 @@ results.
   artifacts; it was not replayed blindly over the substantially changed
   upstream implementation.
 
-The parallel ARM branch was first reconciled with current `main`, validated, and
-then used as this branch's base. The campaign changes were replayed over that
-shared base with manual conflict resolution in the reader and stream contracts.
-Existing upstream commits retain their original authors; the author requirement
-above applies to commits created for this investigation.
+The branch contains current `origin/main` and is not behind it. The latest-main
+merge retained upstream connection IDs, admission controls, authenticated
+carrier lifetime, roaming provenance, stop barriers, NAT44 coverage, and fault
+coverage while preserving the measured writer wakeup, framing, provenance, and
+listener-handoff repairs. Existing upstream commits retain their original
+authors; the author requirement above applies to commits created for this
+investigation.
 
 ## 4. Azure test environment and security controls
 
@@ -527,16 +551,16 @@ Calibration, screening, rerun qualification, and the 0.25x-BDP smoke used:
 - userspace tool SHA-256:
   `80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3`.
 
-The adaptive smoke was built independently on both endpoints from committed
-checkpoint `2b9513f` and currently runs:
+The adaptive smoke and subsequent burst campaigns used a module built
+independently on both endpoints from the post-writer-repair source:
 
 - module srcversion: `01DA86291E0FBD2CD3C940C`;
 - module SHA-256:
   `771057ae270ae379e90bc9c31f8f8777e54556d8acbb71b8717e6a950dca275e`;
 - the same userspace tool hash above.
 
-The adaptive campaign has its own source/runtime fingerprint and is not merged
-into an earlier single-fingerprint campaign.
+Each prospective campaign has its own source/campaign fingerprint even where
+the module and tool identities are unchanged.
 
 ### 10.2 Clean calibration
 
@@ -757,25 +781,64 @@ sequence-bearing event rows across 89 event/layer/CPU streams reconcile exactly
 through their terminal values. The gate therefore releases broader work without
 changing severity, eligibility, or any historical classification.
 
+### 10.11 Burst-breadth campaign and exact reruns
+
+The fixed breadth matrix completed all 20 base executions:
+
+| Base classification | Executions |
+|---|---:|
+| valid/stable | 0 |
+| valid/degraded | 7 |
+| valid/near-meltdown | 7 |
+| valid/meltdown | 0 |
+| invalid | 6 |
+
+The six invalid-only exact reruns produced three degraded, two near-meltdown,
+and one invalid result. Random-loss TCP r1 remained invalid because its
+interval-duration evidence missed the fixed completion contract by about
+200 ms. It nevertheless delivered 0.220 Mb/s, stalled in 54.7% of bins,
+recorded 162 outer-recovery events, and had no inner RTO. Those metrics are
+retained as invalid evidence and do not justify relaxing the contract.
+
+After selecting only valid exact replacements, 19 of the 20 logical cells are
+valid: 10 degraded and nine near-meltdown. The remaining invalid cell consumed
+the sole predeclared rerun, so the all-valid composite path is permanently
+stopped.
+
+Nine logical TCP cells are valid. Their goodput is 0.07-1.09 Mb/s, their stall
+fraction is 52.8%-94.0%, and every one records outer recovery. The formal
+conditions split as follows:
+
+- two executions meet stall plus significant-decline, but not inner RTO;
+- three meet stall plus inner RTO, but not significant decline;
+- four meet only stall.
+
+The 10 logical UDP controls are valid. They deliver 1.34-5.81 Mb/s with
+0%-4.0% stalls. The data therefore establish severe nested degradation and
+cross-layer recovery, but not one valid execution with all three formal
+meltdown conditions.
+
 ## 11. What can be concluded about TCP meltdown now
 
 ### Supported conclusions
 
-- None of the 98 valid released calibration, screening, or mechanism cells
-  meets all three components of the predeclared full-meltdown definition.
-- Valid TCP outer recovery is now established prospectively in two executions.
-  Both have severe delivery stalls, and TCP r2 also has inner RTO/outer-recovery
-  coupling, but neither has all three formal meltdown conditions.
-- The released inventory contains five degraded and one near-meltdown valid
-  cells.
+- None of the 122 valid post-repair raw executions meets all three components
+  of the predeclared full-meltdown definition.
+- The valid breadth cells establish severe TCP stalls, very low goodput, outer
+  recovery, significant declines, and inner RTOs, but the decline and RTO
+  conditions do not occur together in the same valid execution.
+- The released inventory remains 106/106 complete: 98 valid (92 stable, five
+  degraded, one near-meltdown), zero meltdown, and eight invalid.
+- The raw audit contains 162 executions: 122 valid (92 stable, 17 degraded,
+  13 near-meltdown), zero meltdown, and 40 invalid.
 - Invalid corrected-burst TCP cells repeatedly forced outer recovery. One exact
   invalid rerun met all three meltdown conditions but cannot be promoted.
 - The severe pre-fix 16-flow collapse was a deterministic writer-notification
   defect with no outer loss or recovery, not classical meltdown.
 - The writer repair restores clean 16-flow throughput and remains responsive
   through thousands of `EAGAIN`/write-space cycles.
-- The current dual-carrier build is stable across the qualified calibration and
-  screening evidence collected so far.
+- The measured campaign runtime retained its dual carriers across valid
+  evidence and restored qdiscs after every completed cell.
 
 ### Conclusions not yet supported
 
@@ -784,18 +847,19 @@ changing severity, eligibility, or any historical classification.
   thresholds with outer-recovery attribution.
 - The current results should not be generalized from two outer streams to a
   single-carrier or responder-only design.
-- The seven records in the initial campaign remain invalid and are not used as
-  transport evidence; only their separate complete reruns enter the qualified
-  composite.
+- The results do not establish meltdown immunity, bounded endurance, or
+  recovery after long impairment epochs.
+- Traffic results do not yet qualify the post-campaign upstream
+  parity/lifecycle integration; that candidate was compiled but not loaded.
 
-The current assessment is: **no meltdown is established in 98 valid released
-cells. The qualified transport-aware gate prospectively establishes outer TCP
-recovery and severe nested stalls, with one valid near-meltdown result, but no
-valid execution meets all three formal meltdown conditions.**
+The current assessment is: **severe TCP-over-TCP degradation and
+near-meltdown behavior are established, but formal meltdown is not established
+because no valid execution meets the stall, significant-decline, and inner-RTO
+conditions together.**
 
 ## 12. Validation completed
 
-- 113 repository source-contract, analysis, matrix, and composite-integrity
+- 157 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;
@@ -810,6 +874,8 @@ valid execution meets all three formal meltdown conditions.**
   only handle `20:`, rate-limited traffic, and restored the baseline;
 - the writer-fix module built independently on both ARM endpoints with matching
   srcversion and SHA-256;
+- the later integrated parity/lifecycle candidate also built independently on
+  both ARM endpoints with matching srcversion and SHA-256, but was not loaded;
 - ARM BPF bytecode uses atomic counter updates;
 - 870/870 raw stress-trace events reconcile;
 - clean 1/2/4/8/16-flow writer traces completed without stranded frames;
@@ -830,6 +896,9 @@ valid execution meets all three formal meltdown conditions.**
 - the transport-aware composite contains 4/4 valid rows, three base
   fingerprints and one exact replacement fingerprint, verified analyzed-result
   hashes, and TCP outer recovery;
+- the burst-breadth base completed 20/20 with 14 valid and six invalid
+  executions; all six exact reruns completed with five valid and one invalid
+  result, no failed cell, and no safety latch;
 - the qualified composite contains 68/68 valid/stable rows, 61 initial cell
   fingerprints, and seven rerun fingerprints under an identical runtime
   identity;
@@ -875,60 +944,55 @@ host-specific access files remain outside Git. They include:
 - complete 14-cell calibration, 68-cell initial screening, seven-cell rerun,
   four-cell mechanism-smoke, four-cell adaptive-smoke, four-cell
   recovery-smoke, one-cell exact-retry, four-cell burst-smoke, four-cell
-  transport-aware base, one-cell exact transport rerun, and qualified
-  transport composite directories;
+  transport-aware base, one-cell exact transport rerun, qualified transport
+  composite, 20-cell burst-breadth base, and six-cell exact breadth-rerun
+  directories;
 - per-endpoint BPF, socket, qdisc, interface, nstat, CPU, clock, and kernel-log
   evidence;
 - source/runtime/cell/campaign fingerprints and completion markers.
 
 Git contains compact calibration, initial-screening, rerun, qualified composite,
-mechanism-smoke, adaptive-smoke, recovery-smoke, invalid-retry, and burst-smoke
-inventories, plus the transport-aware base, exact replacement, and qualified
-transport composite. Each qualified directory includes a source fingerprint for
-every selected cell. Recovery evidence preserves failed gates without promoting
-invalid records. No credentials, private keys, or host-specific connection files
-are included.
+mechanism-smoke, adaptive-smoke, recovery-smoke, invalid-retry, burst-smoke,
+transport-aware, burst-breadth, and final-audit inventories. Each qualified
+directory includes a source fingerprint for every selected cell. Recovery and
+breadth evidence preserve failed gates without promoting invalid records. No
+credentials, private keys, or host-specific connection files are included.
 
 ## 15. Most recently verified host state
 
-- Both dedicated test hosts are running the matching writer-fix module.
-- UDP and TCP test interfaces are configured.
-- Two TCP carrier streams are established.
-- Physical qdiscs are restored; no campaign impairment, IFB, active marker,
-  restoration failure, or transient campaign unit remains.
-- No sampler or competitor unit is running.
-- The most recent post-campaign TCP and UDP controls passed 10/10 with zero
-  loss at 0.428/0.210 ms mean RTT.
-- The temporary restricted access gateway is running only for the active
-  mechanism investigation and exposes only two restricted forwarding sockets.
-- Restricted test access/services and tunnel state still require final
-  closeout cleanup after the remaining campaign.
+- At breadth-campaign completion, all 20 base and six rerun executions had
+  verified qdisc restoration and no safety latch.
+- The most recent campaign controls passed before every impairment, and no
+  failed cell was recorded.
+- Both hosts were subsequently reachable and independently built the exact
+  integrated candidate with matching module and tool hashes.
+- The integrated candidate was not loaded. Runtime tunnel, qdisc, transient
+  service, and module state were not revalidated after the compile-only check
+  and must be inspected during security closeout.
 
 ## 16. Remaining work
 
-Mechanism and breadth:
+Optional follow-up:
 
-1. commit and run the predeclared 20-execution burst-breadth matrix and measure
-   temporal coupling;
-2. select matched high-risk/control cells prospectively for 10-minute endurance;
-3. run fq_codel/AQM and ECN arms, competing CUBIC, and bidirectional traffic;
-4. add Reno/BBR sensitivity, short-flow FCT, jitter, reverse-only impairment,
-   dynamics, and selected 10-minute endurance tests.
+1. predeclare matched high-risk/control cells for 10-minute and multi-hour
+   endurance before selecting any execution;
+2. run fq_codel/AQM, ECN, competing traffic, bidirectional traffic, Reno/BBR,
+   short-flow FCT, jitter, reverse-only impairment, blackout, and dynamics;
+3. load and separately qualify the integrated parity/lifecycle candidate if
+   traffic equivalence is required.
 
 Closeout:
 
-1. generate final compact tables and plots and document every completed,
-   invalid, and unrun cell;
+1. merge the review branch only after remote checks pass;
 2. rotate credentials exposed by historical commits;
 3. verify qdisc/tunnel restoration, remove transient services/access state, and
-   deallocate both Azure hosts;
-4. restore private-repository authorization and push the investigation commits.
+   deallocate both Azure hosts.
 
 ## 17. Reading order
 
 1. [`README.md`](README.md) - campaign purpose, layout, and invocation
 2. [`TESTPLAN.md`](TESTPLAN.md) - immutable definitions and validity rules
-3. this document - interim engineering state and evidence
+3. this document - breadth engineering state and conclusions
 4. [`results/2026-07-13-wakeup-calibration/REPORT.md`](results/2026-07-13-wakeup-calibration/REPORT.md)
 5. [`results/2026-07-13-wakeup-screening-initial/REPORT.md`](results/2026-07-13-wakeup-screening-initial/REPORT.md)
 6. [`results/2026-07-13-wakeup-screening-rerun/REPORT.md`](results/2026-07-13-wakeup-screening-rerun/REPORT.md)
@@ -943,3 +1007,6 @@ Closeout:
 15. [`results/2026-07-14-burst-transport-qualified-smoke/REPORT.md`](results/2026-07-14-burst-transport-qualified-smoke/REPORT.md)
 16. [`results/2026-07-14-burst-transport-qualified-rerun/REPORT.md`](results/2026-07-14-burst-transport-qualified-rerun/REPORT.md)
 17. [`results/2026-07-14-burst-transport-qualified-composite/REPORT.md`](results/2026-07-14-burst-transport-qualified-composite/REPORT.md)
+18. [`results/2026-07-14-burst-breadth/REPORT.md`](results/2026-07-14-burst-breadth/REPORT.md)
+19. [`results/2026-07-14-burst-breadth-rerun/REPORT.md`](results/2026-07-14-burst-breadth-rerun/REPORT.md)
+20. [`results/2026-07-14-final-audit/README.md`](results/2026-07-14-final-audit/README.md)
