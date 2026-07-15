@@ -4,42 +4,55 @@
 
 | Field | Value |
 |---|---|
-| Run ID | `wg20260712T212739Z` |
-| Started | 2026-07-12 21:27:39 UTC |
-| Duration | 208.713 seconds |
+| Run ID | `wg20260714T010310Z` |
+| Started | 2026-07-14 01:03:10 UTC |
+| Duration | 558.520 seconds |
 | Host | Windows 11 Pro, Hyper-V, Multipass 1.16.3 |
 | Guests | Ubuntu 24.04 (`wgtcp-a`, `wgtcp-b`) |
 | Guest kernel | `6.8.0-124-generic` |
-| Source base | `35c9110cac0f10a6f6481d5d25d8cc6d5989918a` |
-| Base archive SHA-256 | `9f08d1ea6d36943e7ee30b32d03feeabc2431eaff004b9ac015993534d83e699` |
-| Dirty overlay SHA-256 | `e19ba9759f2636849290a2773b2c5f764cd974437d94d745e837a69ee26e151c` |
-| Result | **26 PASS, 0 FAIL, 0 SKIP** |
-| Recorded commands | 433 |
+| Source HEAD | `83d424cb0191bc2b90090c071728db6348f7b983` |
+| Base archive SHA-256 | `2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12` |
+| Dirty overlay SHA-256 | `40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a` |
+| Result | **36 PASS, 0 FAIL, 0 SKIP** |
+| Recorded commands | 541 |
 | Kernel-log check failures | 0 |
 
-The provisioner built and tested the source snapshot represented by the base
-commit and overlay hash above. Both guests built the production and DEBUG fork
-modules and the modified tools before the campaign; this results record was
-updated afterward with the observed outcome. Host execution used an approved
-brokered administrator context after the invoking token could read the exact
-managed Hyper-V VM IDs, and bounded guest-command probes succeeded before the
-case loop.
+The provisioner built and tested the source snapshot represented by the HEAD,
+base archive, and overlay hashes above. Both guests built the production,
+DEBUG, and isolated hostile-stream fault modules plus the modified tools before
+the campaign. Build-time `modinfo` checks proved that the `tcp_test_*`
+parameters were absent from the production and ordinary DEBUG artifacts and
+present only in the fault artifact. This results record was updated afterward
+with the observed outcome. Host execution used an approved brokered
+administrator context after the invoking token could read the exact managed
+Hyper-V VM IDs, and bounded guest-command probes succeeded before the case
+loop.
 
 ## Case results
 
 | Group or case | Count | Result | Evidence |
 |---|---:|---|---|
-| Preflight | 1 | PASS | Guest builds, underlays, contract tests, and kernel-log checks passed |
+| Preflight | 1 | PASS | Guest builds, underlays, all 107 local contract tests on each guest, artifact-isolation checks, and kernel-log checks passed |
 | UDP stock/fork matrix | 16 | PASS | Every Cartesian combination of stock/fork kernel A, kernel B, tool A, and tool B carried bidirectional traffic |
 | `fork-udp-netns-regression` | 1 | PASS | Fork UDP regression passed on both guests; the current case also proves a TCP tunnel over a namespace-only underlay |
 | `fork-debug-initialization-selftests` | 1 | PASS | DEBUG module loaded, initialization selftests passed, and the module could be unloaded |
-| `udp-roaming-path-change` | 1 | PASS | Authenticated UDP endpoint learning moved to `10.77.1.10:46925` |
+| `udp-roaming-path-change` | 1 | PASS | Authenticated UDP endpoint learning moved to `10.77.1.10:36686` |
 | `udp-output-and-random-port` | 1 | PASS | Stock-facing output and independent random listen ports passed |
 | `stock-kernel-transport-capability` | 1 | PASS | Explicit UDP remained a no-op and unsupported TCP was rejected safely |
 | `fork-mode-change-rejection` | 1 | PASS | Unsafe live transport changes were rejected; live TCP listen-port mutation returned `EBUSY` without changing either listener, while down/up random-port selection produced one nonzero port shared by the TCP listener and UDP companion |
 | `tcp-smoke` | 1 | PASS | Static IPv4 TCP tunnel traffic passed on port 52010 |
+| `tcp-asymmetric-listen-ports` | 1 | PASS | Bidirectional tunnel traffic passed with independently configured TCP listen ports 52020 and 52021; observed carrier source ports remained ephemeral |
 | `tcp-stock-tool-management` | 1 | PASS | The stock tool managed the fork kernel while the interface remained in TCP mode |
+| `tcp-config-roundtrip` | 1 | PASS | `showconf`, `setconf`, `syncconf`, and `wg-quick save` preserved TCP mode and traffic; configurations containing private material remained in guest-local mode-0600 files |
 | `tcp-configured-path-change` | 1 | PASS | Both configured endpoints moved to `path1`; after `path0` was disabled and both WireGuard links were cycled, forward and reverse traffic used TCP port 52012 on the replacement path |
+| `tcp-full-tunnel-live-fwmark` | 1 | PASS | Full-tunnel policy routing and the recursion guard passed; established carriers reconnected after two live `FwMark` values on both guests |
+| `tcp-route-change` | 1 | PASS | A live route change moved authenticated TCP carriers from `192.0.2.0/24` to `198.51.100.0/24` on both guests while tunnel traffic recovered |
+| `tcp-source-address-uplink-change` | 1 | PASS | Both guests reconnected after a live local source-address change and again after moving the endpoint route to the second uplink |
+| `tcp-ipv6-dual-stack` | 1 | PASS | Independent IPv4 and IPv6 listeners coexisted, asymmetric ports 52210/52211 were retained, and IPv6 outer-carrier tunnel traffic passed on both guests |
+| `tcp-ipv6-link-local-scope` | 1 | PASS | Scoped link-local endpoint strings retained their interface zones, both guests established link-local IPv6 outer carriers, and tunnel traffic passed |
+| `tcp-authenticated-carrier-lifetime` | 1 | PASS | An authenticated TCP carrier remained usable for 40 seconds on each guest, beyond the provisional unauthenticated lifetime |
+| `tcp-nat44-dual-reachable` | 1 | PASS | Each guest passed isolated SNAT, DNAT, keepalive, bidirectional traffic, `41001` to `41002` remapping, configured-port preservation, and a forced reverse dial through public forward 52241 |
+| `tcp-debug-hostile-stream` | 1 | PASS | The isolated fault module forced real short writes, parser resynchronization, and queue drops on both guests, then recovered normal traffic; deltas were A=`80/4/4/437` and B=`80/4/4/442` for short writes/prefixes/resyncs/drops |
 
 All 16 UDP matrix cells and every focused UDP, compatibility, and guard case
 passed. This is the repository's evidence that UDP mode is drop-in compatible
@@ -57,28 +70,112 @@ The configured TCP migration case exercised the dedicated endpoint setter in
 this snapshot. `wg set ... endpoint` replaced each peer's TCP dial target,
 disabled the original underlay, and then both WireGuard interfaces were cycled
 down and up. Bidirectional traffic recovered over the second underlay, and both
-outer TCP directions were observed on `path1`. This is evidence for that exact
-operator-configured IPv4 migration and interface-restart sequence. It is not an
-automatic authenticated-roaming or responder-only promotion test.
+outer TCP directions were observed on `path1`.
+
+The new parity cases exercised automatic authenticated dial-target updates and
+notifier-driven reconnects at runtime. Both guests followed authenticated
+address changes, route and uplink changes, source-address replacement, and two
+live `FwMark` values. The full-tunnel case verified marked endpoint routing and
+the unmarked recursion guard. The IPv6 case verified independent IPv4/IPv6
+listeners and an IPv6 outer carrier, while the lifetime case kept an
+authenticated carrier active for 40 seconds on each guest. These results cover
+the tested namespace topology and do not imply arbitrary NAT or responder-only
+socket promotion behavior.
+
+The NAT44 case ran separate private-peer, router, and public-peer namespaces
+inside each guest. nftables SNATed the private peer to public source port 41001
+and DNATed public port 52241 to private listener 52221. Both directions carried
+tunnel traffic, and two-second persistent keepalive counters advanced. The
+test atomically replaced the SNAT rule with source port 41002, flushed only the
+router namespace's conntrack state, and recovered bidirectional traffic.
+`wg show endpoints` retained configured forward 52241. A live `FwMark` change
+then forced the public peer's reverse carrier to reconnect; each router counted
+a new SYN through that forward. Both repetitions still saw the old accepted
+41001 socket locally established, so duplicate/stale-carrier retirement remains
+open. This proves only the dual-reachable topology with explicit DNAT, not
+responder-only operation without a forward or general NAT parity.
+
+The configuration round-trip case kept all secret-bearing files inside the
+guest-local mode-0700 temporary directory with mode 0600, and emitted no
+secrets into host-collected output. It verified `showconf`, `setconf`,
+`syncconf`, and `wg-quick save`, including preservation of `Transport = tcp`,
+configured listen ports, peer sets, and tunnel traffic.
+The scoped IPv6 case preserved `%interface` zones in configured and serialized
+link-local endpoints and observed usable link-local outer TCP carriers on both
+guests.
+
+The hostile-stream case loaded `wireguard-fork-fault.ko`, the only artifact
+that exposes the root-only fault parameters. Each guest independently observed
+80 real short writes, four injected garbage prefixes, four successful parser
+resynchronizations, and queue-pressure drops (437 on `wgtcp-a`, 442 on
+`wgtcp-b`). Both recovered normal tunnel traffic after the controls were
+cleared. This is deterministic fault-path evidence for the tested workload; it
+is not an unbounded hostile-network or long-duration fuzzing claim.
+
+## Follow-up hardening verification
+
+After the earlier 35-case campaign, the configuration case was extended from
+SaveConfig serialization to a real `wg-quick` down/up reload, writer delay was
+made one-shot, artifact reuse verification was strengthened, and fault-module
+load/test/restore moved into one guest-side command. The rebuilt snapshot used
+base archive SHA-256
+`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7` and
+overlay SHA-256
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`.
+
+Focused run `wg20260713T225629Z` completed **2 PASS, 0 FAIL, 0 SKIP** in
+134.149 seconds. `tcp-config-roundtrip` passed in 117.489 seconds and returned
+`wg_quick_roundtrip=pass` from both guests. `tcp-debug-hostile-stream` passed
+in 16.246 seconds; both guests recorded 80 short writes, four injected
+prefixes, and four resynchronizations, with 434/441 queue drops, then returned
+`restored_kernel_variant=fork`. Reuse-only artifact verification passed, and
+all 103 source contracts passed on both guests. This focused run verified those
+hardened paths. They are also included in the later 36-case full campaign
+recorded above.
+
+## NAT44 focused verification
+
+Strengthened focused run `wg20260714T005957Z` completed **1 PASS, 0 FAIL,
+0 SKIP** in 57.867 seconds before the final full campaign. Both guests passed
+the same atomic remap and forced reverse-dial assertions later included in
+`wg20260714T010310Z`. Its detailed counters were A keepalive
+`1480->1512`/`2016->2048`, reverse SYNs `4->5`; and B keepalive
+`528->560`/`436->788`, reverse SYNs `3->4`. Both reported
+`old_accepted_carrier=retained`.
 
 ## Validation boundary
 
-The earlier sandboxed run `wg20260712T200006Z` is intentionally excluded from
-the campaign table. Host policy blocked TCP port 22 to both management
-addresses, every bounded guest command failed, and **0 of 26 cases ran**. It
-was an infrastructure failure, not a 26-case product failure or partial pass.
-The runner's infrastructure gate aborts this condition even when `-KeepGoing`
-is selected; that option applies only after the guest command channel is
-healthy and independent cases have begun.
+Runs `wg20260713T183821Z` and `wg20260713T184512Z` are intentionally excluded
+from the campaign table. The first completed 12 passing cases before a
+`wgtcp-a` collection client reached its 180-second host timeout; the second
+completed nine passing cases before the same failure pattern. Seven orphaned,
+CPU-spinning `multipass.exe` clients were then enumerated, inspected by exact
+PID, age, and command line, and terminated by exact PID. The `multipassd`
+service and both VMs were left running. Guest ownership was cleaned with the
+internal case IDs recorded by each failed case's successful `prepare` command:
+`m13` for `wg20260713T183821Z` and `m10` for `wg20260713T184512Z`. The next
+clean 32-case campaign passed without a failure or skip, the later expanded
+campaign passed all 35 cases, and the final NAT-expanded campaign recorded
+above passed all 36. The two aborts were control-client
+infrastructure failures, not product regressions or partial release results.
 
-This campaign establishes static IPv4 TCP connectivity, stock-tool control, and
-the configured two-underlay migration/interface-restart sequence for the tested
-build. It does not establish responder-only promotion, automatic TCP roaming,
-NAT behavior, IPv6 transport, repeated path churn, local route/address notifier
-behavior, long-soak stability, IPv6 namespaces, namespace teardown/move, VRFs,
-or full-tunnel policy routing. New TCP streams now use the device creation
-namespace and `FwMark`; full-tunnel recursion and live routing changes still
-need explicit runtime validation.
+The safe inspection, exact-PID client termination, and prepare-ID ownership
+cleanup procedure is recorded in the
+[Hyper-V setup guide](HYPERV_SETUP.md#orphaned-multipass-client-recovery).
+
+This campaign establishes static and asymmetric-port TCP connectivity,
+stock-tool control, configuration round trips, configured migration,
+authenticated endpoint following, route/source/uplink reconnects, live
+full-tunnel `FwMark` changes, ULA and scoped link-local IPv6 outer transport,
+dual-stack listeners, a 40-second authenticated carrier, dual-reachable NAT44
+with an explicit forward and one live source-port remap, and deterministic
+short-write/parser/queue-pressure recovery on the tested Ubuntu 24.04/Linux 6.8
+guests. Remaining validation and design gaps are authenticated carrier
+promotion for responder-only/no-forward NAT; deterministic stale-carrier
+retirement; arbitrary NAT/provider behavior; a cookie-equivalent TCP
+pre-authentication cost defense; VRF and namespace-move behavior; broader MTU
+and fragmentation coverage; long-duration, multi-flow soak testing; and wider
+kernel-version and distribution breadth.
 
 The suite is functional rather than a performance campaign. It does not test
 physical-carrier loss or establish TCP-over-TCP meltdown resilience. The
@@ -86,6 +183,7 @@ separate Azure application results support only the narrower hypothesis
 described in the [design document](../../docs/TCP_TRANSPORT_DESIGN.md#tcp-over-tcp-behavior-and-meltdown-conditions).
 
 Raw machine-readable results and per-command logs are intentionally ignored by
-Git and remain locally under
-`tests/hyperv/results/wg20260712T212739Z/`. Reproduce the campaign with the
+Git and remain locally under the per-run directories
+`tests/hyperv/results/wg20260714T010310Z/` and
+`tests/hyperv/results/wg20260714T005957Z/`. Reproduce the campaign with the
 commands in [`README.md`](README.md).

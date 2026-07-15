@@ -14,6 +14,12 @@ The recorded campaign used Windows 11 Pro, Hyper-V, Multipass 1.16.3 with the
 `hyperv` driver, and two Ubuntu 24.04 guests running kernel
 `6.8.0-124-generic`.
 
+The final full campaign `wg20260714T010310Z` used source HEAD
+`83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
+`2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`, and
+Git-visible overlay SHA-256
+`40c4db67c0b9660f3589239ca85ac1870d40306075ce67617085a40b1a3d3e9a`.
+
 | Component | `wgtcp-a` | `wgtcp-b` |
 |---|---|---|
 | CPU, memory, disk | 4 vCPU, 8 GB, 60 GB | 4 vCPU, 8 GB, 60 GB |
@@ -173,6 +179,83 @@ This recovery is intentionally PID-checked. A broad process kill can terminate
 unrelated Hyper-V or user workloads. If the service again cannot stop or the
 driver remains unresponsive, reboot Windows rather than repeatedly forcing it.
 
+### Orphaned Multipass client recovery
+
+A timed-out host command can leave its `multipass.exe` client alive even while
+the `multipassd` service and VMs remain healthy. After the two excluded
+2026-07-13 runs, seven such clients were consuming CPU. Each was inspected by
+exact PID, creation time, executable path, and complete command line before
+only those seven exact client PIDs were terminated. `multipassd`, `vmwp.exe`,
+and both managed VMs were left untouched; the next clean 32-case run passed,
+and the later expanded final campaign passed all 35 cases.
+
+First inventory clients and correlate their age and CPU use:
+
+```powershell
+$clients = @(Get-CimInstance Win32_Process -Filter "Name='multipass.exe'" |
+    Select-Object ProcessId,CreationDate,ExecutablePath,CommandLine)
+$clients | Sort-Object CreationDate | Format-List
+$clients | ForEach-Object {
+    Get-Process -Id ([int]$_.ProcessId) |
+        Select-Object Id,StartTime,CPU,Path
+}
+```
+
+A candidate is not safe to stop merely because its name is `multipass.exe` or
+it is using CPU. Its complete command line and age must match a known completed
+or timed-out harness invocation. For each candidate, copy the exact command
+line from the inventory, then re-read and compare that same PID immediately
+before termination:
+
+```powershell
+$clientPid = 12345 # Replace with one inspected stale client PID.
+$expectedCommandLine = 'copy the complete inspected command line here'
+$live = @(Get-CimInstance Win32_Process -Filter "ProcessId=$clientPid")
+if ($live.Count -ne 1 -or $live[0].Name -cne 'multipass.exe' -or
+    -not $live[0].CommandLine -or
+    $live[0].CommandLine -cne $expectedCommandLine) {
+    throw 'Client PID or command line changed; nothing was stopped'
+}
+Stop-Process -Id $clientPid -Force
+```
+
+Repeat that verification separately for each confirmed stale client. Never
+use `Stop-Process -Name multipass*` or another blanket kill. Do not stop
+`multipassd`, the `Multipass` service, `vmwp.exe`, or a VM as part of stale
+client cleanup. If a PID has been reused, its command line is incomplete, or
+the invocation may still be active, leave it alone and investigate further.
+
+After clearing verified clients, recover guest ownership from the failed
+run's evidence. The external case name is not the ownership key: read the last
+successful `prepare` command for that case and use the run ID, internal case
+ID, and interface from its argument vector:
+
+```powershell
+$run = 'wg20260713T183821Z'
+$report = Get-Content "./tests/hyperv/results/$run/report.json" -Raw |
+    ConvertFrom-Json
+$failed = @($report.results | Where-Object status -EQ 'FAIL')[-1]
+$report.commands |
+    Where-Object { $_.case -ceq $failed.name -and $_.label -ceq 'prepare' } |
+    ForEach-Object { $_.argv -join ' ' }
+```
+
+For the first excluded run, the logged ownership tuple was
+`wg20260713T183821Z m13 wgt0`; for the second it was
+`wg20260713T184512Z m10 wgt0`. Cleanup was issued on both guests for each
+applicable tuple, for example:
+
+```powershell
+multipass exec wgtcp-a -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T183821Z m13 wgt0
+multipass exec wgtcp-b -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T183821Z m13 wgt0
+multipass exec wgtcp-a -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T184512Z m10 wgt0
+multipass exec wgtcp-b -- sudo bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh cleanup wg20260713T184512Z m10 wgt0
+```
+
+Use values from the current failed run rather than reusing these historical
+ones. The ownership guard will reject a mismatched tuple; do not bypass it or
+delete an interface by name.
+
 ### Exceptional stuck VM worker recovery
 
 Terminating `vmwp.exe` is not routine Multipass recovery: it is equivalent to
@@ -313,8 +396,9 @@ The provisioner executes the following sequence:
 10. Installs the verified snapshot into `/home/ubuntu/WireguardTCP` on each
     guest without losing Git symlinks.
 11. Installs dependencies, verifies the stock driver is a removable module,
-    builds the fork tool, copies the stock tool, and builds production and
-    DEBUG fork modules with `W=1`.
+    builds the fork tool, copies the stock tool, and builds production, DEBUG,
+    and isolated fault-injection fork modules with `W=1`. It verifies their
+    parameter isolation with `modinfo`.
 12. Records a schema-2 `Ready` state with exact Hyper-V VM and switch IDs,
     source base, host Git status, and archive hashes.
 
@@ -380,7 +464,8 @@ state, an existing same-named switch is a collision and provisioning stops.
 
 [`guest-bootstrap.sh`](guest-bootstrap.sh) installs `build-essential`, the
 matching kernel headers, `linux-modules-extra` when available, `libmnl-dev`,
-`iproute2`, `iperf3`, `tcpdump`, Python, and stock `wireguard-tools`. It checks
+`iproute2`, `iperf3`, `tcpdump`, Python, stock `wireguard-tools`, and the
+`nftables` and `conntrack` packages required by the NAT44 regression. It checks
 that `CONFIG_WIREGUARD=m`, proves the stock module can load and unload, and
 fails early when the image has a built-in driver that cannot be exchanged.
 
@@ -393,7 +478,19 @@ outputs. It produces:
 /var/lib/wireguardtcp/artifacts/bin/wg-fork
 /var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork.ko
 /var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork-debug.ko
+/var/lib/wireguardtcp/artifacts/modules/<kernel>/wireguard-fork-fault.ko
 ```
+
+`wireguard-fork.ko` is the production artifact. `wireguard-fork-debug.ko`
+enables the ordinary DEBUG initialization selftests but does not expose stream
+fault controls. `wireguard-fork-fault.ko` additionally defines the explicit
+`WG_TCP_FAULT_INJECTION` build guard and is used only by the isolated
+`hostile-stream` case. After cleanly building each variant, `guest-build.sh`
+uses `modinfo` to prove that all `tcp_test_*` parameters are absent from the
+production and ordinary DEBUG artifacts and present in the fault artifact.
+Reuse-only verification recomputes that metadata, compares it with the saved
+manifests, repeats the isolation checks, and rejects a manifest for a different
+running kernel.
 
 Secure Boot was disabled because these local test modules are unsigned.
 Dynamic Memory was disabled so each build and regression case has predictable
@@ -421,6 +518,7 @@ does not replace the snapshot manifest or host `provision-state.json`.
 | An early diagnostic cloud-config failed schema validation and used settings unsuitable for a reusable lab. | The final VM creation path uses Multipass's standard cloud-init and installs a small, validated netplan afterward. Diagnostic cloud-init, including any temporary access mechanism, stays under the ignored results tree and is excluded from the repository and source snapshot. |
 | `Test-NetConnection <guest>:22` could sit on "Waiting for response" indefinitely. | `Invoke-MultipassExecProbe` runs `multipass exec -- true` as a child process with a 20-second attempt timeout and a bounded overall deadline. |
 | Multipass service stop could hang even after UAC was accepted. | Close clients first; verify the `multipassd` service PID before a forced stop; reboot if service recovery does not remain stable. |
+| Host timeouts left orphaned `multipass.exe` clients consuming CPU while the service and VMs remained healthy. | Inspect PID, age, executable, CPU, and complete command line; re-read and terminate only each exact verified stale client PID. Never blanket-kill Multipass or stop `multipassd`; then cleanup guest ownership with the run/internal case ID recorded by the successful `prepare` command. |
 | Private NICs could steal attention from management-network diagnosis. | The management NIC and both data-plane NICs have separate roles; provisioning checks management before and private addresses after attachment. |
 | Direct cloud-init/netplan activation could strand a guest. | Render per-guest files, use MAC matching and `set-name`, validate with `netplan generate`, preserve a backup, and activate only after adapters exist. |
 | Unsigned module insertion was blocked and memory allocation varied. | Disable Secure Boot and Dynamic Memory while each managed VM is stopped. |
@@ -429,9 +527,10 @@ does not replace the snapshot manifest or host `provision-state.json`.
 | Building in the transferred tree left stale outputs and obscured provenance. | `rsync --delete` into an isolated guest build root and store a build manifest with the kernel release and source identity. |
 | Switching stock and fork modules could unload a driver with live interfaces. | `guest-module.sh` enumerates root and network-namespace WireGuard links and refuses to unload until owned links are removed. |
 | Interrupted tests left interfaces or an underlay down. | Each case writes ownership state before mutation; cleanup restores only that case's interfaces, namespaces, and underlay. A later run refuses abandoned ownership. |
+| A NAT test could accidentally alter host or VM management networking. | Build its client, router, server, forwarding sysctl, nftables table, and conntrack reset in owned PID-suffixed guest network namespaces; record veth names before their brief root-namespace creation and delete only recorded resources during trap or managed-case cleanup. |
 | Failure logs were too narrow to diagnose TCP state. | Capture public WireGuard selectors, listening sockets, established TCP details, and kernel messages after a per-case log reset; never collect private keys. |
 | Host Python discovery could select the Windows Store alias or hang. | The wrapper probes real `python.exe`/`py.exe -3` applications with a 10-second process timeout. |
-| A single failing case prevented useful independent coverage. | The runner supports `-KeepGoing`, repeatable `--only-case`, production/DEBUG TCP variants, and always performs best-effort owned cleanup. Bounded command probes run first, and loss of all guest command execution is classified as infrastructure failure and aborts even with `-KeepGoing`. |
+| A single failing case prevented useful independent coverage. | The runner supports `-KeepGoing`, repeatable `--only-case`, production/DEBUG TCP variants, a dedicated isolated fault-module case, and always performs best-effort owned cleanup. Bounded command probes run first, and loss of all guest command execution is classified as infrastructure failure and aborts even with `-KeepGoing`. |
 
 The one-off recovery scripts, diagnostic cloud-init, and raw logs created
 during diagnosis remain under the ignored `tests/hyperv/results/` tree. They
@@ -469,19 +568,134 @@ python ./tests/hyperv/regression.py `
     --tcp-kernel-variant fork-debug
 ```
 
+Run the guest-local NAT44 regression by itself with:
+
+```powershell
+./tests/hyperv/Provision-HyperV.ps1
+python ./tests/hyperv/regression.py `
+    --only-case tcp-nat44-dual-reachable
+```
+
+### NAT44 topology, assertions, and cleanup
+
+`tcp-nat44-dual-reachable` invokes `tests/tcp-nat-netns.sh dual-reachable`
+independently on `wgtcp-a` and `wgtcp-b`. Each invocation creates three
+PID-suffixed namespaces and two veth pairs; it does not connect the two VMs or
+use their Hyper-V data-plane adapters:
+
+```text
+wgtcp-nc-<pid>                  wgtcp-nr-<pid>                 wgtcp-ns-<pid>
+private client                 NAT router                     public server
+10.240.0.2/24  <---------->  10.240.0.1/24
+                              192.0.2.1/24  <---------->      192.0.2.2/24
+wga 10.212.0.1/32                                             wgb 10.212.0.2/32
+listen 52221                                                  listen 52220
+                              public forward 52241 -> 52221
+```
+
+The private client routes through `10.240.0.1`. Only the router namespace has
+IPv4 forwarding enabled. Its namespace-local nftables table `ip wgtcp_nat`
+SNATs a client connection to `192.0.2.1:41001` and DNATs server connections to
+`192.0.2.1:52241` back to `10.240.0.2:52221`. Both peers configure explicit
+dial targets: the client uses `192.0.2.2:52220`, and the server uses the public
+forward `192.0.2.1:52241`.
+
+The pass criteria require all of the following on each guest:
+
+1. Tunnel pings succeed in both directions.
+2. Two-second persistent keepalives advance both peers' transmitted-byte
+   counters and traffic remains usable.
+3. nftables SNAT and DNAT packet counters are nonzero and `conntrack -L`
+   contains both expected translated TCP tuples.
+4. After the router namespace flushes its conntrack state and changes only the
+   outbound SNAT port from `41001` to `41002`, tunnel traffic reconnects in
+   both directions and the new translated tuple is established.
+5. The server's configured client endpoint remains
+   `192.0.2.1:52241`; neither observed SNAT source port is promoted into the
+   configured remote listen port.
+6. A live server `FwMark` change forces its outbound carrier to reconnect, the
+   router's forwarding chain counts a new SYN to the DNATed listener, and
+   bidirectional tunnel traffic remains usable.
+
+This topology is intentionally called `dual-reachable`: the private client's
+listen service is reachable through an explicit DNAT rule, so it does not test
+ordinary responder-only operation behind NAT without a forward. It also does
+not implement or prove authenticated accepted-socket promotion. After the
+source-port rebind, `old_accepted_carrier=retained|retired` records whether the
+old server-side accepted stream is still visible, but either value is accepted.
+Flushing middlebox state does not guarantee that an endpoint immediately
+receives FIN or RST, and deterministic peer-bound duplicate-carrier retirement
+belongs to the future promotion design.
+
+`nft` comes from the Ubuntu `nftables` package and `conntrack` from the Ubuntu
+`conntrack` package; `guest-bootstrap.sh` installs both explicitly. The test
+checks for those commands before creating resources. Forwarding changes,
+nftables rules, and `conntrack -F` execute with `ip netns exec` in the router
+namespace, never in the guest root namespace.
+
+Before each namespace or root-visible veth is created, its name is written to
+the case's auxiliary ownership directory. The script's `EXIT` trap prints
+namespace, socket, nftables, and conntrack diagnostics on failure, then deletes
+only those recorded namespaces and links. If the host runner is interrupted,
+`guest-node.sh cleanup RUN CASE wgt0` reads the same ownership record and
+removes any surviving resources. The PID suffix prevents parallel name
+collisions; creation also refuses a pre-existing name instead of adopting it.
+Neither cleanup path changes the Multipass management NIC, `path0`, `path1`,
+host Hyper-V switches, or host NAT policy.
+
 After source changes, rerun the provisioner before the regression. This creates
 and records a new source overlay; restoring a Multipass snapshot does not
 replace that provenance step. Machine-readable results and command logs remain
 under the ignored `tests/hyperv/results/<run-id>/` directory. The curated,
 committed outcome is [`RESULTS.md`](RESULTS.md).
 
-The valid brokered-host campaign `wg20260712T212739Z` passed all 26 cases in
-208.713 seconds. An earlier sandboxed attempt, `wg20260712T200006Z`, could not
-reach TCP port 22 on either management address and no guest command succeeded;
-it was a 0-of-26 infrastructure run, not regression evidence. Treat this
-pattern as a control-channel failure, recover Multipass or the Default Switch,
-then start a new run rather than interpreting the case list as product
-failures.
+The valid brokered-host campaign `wg20260714T010310Z` started at
+2026-07-14 01:03:10 UTC and passed all 36 cases with no failures or skips in
+558.520 seconds across 541 recorded commands. Its preflight passed all 107
+local source-contract checks on both Ubuntu 24.04 guests running kernel
+`6.8.0-124-generic`.
+
+The expanded cases completed live configuration round trips through `showconf`,
+`setconf`, and `syncconf`, plus `wg-quick` SaveConfig serialization, while
+keeping secret-bearing files guest-local and mode 0600. They also preserved
+scoped link-local IPv6 endpoint zones and carried tunnel traffic over link-local
+outer TCP connections. The
+isolated fault artifact produced per-guest deltas of `80/4/4/437` on
+`wgtcp-a` and `80/4/4/442` on `wgtcp-b` for short
+writes/prefixes/resynchronizations/queue drops, followed by successful traffic
+recovery after clearing the controls.
+
+The remaining validation boundary covers authenticated carrier promotion for
+responder-only NAT without a forward, deterministic stale-carrier retirement,
+arbitrary NAT/provider behavior, a cookie-equivalent TCP pre-authentication
+cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
+coverage, long-duration multi-flow soak testing, and wider kernel-version and
+distribution breadth.
+
+Focused hardening run `wg20260713T225629Z` used overlay SHA-256
+`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7` and
+passed the real `wg-quick` save/down/up reload plus the guest-owned one-shot
+hostile case: **2 PASS, 0 FAIL, 0 SKIP** in 134.149 seconds. Reuse-only artifact
+verification and all 103 source contracts then passed independently on both
+guests.
+
+Two immediately preceding runs are excluded from product evidence.
+`wg20260713T183821Z` completed 12 passing cases before a `wgtcp-a` collection
+client reached its 180-second host timeout. `wg20260713T184512Z` completed nine
+passing cases before the same failure pattern. Seven orphaned `multipass.exe`
+clients were verified and stopped by exact PID as described above, while the
+service and VMs remained running; exact ownership cleanup used `m13` and `m10`
+from the respective logged `prepare` commands. The next clean 32-case campaign
+passed, and the later expanded final run passed all 35 cases. These aborts were
+control-client infrastructure failures, not product regressions or partial
+release results.
+
+A much earlier sandboxed attempt, `wg20260712T200006Z`, could not reach TCP
+port 22 on either management address and no guest command succeeded; it was a
+0-of-26 infrastructure run, not regression evidence. Treat either pattern as
+a control-channel failure, recover the relevant client or Multipass/Default
+Switch layer, perform exact ownership cleanup when preparation occurred, and
+start a new run rather than interpreting the case list as product failures.
 
 ## 9. Recovery and cleanup boundaries
 

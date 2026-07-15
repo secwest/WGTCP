@@ -274,6 +274,42 @@ tcp-path)
 	' || die "no established TCP connection between $local_address and $remote_address on WireGuard port $port"
 	printf 'tcp_path=%s->%s\ntcp_port=%s\n' "$local_address" "$remote_address" "$port"
 	;;
+tcp-asymmetric-path)
+	(( $# == 4 )) || die "tcp-asymmetric-path LOCAL_ADDRESS REMOTE_ADDRESS LOCAL_LISTEN_PORT REMOTE_LISTEN_PORT"
+	local_address=$1 remote_address=$2 local_port=$3 remote_port=$4
+	valid_ipv4 "$local_address" && valid_ipv4 "$remote_address" || \
+		die "tcp-asymmetric-path requires IPv4 addresses"
+	for port in "$local_port" "$remote_port"; do
+		[[ $port =~ ^[0-9]+$ ]] && (( port > 0 && port <= 65535 )) || \
+			die "invalid WireGuard TCP port: $port"
+	done
+	tuple=$(ss -H -tn4 state established | awk \
+		-v local_address="$local_address" -v remote_address="$remote_address" \
+		-v local_port="$local_port" -v remote_port="$remote_port" '
+		{
+			local_endpoint = remote_endpoint = ""
+			for (i = 1; i <= NF; ++i) {
+				if (index($i, local_address ":") == 1)
+					local_endpoint = $i
+				if (index($i, remote_address ":") == 1)
+					remote_endpoint = $i
+			}
+			if (local_endpoint == "" || remote_endpoint == "")
+				next
+			observed_local = local_endpoint
+			observed_remote = remote_endpoint
+			sub(/^.*:/, "", observed_local)
+			sub(/^.*:/, "", observed_remote)
+			if (observed_local == local_port || observed_remote == remote_port) {
+				print local_endpoint "->" remote_endpoint
+				exit
+			}
+		}
+	')
+	[[ -n $tuple ]] || die "no established TCP connection uses either configured asymmetric listen port"
+	printf 'tcp_path=%s\nlocal_listen_port=%s\nremote_listen_port=%s\n' \
+		"$tuple" "$local_port" "$remote_port"
+	;;
 output-parity)
 	(( $# == 1 )) || die "output-parity IFACE"
 	iface=$1
@@ -479,6 +515,53 @@ udp-netns)
 	dir=$(new_auxiliary_state "$run_id" "$case_id")
 	WG_FORK=$WG_FORK WG_STOCK=$WG_STOCK WG_TEST_OWNERSHIP_DIR=$dir \
 		bash "$source_root/tests/udp-compat-netns.sh"
+	;;
+tcp-parity-netns)
+	(( $# == 3 || $# == 4 )) || die "tcp-parity-netns RUN CASE MODE [SOURCE_ROOT]"
+	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
+	[[ $mode == fwmark || $mode == route || $mode == source-uplink || \
+	   $mode == ipv6 || $mode == ipv6-link-local || \
+	   $mode == carrier-lifetime || $mode == config-roundtrip || \
+	   $mode == fault-injection ]] || \
+		die "invalid TCP parity mode: $mode"
+	[[ -f $source_root/tests/tcp-parity-netns.sh ]] || die "TCP parity netns test not found"
+	dir=$(new_auxiliary_state "$run_id" "$case_id")
+	if [[ $mode == fault-injection ]]; then
+		module_helper=$(dirname "$0")/guest-module.sh
+		restore_fault_module() {
+			local primary_status=$? restore_status=0
+
+			trap - EXIT HUP INT TERM
+			set +e
+			"$module_helper" fork >/dev/null
+			restore_status=$?
+			if (( restore_status != 0 )); then
+				printf 'guest-node: hostile-stream status=%d; production module restore status=%d\n' \
+					"$primary_status" "$restore_status" >&2
+			fi
+			if (( primary_status == 0 && restore_status == 0 )); then
+				printf 'restored_kernel_variant=fork\n'
+			fi
+			(( primary_status == 0 )) || exit "$primary_status"
+			exit "$restore_status"
+		}
+		trap restore_fault_module EXIT
+		trap 'exit 129' HUP
+		trap 'exit 130' INT
+		trap 'exit 143' TERM
+		"$module_helper" fork-fault >/dev/null
+	fi
+	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
+		bash "$source_root/tests/tcp-parity-netns.sh" "$mode"
+	;;
+tcp-nat-netns)
+	(( $# == 3 || $# == 4 )) || die "tcp-nat-netns RUN CASE MODE [SOURCE_ROOT]"
+	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
+	[[ $mode == dual-reachable ]] || die "invalid TCP NAT mode: $mode"
+	[[ -f $source_root/tests/tcp-nat-netns.sh ]] || die "TCP NAT netns test not found"
+	dir=$(new_auxiliary_state "$run_id" "$case_id")
+	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
+		bash "$source_root/tests/tcp-nat-netns.sh" "$mode"
 	;;
 cleanup)
 	(( $# == 3 )) || die "cleanup RUN CASE IFACE"

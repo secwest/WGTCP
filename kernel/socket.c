@@ -13,11 +13,13 @@
 
 #include <asm/byteorder.h> // For ntohl
 #include <linux/ctype.h>
+#include <linux/delay.h>
 #include <linux/if_vlan.h>
 #include <linux/if_ether.h>
 #include <linux/inetdevice.h>
 #include <linux/wireguard.h>
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
 #include <linux/skbuff.h>
 #include <linux/net.h>
 #include <linux/tcp.h>
@@ -28,6 +30,7 @@
 #include <linux/kthread.h>
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
+#include <linux/lockdep.h>
 #include <linux/socket.h>
 #include <linux/in6.h>
 #include <net/checksum.h>
@@ -44,6 +47,114 @@
 #include "wg_tcp_debug.h"
 
 
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+#define WG_TCP_TEST_MAX_GARBAGE_PREFIX 64
+#define WG_TCP_TEST_MAX_WRITE_DELAY_MS 1000
+
+static unsigned int wg_tcp_test_max_send_bytes;
+static unsigned int wg_tcp_test_garbage_prefix_bytes;
+static unsigned int wg_tcp_test_queue_limit;
+static unsigned int wg_tcp_test_write_delay_ms;
+static atomic64_t wg_tcp_test_short_writes = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_injected_prefixes = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_resyncs = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_queue_drops = ATOMIC64_INIT(0);
+
+module_param_named(tcp_test_max_send_bytes, wg_tcp_test_max_send_bytes,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_max_send_bytes,
+		 "DEBUG only: cap each TCP sendmsg request to force short writes");
+module_param_named(tcp_test_garbage_prefix_bytes,
+		   wg_tcp_test_garbage_prefix_bytes, uint, 0600);
+MODULE_PARM_DESC(tcp_test_garbage_prefix_bytes,
+		 "DEBUG only: prepend bounded garbage to each TCP record");
+module_param_named(tcp_test_queue_limit, wg_tcp_test_queue_limit, uint, 0600);
+MODULE_PARM_DESC(tcp_test_queue_limit,
+		 "DEBUG only: lower the per-peer TCP frame queue limit");
+module_param_named(tcp_test_write_delay_ms, wg_tcp_test_write_delay_ms,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_write_delay_ms,
+		 "DEBUG only: delay the next serial TCP writer to force queue pressure");
+
+static int wg_tcp_test_counter_get(char *buffer,
+				   const struct kernel_param *parameter)
+{
+	const atomic64_t *counter = parameter->arg;
+
+	return scnprintf(buffer, PAGE_SIZE, "%lld\n",
+			 (long long)atomic64_read(counter));
+}
+
+static const struct kernel_param_ops wg_tcp_test_counter_ops = {
+	.get = wg_tcp_test_counter_get,
+};
+
+module_param_cb(tcp_test_short_writes, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_short_writes, 0400);
+MODULE_PARM_DESC(tcp_test_short_writes,
+		 "DEBUG only: number of observed partial TCP writes");
+module_param_cb(tcp_test_injected_prefixes, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_injected_prefixes, 0400);
+MODULE_PARM_DESC(tcp_test_injected_prefixes,
+		 "DEBUG only: number of TCP records prefixed with test garbage");
+module_param_cb(tcp_test_resyncs, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_resyncs, 0400);
+MODULE_PARM_DESC(tcp_test_resyncs,
+		 "DEBUG only: number of successful TCP parser resynchronizations");
+module_param_cb(tcp_test_queue_drops, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_queue_drops, 0400);
+MODULE_PARM_DESC(tcp_test_queue_drops,
+		 "DEBUG only: number of frames rejected by TCP queue pressure");
+
+static size_t wg_tcp_test_send_len(size_t frame_len)
+{
+	unsigned int configured = READ_ONCE(wg_tcp_test_max_send_bytes);
+
+	return configured ? min_t(size_t, configured, frame_len) : frame_len;
+}
+
+static size_t wg_tcp_test_prefix_len(void)
+{
+	return min_t(size_t, READ_ONCE(wg_tcp_test_garbage_prefix_bytes),
+		     WG_TCP_TEST_MAX_GARBAGE_PREFIX);
+}
+
+static unsigned int wg_tcp_test_effective_queue_limit(void)
+{
+	unsigned int configured = READ_ONCE(wg_tcp_test_queue_limit);
+
+	return configured && configured < MAX_QUEUED_PACKETS ?
+		configured : MAX_QUEUED_PACKETS;
+}
+
+static unsigned int wg_tcp_test_take_write_delay_ms(void)
+{
+	return min_t(unsigned int, xchg(&wg_tcp_test_write_delay_ms, 0U),
+		     WG_TCP_TEST_MAX_WRITE_DELAY_MS);
+}
+#else
+static size_t wg_tcp_test_send_len(size_t frame_len)
+{
+	return frame_len;
+}
+
+static size_t wg_tcp_test_prefix_len(void)
+{
+	return 0;
+}
+
+static unsigned int wg_tcp_test_effective_queue_limit(void)
+{
+	return MAX_QUEUED_PACKETS;
+}
+
+static unsigned int wg_tcp_test_take_write_delay_ms(void)
+{
+	return 0;
+}
+#endif
+
+
 
 struct wg_tcp_socket_list_entry {
     struct socket *tcp_socket;        // Socket associated with the connection
@@ -52,29 +163,29 @@ struct wg_tcp_socket_list_entry {
     struct list_head tcp_connection_ll;  // List pointer for the linked list
     ktime_t created_at;               // Absolute pre-authentication deadline base
     ktime_t timestamp;                // Most recent pre-authentication activity
-    u64 stream_id;                    // Stable identity across async WG processing
-    bool initializing;                // Listener still owns the handoff sequence
-    bool authenticated;               // Exact stream carried a valid WG handshake
+	u64 connection_id;                // Stable carrier identity across async auth
+	bool authenticated;              // Exact stream carried valid Noise traffic
+	bool admission_counted;          // Owns one pre-authentication reservation
+    bool initializing;               // Listener still owns callback handoff
 };
 
 #define WG_TCP_MAX_PENDING_CONNECTIONS 128
+#define WG_TCP_MAX_TRACKED_CONNECTIONS 1024
 #define WG_TCP_AUTH_IDLE_TIMEOUT_MS 5000
 #define WG_TCP_AUTH_MAX_LIFETIME_MS 30000
-#define WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS 180000
 #define WG_TCP_CLEANUP_INTERVAL_MS 1000
+#define WG_TCP_MAX_PENDING_PER_SOURCE 8
+#define WG_TCP_ACCEPT_BURST 32
+#define WG_TCP_ACCEPT_WINDOW HZ
 
 struct wg_socket_data {
 	struct wg_device *device;
 	struct wg_peer *peer;
-	u64 stream_id;
 	bool inbound;
 };
 
-static atomic64_t wg_tcp_stream_id = ATOMIC64_INIT(0);
-
 static void wg_finish_tcp_connection_init(struct wg_device *wg,
 					  struct socket *socket);
-
 static void wg_destroy_temp_peer(struct wg_peer *peer);
 static void wg_touch_tcp_connection(struct wg_peer *peer);
 
@@ -351,6 +462,8 @@ void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
 void wg_get_endpoint_from_socket(struct socket *epsocket, struct endpoint *ep);
 void log_wireguard_endpoint(struct endpoint *ep);
 static __be16 wg_header_checksum(const struct wg_tcp_encap_header *hdr);
+static void wg_tcp_mark_connection_authenticated(struct wg_device *wg,
+						 u64 connection_id);
 
 // ******** DIAGNOSTIC CODE ********
 
@@ -1151,6 +1264,7 @@ static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
 	struct sk_buff *frame;
 	bool fragmented = PACKET_CB(payload)->frag_off != 0;
 	size_t header_len = WG_TCP_ENCAP_HDR_LEN;
+	size_t prefix_len = wg_tcp_test_prefix_len();
 	size_t total_len;
 
 	if (payload->len < MESSAGE_MINIMUM_LENGTH)
@@ -1167,10 +1281,20 @@ static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
 	total_len = header_len + payload->len;
 	encap_header.length = htonl(total_len);
 	encap_header.checksum = wg_header_checksum(&encap_header);
-	frame = alloc_skb(total_len, GFP_ATOMIC);
+	frame = alloc_skb(prefix_len + total_len, GFP_ATOMIC);
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
 
+	if (prefix_len) {
+		/* Any candidate beginning in this prefix has 0xa5 as the high byte
+		 * of its network-order length, so it cannot pass the bounded header
+		 * validator even when the candidate overlaps the real header.
+		 */
+		memset(skb_put(frame, prefix_len), 0xa5, prefix_len);
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+		atomic64_inc(&wg_tcp_test_injected_prefixes);
+#endif
+	}
 	skb_put_data(frame, &encap_header, WG_TCP_ENCAP_HDR_LEN);
 	if (fragmented)
 		skb_put_data(frame, &frag_header, WG_TCP_FRAG_HDR_LEN);
@@ -1187,14 +1311,12 @@ static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
  * removal flag, finish cancel_work_sync(), and release the socket before the
  * newly claimed work is visible to the workqueue.
  */
-static void wg_tcp_schedule_write(struct wg_peer *peer)
+static void wg_tcp_schedule_write_locked(struct wg_peer *peer)
 {
-	if (!peer || IS_ERR(peer))
-		return;
-
-	spin_lock_bh(&peer->tcp_lock);
+	lockdep_assert_held(&peer->tcp_lock);
 	spin_lock(&peer->tcp_write_lock);
-	if (!READ_ONCE(peer->is_dead) &&
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled && peer->peer_socket &&
 	    peer->tcp_established && peer->tcp_write_wq &&
@@ -1203,37 +1325,70 @@ static void wg_tcp_schedule_write(struct wg_peer *peer)
 		queue_work(peer->tcp_write_wq, &peer->tcp_write_work);
 	}
 	spin_unlock(&peer->tcp_write_lock);
+
+}
+
+static void wg_tcp_schedule_write(struct wg_peer *peer)
+{
+	if (!peer || IS_ERR(peer))
+		return;
+
+	spin_lock_bh(&peer->tcp_lock);
+	wg_tcp_schedule_write_locked(peer);
 	spin_unlock_bh(&peer->tcp_lock);
 }
 
 static int wg_tcp_enqueue_frame(struct wg_peer *peer, struct sk_buff *frame)
 {
+	unsigned int queue_limit = wg_tcp_test_effective_queue_limit();
 	int ret = 0;
 
-	spin_lock_bh(&peer->send_queue_lock);
+	/* The queue and writer claim share the peer lifetime lock. Once stop sets
+	 * tcp_stopping, no producer can append a frame or queue work after the
+	 * final cancellation pass.
+	 */
+	spin_lock_bh(&peer->tcp_lock);
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    !peer->peer_socket || !peer->tcp_established ||
+	    peer->tcp_outbound_remove_scheduled ||
+	    peer->tcp_inbound_remove_scheduled) {
+		ret = -ENOTCONN;
+		goto unlock_tcp;
+	}
+
+	spin_lock(&peer->send_queue_lock);
 	/* Preserve stream order. In particular, the head can contain the
 	 * unconsumed suffix of a frame whose prefix is already on the wire.
 	 */
-	if (skb_queue_len(&peer->send_queue) >= MAX_QUEUED_PACKETS)
+	if (skb_queue_len(&peer->send_queue) >= queue_limit) {
 		ret = -ENOBUFS;
-	else
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+		atomic64_inc(&wg_tcp_test_queue_drops);
+#endif
+	} else {
 		__skb_queue_tail(&peer->send_queue, frame);
-	spin_unlock_bh(&peer->send_queue_lock);
+	}
+	spin_unlock(&peer->send_queue_lock);
+	if (!ret)
+		wg_tcp_schedule_write_locked(peer);
+
+unlock_tcp:
+	spin_unlock_bh(&peer->tcp_lock);
 
 	if (ret) {
 		kfree_skb(frame);
 		return ret;
 	}
-	wg_tcp_schedule_write(peer);
 	return 0;
 }
 
 int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb, u8 ds)
 {
 	wg_dbg("Entering function wg_socket_send_skb_to_peer\n");
-	size_t skb_len = skb->len;
+	size_t skb_len;
 	int ret = -EAFNOSUPPORT;
-	bool queue_tcp_retry = false;
 	bool tcp_connected = false;
 
 	if (unlikely(!peer) || unlikely(IS_ERR(peer))){
@@ -1244,12 +1399,15 @@ int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb, u8 ds)
 		ret = -ENOMEM;
 		goto out;
 	}
+	skb_len = skb->len;
 	
 	print_peer_socket_info(peer);
 	
 	if (peer->device->transport == WG_TRANSPORT_TCP) {
 		spin_lock_bh(&peer->tcp_lock);
 		tcp_connected = !READ_ONCE(peer->is_dead) &&
+			!peer->tcp_stopping &&
+			READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 			peer->peer_socket && peer->tcp_established &&
 			!peer->tcp_outbound_remove_scheduled &&
 			!peer->tcp_inbound_remove_scheduled;
@@ -1264,18 +1422,16 @@ int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb, u8 ds)
 				ret = wg_tcp_enqueue_frame(peer, frame);
 		} else {
 			ret = -ENOTCONN;
-			if (READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
-			    peer->peer_endpoint_set) {
-				spin_lock_bh(&peer->tcp_lock);
-				if (!peer->tcp_retry_scheduled &&
-				    !peer->tcp_outbound_remove_scheduled) {
-					peer->tcp_retry_scheduled = true;
-					queue_tcp_retry = true;
-				}
-				spin_unlock_bh(&peer->tcp_lock);
-			}
-			if (queue_tcp_retry)
+			spin_lock_bh(&peer->tcp_lock);
+			if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+			    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
+			    peer->device->transport == WG_TRANSPORT_TCP &&
+			    peer->peer_endpoint_set && !peer->tcp_retry_scheduled &&
+			    !peer->tcp_outbound_remove_scheduled) {
+				peer->tcp_retry_scheduled = true;
 				mod_delayed_work(system_wq, &peer->tcp_retry_work, 0);
+			}
+			spin_unlock_bh(&peer->tcp_lock);
 			net_dbg_ratelimited("%s: TCP peer %llu is reconnecting\n",
 					    peer->device->dev->name,
 					    peer->internal_id);
@@ -1421,15 +1577,69 @@ bool endpoint_eq(const struct endpoint *a, const struct endpoint *b)
 	       unlikely(!a->addr.sa_family && !b->addr.sa_family);
 }
 
+static bool wg_tcp_dial_target_eq(const struct endpoint *a,
+				  const struct endpoint *b)
+{
+	if (a->addr.sa_family != b->addr.sa_family)
+		return false;
+	if (a->addr.sa_family == AF_INET)
+		return a->addr4.sin_port == b->addr4.sin_port &&
+		       a->addr4.sin_addr.s_addr == b->addr4.sin_addr.s_addr;
+#if IS_ENABLED(CONFIG_IPV6)
+	if (a->addr.sa_family == AF_INET6)
+		return a->addr6.sin6_port == b->addr6.sin6_port &&
+		       ipv6_addr_equal(&a->addr6.sin6_addr,
+				       &b->addr6.sin6_addr) &&
+		       a->addr6.sin6_scope_id == b->addr6.sin6_scope_id;
+#endif
+	return false;
+}
+
 static void wg_release_peer_tcp_connection(struct wg_peer *peer);
+
+static void wg_tcp_peer_request_reconnect_after(struct wg_peer *peer,
+						 unsigned long delay)
+{
+	bool queue_outbound_remove = false;
+
+	if (!peer || IS_ERR(peer) || !peer->device)
+		return;
+
+	/* This helper is callable from authenticated receive/NAPI context. Claim
+	 * and queue the process-context removal owner without shutting down the
+	 * socket inline. Queueing under tcp_lock closes the race with peer stop
+	 * setting its barrier and draining this work item.
+	 */
+	spin_lock_bh(&peer->tcp_lock);
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    !netif_running(peer->device->dev) || !peer->peer_endpoint_set) {
+		spin_unlock_bh(&peer->tcp_lock);
+		return;
+	}
+	peer->tcp_reconnect_requested = true;
+	if (!peer->tcp_connecting && !peer->tcp_outbound_remove_scheduled) {
+		peer->tcp_outbound_remove_scheduled = true;
+		peer->tcp_outbound_remove_socket = peer->outbound_socket;
+		queue_outbound_remove = true;
+	}
+	if (queue_outbound_remove)
+		mod_delayed_work(system_wq, &peer->tcp_outbound_remove_work,
+				 delay);
+	spin_unlock_bh(&peer->tcp_lock);
+}
+
+void wg_tcp_peer_request_reconnect(struct wg_peer *peer)
+{
+	wg_tcp_peer_request_reconnect_after(peer, 0);
+}
 
 static void wg_socket_set_peer_endpoint_internal(struct wg_peer *peer,
 						 const struct endpoint *endpoint,
 						 bool configured)
 {
 	bool tcp_target_changed = false;
-	bool queue_outbound_remove = false;
-	struct socket *outbound_socket = NULL;
 
 	wg_dbg("Entering function wg_socket_set_peer_endpoint peer=%px\n", peer);
 	if (unlikely(!peer) || unlikely(IS_ERR(peer))){
@@ -1476,6 +1686,10 @@ static void wg_socket_set_peer_endpoint_internal(struct wg_peer *peer,
 			tcp_target_changed = peer->peer_endpoint_set &&
 				!endpoint_eq(&peer->peer_endpoint, &peer->endpoint);
 			peer->peer_endpoint = peer->endpoint;
+			peer->tcp_peer_listen_port =
+				peer->endpoint.addr.sa_family == AF_INET ?
+				peer->endpoint.addr4.sin_port :
+				peer->endpoint.addr6.sin6_port;
 			peer->peer_endpoint_set = true;
 		}
 	}
@@ -1494,21 +1708,7 @@ static void wg_socket_set_peer_endpoint_internal(struct wg_peer *peer,
 	 * before it arms an immediate reconnect.
 	 */
 	if (tcp_target_changed) {
-		spin_lock_bh(&peer->tcp_lock);
-		peer->tcp_reconnect_requested = true;
-		if (!peer->tcp_outbound_remove_scheduled) {
-			peer->tcp_outbound_remove_scheduled = true;
-			queue_outbound_remove = true;
-			outbound_socket = peer->outbound_socket;
-		}
-		spin_unlock_bh(&peer->tcp_lock);
-
-		if (queue_outbound_remove) {
-			if (outbound_socket)
-				kernel_sock_shutdown(outbound_socket, SHUT_RDWR);
-			mod_delayed_work(system_wq,
-					 &peer->tcp_outbound_remove_work, 0);
-		}
+		wg_tcp_peer_request_reconnect(peer);
 	} else if (netif_running(peer->device->dev) &&
 		   !peer->tcp_established) {
 		wg_tcp_connect(peer);
@@ -1528,6 +1728,69 @@ void wg_socket_set_peer_endpoint_configured(struct wg_peer *peer,
 					    const struct endpoint *endpoint)
 {
 	wg_socket_set_peer_endpoint_internal(peer, endpoint, true);
+}
+
+void wg_socket_set_peer_endpoint_authenticated(struct wg_peer *peer,
+					       const struct endpoint *endpoint,
+					       u64 connection_id)
+{
+	struct endpoint target;
+	bool target_changed = false;
+
+	if (unlikely(!peer) || unlikely(IS_ERR(peer)) || unlikely(!endpoint))
+		return;
+
+	/* Keep the complete live tuple as observed state. For TCP, only the
+	 * authenticated remote address may refresh the future dial target: an
+	 * accepted socket's remote port is normally ephemeral and must never
+	 * replace the operator-configured peer listen port.
+	 */
+	wg_socket_set_peer_endpoint(peer, endpoint);
+	if (peer->device->transport != WG_TRANSPORT_TCP)
+		return;
+	wg_tcp_mark_connection_authenticated(peer->device, connection_id);
+
+	write_lock_bh(&peer->endpoint_lock);
+	/* Only authenticated accepted carriers have a nonzero, device-monotonic
+	 * ID. Advancing the generation even when the address is unchanged keeps
+	 * an older retained stream from reverting a later roaming observation.
+	 */
+	if (!peer->peer_endpoint_set || !connection_id ||
+	    connection_id <= peer->tcp_roaming_connection_id)
+		goto out;
+	target = *endpoint;
+	if (target.addr.sa_family == AF_INET) {
+		target.addr4.sin_port = peer->tcp_peer_listen_port;
+		target.src4.s_addr = 0;
+		target.src_if4 = 0;
+	} else if (IS_ENABLED(CONFIG_IPV6) &&
+		   target.addr.sa_family == AF_INET6) {
+		target.addr6.sin6_port = peer->tcp_peer_listen_port;
+		memset(&target.src6, 0, sizeof(target.src6));
+	} else {
+		goto out;
+	}
+	peer->tcp_roaming_connection_id = connection_id;
+	if (!wg_tcp_dial_target_eq(&peer->peer_endpoint, &target)) {
+		peer->peer_endpoint = target;
+		dst_cache_reset(&peer->endpoint_cache);
+		target_changed = true;
+	}
+out:
+	write_unlock_bh(&peer->endpoint_lock);
+	if (target_changed && !peer->temp_peer)
+		wg_tcp_peer_request_reconnect_after(peer,
+					msecs_to_jiffies(100));
+}
+
+void wg_socket_set_peer_endpoint_authenticated_from_skb(
+	struct wg_peer *peer, const struct sk_buff *skb)
+{
+	struct endpoint endpoint;
+
+	if (likely(!wg_socket_endpoint_from_skb(&endpoint, skb)))
+		wg_socket_set_peer_endpoint_authenticated(
+			peer, &endpoint, PACKET_CB(skb)->tcp_connection_id);
 }
 
 void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer,
@@ -1562,23 +1825,25 @@ static int wg_receive(struct sock *sk, struct sk_buff *skb)
 {
 	wg_dbg("Entering function wg_receive\n");
 	struct wg_device *wg;
-	u64 tcp_stream_id = 0;
+	struct wg_socket_data *socket_data = NULL;
 	
 	if (unlikely(!sk))
 		goto err;
 	if (sk->sk_protocol == IPPROTO_TCP) {
-		struct wg_socket_data *socket_data = READ_ONCE(sk->sk_user_data);
+		socket_data = READ_ONCE(sk->sk_user_data);
 
 		if (unlikely(!socket_data))
 			goto err;
 		wg = socket_data->device;
-		tcp_stream_id = READ_ONCE(socket_data->stream_id);
 	} else {
 		wg = READ_ONCE(sk->sk_user_data);
 	}
 	if (unlikely(!wg))
 		goto err;
-	PACKET_CB(skb)->tcp_stream_id = tcp_stream_id;
+	PACKET_CB(skb)->outer_ipproto = sk->sk_protocol;
+	PACKET_CB(skb)->tcp_connection_id =
+		socket_data && socket_data->peer && socket_data->peer->temp_peer ?
+			socket_data->peer->tcp_connection_id : 0;
 	skb_mark_not_on_list(skb);
 	wg_packet_receive(wg, skb);
 	wg_dbg("Exiting function wg_receive\n");
@@ -1757,6 +2022,32 @@ static bool wg_sockaddrs_match(const struct sockaddr *a,
 	return false;
 }
 
+static bool wg_sockaddrs_same_host(const struct sockaddr *a,
+				   const struct sockaddr *b)
+{
+	if (!a || !b || a->sa_family != b->sa_family)
+		return false;
+
+	if (a->sa_family == AF_INET) {
+		const struct sockaddr_in *a4 = (const struct sockaddr_in *)a;
+		const struct sockaddr_in *b4 = (const struct sockaddr_in *)b;
+
+		return a4->sin_addr.s_addr == b4->sin_addr.s_addr;
+	}
+#if IS_ENABLED(CONFIG_IPV6)
+	if (a->sa_family == AF_INET6) {
+		const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)a;
+		const struct sockaddr_in6 *b6 = (const struct sockaddr_in6 *)b;
+		const bool link_local =
+			ipv6_addr_type(&a6->sin6_addr) & IPV6_ADDR_LINKLOCAL;
+
+		return ipv6_addr_equal(&a6->sin6_addr, &b6->sin6_addr) &&
+		       (!link_local || a6->sin6_scope_id == b6->sin6_scope_id);
+	}
+#endif
+	return false;
+}
+
 static bool wg_sockaddr_length_valid(const struct sockaddr *addr, int length)
 {
 	if (!addr)
@@ -1774,6 +2065,189 @@ static bool wg_endpoints_match(const struct endpoint *a,
 			       const struct endpoint *b)
 {
 	return a && b && wg_sockaddrs_match(&a->addr, &b->addr);
+}
+
+static bool wg_tcp_accept_source_matches(
+	const struct wg_tcp_accept_source *source, const struct sockaddr *addr)
+{
+	if (!source || !addr || source->family != addr->sa_family)
+		return false;
+	if (addr->sa_family == AF_INET)
+		return source->address.addr4 ==
+		       ((const struct sockaddr_in *)addr)->sin_addr.s_addr;
+#if IS_ENABLED(CONFIG_IPV6)
+	if (addr->sa_family == AF_INET6) {
+		const struct sockaddr_in6 *addr6 =
+			(const struct sockaddr_in6 *)addr;
+		const bool link_local =
+			ipv6_addr_type(&addr6->sin6_addr) & IPV6_ADDR_LINKLOCAL;
+
+		return ipv6_addr_equal(&source->address.addr6,
+				       &addr6->sin6_addr) &&
+		       (!link_local || source->scope_id == addr6->sin6_scope_id);
+	}
+#endif
+	return false;
+}
+
+static void wg_tcp_accept_source_set(struct wg_tcp_accept_source *source,
+				     const struct sockaddr *addr,
+				     unsigned long now)
+{
+	memset(source, 0, sizeof(*source));
+	source->family = addr->sa_family;
+	if (addr->sa_family == AF_INET) {
+		source->address.addr4 =
+			((const struct sockaddr_in *)addr)->sin_addr.s_addr;
+#if IS_ENABLED(CONFIG_IPV6)
+	} else if (addr->sa_family == AF_INET6) {
+		const struct sockaddr_in6 *addr6 =
+			(const struct sockaddr_in6 *)addr;
+
+		source->address.addr6 = addr6->sin6_addr;
+		if (ipv6_addr_type(&addr6->sin6_addr) & IPV6_ADDR_LINKLOCAL)
+			source->scope_id = addr6->sin6_scope_id;
+#endif
+	}
+	source->window_started = now;
+	source->last_seen = now;
+	source->accepts = 1;
+}
+
+/* Bound rapid provisional-peer creation without allocating attacker-owned
+ * tracking state. The fixed table is deliberately lossy under a many-source
+ * flood; the device-wide pending cap remains the final backstop.
+ */
+static bool wg_tcp_accept_rate_allow(struct wg_device *wg,
+				     const struct sockaddr *addr)
+{
+	struct wg_tcp_accept_source *empty = NULL, *oldest = NULL, *source = NULL;
+	const unsigned long now = jiffies;
+	bool allowed = true;
+	unsigned int i;
+
+	if (!wg || !addr || (addr->sa_family != AF_INET &&
+			       addr->sa_family != AF_INET6))
+		return false;
+
+	spin_lock_bh(&wg->tcp_accept_lock);
+	for (i = 0; i < WG_TCP_ACCEPT_SOURCE_SLOTS; ++i) {
+		struct wg_tcp_accept_source *candidate =
+			&wg->tcp_accept_sources[i];
+
+		if (!candidate->family) {
+			if (!empty)
+				empty = candidate;
+			continue;
+		}
+		if (wg_tcp_accept_source_matches(candidate, addr)) {
+			source = candidate;
+			break;
+		}
+		if (!oldest || time_before(candidate->last_seen,
+					   oldest->last_seen))
+			oldest = candidate;
+	}
+
+	if (!source) {
+		source = empty ? empty : oldest;
+		wg_tcp_accept_source_set(source, addr, now);
+	} else if (time_after_eq(now, source->window_started +
+					 WG_TCP_ACCEPT_WINDOW)) {
+		wg_tcp_accept_source_set(source, addr, now);
+	} else if (source->accepts >= WG_TCP_ACCEPT_BURST) {
+		source->last_seen = now;
+		allowed = false;
+	} else {
+		++source->accepts;
+		source->last_seen = now;
+	}
+	spin_unlock_bh(&wg->tcp_accept_lock);
+	return allowed;
+}
+
+static unsigned int
+wg_tcp_pending_from_source_locked(struct wg_device *wg,
+				  const struct sockaddr *addr)
+{
+	struct wg_tcp_socket_list_entry *entry;
+	unsigned int count = 0;
+
+	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
+		if (entry->admission_counted &&
+		    wg_sockaddrs_same_host(
+			    addr, (const struct sockaddr *)&entry->src_addr))
+			++count;
+	}
+	return count;
+}
+
+static bool wg_tcp_source_at_capacity(struct wg_device *wg,
+				      const struct sockaddr *addr)
+{
+	bool at_capacity;
+
+	spin_lock_bh(&wg->tcp_connection_list_lock);
+	at_capacity = wg_tcp_pending_from_source_locked(wg, addr) >=
+		      WG_TCP_MAX_PENDING_PER_SOURCE;
+	spin_unlock_bh(&wg->tcp_connection_list_lock);
+	return at_capacity;
+}
+
+static void
+wg_tcp_release_admission_locked(struct wg_device *wg,
+				struct wg_tcp_socket_list_entry *entry)
+{
+	lockdep_assert_held(&wg->tcp_connection_list_lock);
+	if (!entry->admission_counted)
+		return;
+	entry->admission_counted = false;
+	if (WARN_ON_ONCE(!wg->tcp_pending_connections))
+		return;
+	--wg->tcp_pending_connections;
+}
+
+static void wg_tcp_mark_connection_authenticated(struct wg_device *wg,
+					 u64 connection_id)
+{
+	struct wg_tcp_socket_list_entry *entry;
+
+	if (!wg || !connection_id)
+		return;
+	spin_lock_bh(&wg->tcp_connection_list_lock);
+	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
+		if (entry->connection_id != connection_id)
+			continue;
+		entry->authenticated = true;
+		wg_tcp_release_admission_locked(wg, entry);
+		entry->timestamp = ktime_get();
+		break;
+	}
+	spin_unlock_bh(&wg->tcp_connection_list_lock);
+}
+
+void wg_tcp_set_device_mark(struct wg_device *wg, u32 mark)
+{
+	struct wg_tcp_socket_list_entry *entry;
+
+	if (!wg)
+		return;
+	if (wg->tcp_listen_socket4 && wg->tcp_listen_socket4->sk)
+		WRITE_ONCE(wg->tcp_listen_socket4->sk->sk_mark, mark);
+#if IS_ENABLED(CONFIG_IPV6)
+	if (wg->tcp_listen_socket6 && wg->tcp_listen_socket6->sk)
+		WRITE_ONCE(wg->tcp_listen_socket6->sk->sk_mark, mark);
+#endif
+
+	/* Accepted carriers stay device-owned until cleanup or promotion. The
+	 * list lock keeps each socket alive while its mark is refreshed.
+	 */
+	spin_lock_bh(&wg->tcp_connection_list_lock);
+	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
+		if (entry->tcp_socket && entry->tcp_socket->sk)
+			WRITE_ONCE(entry->tcp_socket->sk->sk_mark, mark);
+	}
+	spin_unlock_bh(&wg->tcp_connection_list_lock);
 }
 
 void wg_free_peer_socket_data(struct wg_peer *peer);
@@ -1842,9 +2316,6 @@ void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool
 	bool *callbacks_set_flag = inbound ? &peer->tcp_inbound_callbacks_set : &peer->tcp_outbound_callbacks_set;
 	bool *connected_flag = inbound ? &peer->inbound_connected : &peer->outbound_connected;
 	ktime_t *timestamp = inbound ? &peer->inbound_timestamp : &peer->outbound_timestamp;
-	struct delayed_work *remove_work = inbound ? &peer->tcp_inbound_remove_work : &peer->tcp_outbound_remove_work;
-	bool *remove_scheduled_flag = inbound ? &peer->tcp_inbound_remove_scheduled : &peer->tcp_outbound_remove_scheduled;
-
 	// Cleanup socket if necessary
 	if (*socket_to_clean) {
 		if (peer->peer_socket == *socket_to_clean)
@@ -1870,20 +2341,6 @@ void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool
 	*connected_flag = false;
 	*timestamp = 0;
 
-	// Cancel and clean up remove work if scheduled
-	if (*remove_scheduled_flag) {
-		*remove_scheduled_flag = false;
-		cancel_delayed_work(remove_work);
-	}
-
-	
-	// Check if a retry is scheduled and clean up
-	if (peer->tcp_retry_scheduled && !inbound) {
-		peer->tcp_retry_scheduled = false;
-		cancel_delayed_work(&peer->tcp_retry_work);
-	}
-
-
 out:
 	print_peer_socket_info(peer);
 	wg_dbg("Exiting wg_clean_peer_socket\n");
@@ -1898,13 +2355,33 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 		return;
 
 	spin_lock_bh(&peer->tcp_lock);
+	peer->tcp_stopping = true;
 	peer->tcp_reconnect_requested = false;
 	peer->tcp_outbound_remove_scheduled = true;
+	peer->tcp_outbound_remove_socket = peer->outbound_socket;
 	peer->tcp_inbound_remove_scheduled = true;
 	spin_unlock_bh(&peer->tcp_lock);
 
-	outbound = READ_ONCE(peer->outbound_socket);
-	inbound = READ_ONCE(peer->inbound_socket);
+	/* Removal workers own socket destruction. Drain them before reading a
+	 * socket pointer so stop cannot race sock_release() with a callback-lock
+	 * snapshot. The stop barrier above prevents any peer-owned work from
+	 * being queued after these cancellation passes.
+	 */
+	cancel_delayed_work_sync(&peer->tcp_retry_work);
+	cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);
+	cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);
+
+	/* A removal worker that was already running can publish its completion
+	 * while the cancellation waits. Reassert the stop claims before socket
+	 * snapshotting so callbacks still see a closed scheduling gate.
+	 */
+	spin_lock_bh(&peer->tcp_lock);
+	peer->tcp_outbound_remove_scheduled = true;
+	peer->tcp_outbound_remove_socket = peer->outbound_socket;
+	peer->tcp_inbound_remove_scheduled = true;
+	outbound = peer->outbound_socket;
+	inbound = peer->inbound_socket;
+	spin_unlock_bh(&peer->tcp_lock);
 	outbound_sk = outbound ? outbound->sk : NULL;
 	inbound_sk = inbound ? inbound->sk : NULL;
 	if (outbound_sk) {
@@ -1916,14 +2393,21 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 		write_unlock_bh(&inbound_sk->sk_callback_lock);
 	}
 
-	cancel_delayed_work_sync(&peer->tcp_retry_work);
-	cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);
-	cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);
 	cancel_work_sync(&peer->tcp_read_work);
 	cancel_work_sync(&peer->tcp_write_work);
+	spin_lock_bh(&peer->tcp_lock);
 	peer->tcp_retry_scheduled = false;
+	spin_lock(&peer->tcp_read_lock);
 	peer->tcp_read_worker_scheduled = false;
+	spin_unlock(&peer->tcp_read_lock);
+	spin_lock(&peer->tcp_write_lock);
 	peer->tcp_write_worker_scheduled = false;
+	spin_unlock(&peer->tcp_write_lock);
+	spin_unlock_bh(&peer->tcp_lock);
+
+	spin_lock_bh(&peer->send_queue_lock);
+	__skb_queue_purge(&peer->send_queue);
+	spin_unlock_bh(&peer->send_queue_lock);
 
 	wg_reset_tcp_socket_callbacks(peer, false);
 	wg_reset_tcp_socket_callbacks(peer, true);
@@ -1933,9 +2417,12 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 	spin_lock_bh(&peer->tcp_lock);
 	peer->tcp_established = false;
 	peer->tcp_pending = false;
+	peer->tcp_connecting = false;
+	peer->tcp_reconnect_requested = false;
 	peer->inbound_connected = false;
 	peer->outbound_connected = false;
 	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_outbound_remove_socket = NULL;
 	peer->tcp_inbound_remove_scheduled = false;
 	spin_unlock_bh(&peer->tcp_lock);
 }
@@ -1951,97 +2438,33 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg,
 
 
 /* FIX: -Wmissing-prototypes — made static (file-local only) */
-static int copy_sock_addresses(struct socket *tcp_socket, struct sockaddr_storage *inbound_source, struct sockaddr_storage *inbound_dest) {
-    struct sock *sk;
-    struct inet_sock *inet;
-    int family;
+static int copy_sock_addresses(struct socket *tcp_socket,
+			       struct sockaddr_storage *inbound_source,
+			       struct sockaddr_storage *inbound_dest)
+{
+	int local_len, remote_len;
 
-    // Check if the socket is valid
-    if (!tcp_socket || !tcp_socket->sk) {
-        wg_dbg("Invalid TCP socket or socket's sk structure.\n");
-        return -1; // Invalid socket
-    }
+	if (!tcp_socket || !tcp_socket->sk || !inbound_source || !inbound_dest)
+		return -EINVAL;
 
-    sk = tcp_socket->sk; // Retrieve the socket's 'sock' structure
-    inet = inet_sk(sk);  /* BUG FIX: initialize inet here so IPv6 path doesn't use uninitialized value */
-    family = sk->sk_family;
+	memset(inbound_source, 0, sizeof(*inbound_source));
+	memset(inbound_dest, 0, sizeof(*inbound_dest));
+	local_len = kernel_getsockname(tcp_socket,
+				       (struct sockaddr *)inbound_source);
+	if (local_len < 0 ||
+	    !wg_sockaddr_length_valid((struct sockaddr *)inbound_source,
+					      local_len))
+		return local_len < 0 ? local_len : -EINVAL;
+	remote_len = kernel_getpeername(tcp_socket,
+					 (struct sockaddr *)inbound_dest);
+	if (remote_len < 0 ||
+	    !wg_sockaddr_length_valid((struct sockaddr *)inbound_dest,
+					      remote_len))
+		return remote_len < 0 ? remote_len : -EINVAL;
+	if (inbound_source->ss_family != inbound_dest->ss_family)
+		return -EAFNOSUPPORT;
 
-    if (family == AF_INET) {
-        /* BUG FIX: removed shadowing inner 'inet' declaration —
-         * inet is now initialized at function scope above */
-
-        // Validate inet_sk
-        if (!inet) {
-            printk(KERN_ERR "inet_sk is NULL for IPv4 socket\n");
-            return -1;
-        }
-
-        // Clear the sockaddr_storage structures
-        memset(inbound_source, 0, sizeof(struct sockaddr_storage));
-        memset(inbound_dest, 0, sizeof(struct sockaddr_storage));
-
-        // Cast to sockaddr_in for IPv4
-        struct sockaddr_in *source_in = (struct sockaddr_in *)inbound_source;
-        struct sockaddr_in *dest_in = (struct sockaddr_in *)inbound_dest;
-
-        // Set the address family to AF_INET
-        source_in->sin_family = AF_INET;
-        dest_in->sin_family = AF_INET;
-
-        // Populate the source and destination information
-        source_in->sin_addr.s_addr = inet->inet_rcv_saddr; // Local IP address
-        source_in->sin_port = inet->inet_sport;            // Local port (already in network byte order)
-        dest_in->sin_addr.s_addr = inet->inet_daddr;       // Remote IP address
-        dest_in->sin_port = inet->inet_dport;              // Remote port (already in network byte order)
-
-        // Diagnostic printouts
-        wg_dbg("IPv4 Source IP: %pI4, Source Port: %u\n", &source_in->sin_addr, ntohs(source_in->sin_port));
-        wg_dbg("IPv4 Destination IP: %pI4, Destination Port: %u\n", &dest_in->sin_addr, ntohs(dest_in->sin_port));
-        wg_dbg("Hexdump of IP and UDP headers: %*ph\n", (int)sizeof(struct sockaddr_in), (void *)source_in);
-
-    } 
-#if IS_ENABLED(CONFIG_IPV6)
-    else if (family == AF_INET6) {
-        struct ipv6_pinfo *np = inet6_sk(sk);
-
-        // Validate ipv6_pinfo
-        if (!np) {
-            printk(KERN_ERR "ipv6_pinfo is NULL for IPv6 socket\n");
-            return -1;
-        }
-
-        // Clear the sockaddr_storage structures
-        memset(inbound_source, 0, sizeof(struct sockaddr_storage));
-        memset(inbound_dest, 0, sizeof(struct sockaddr_storage));
-
-        // Cast to sockaddr_in6 for IPv6
-        struct sockaddr_in6 *source_in6 = (struct sockaddr_in6 *)inbound_source;
-        struct sockaddr_in6 *dest_in6 = (struct sockaddr_in6 *)inbound_dest;
-
-        // Set the address family to AF_INET6
-        source_in6->sin6_family = AF_INET6;
-        dest_in6->sin6_family = AF_INET6;
-
-        // Populate the source and destination information
-        source_in6->sin6_addr = sk->sk_v6_rcv_saddr;       // Local IPv6 address
-        source_in6->sin6_port = inet->inet_sport;          // Local port (already in network byte order)
-        dest_in6->sin6_addr = sk->sk_v6_daddr;             // Remote IPv6 address
-        dest_in6->sin6_port = inet->inet_dport;            // Remote port (already in network byte order)
-        source_in6->sin6_scope_id = ipv6_iface_scope_id(&sk->sk_v6_rcv_saddr, sk->sk_bound_dev_if);
-
-        // Diagnostic printouts
-        wg_dbg("IPv6 Source IP: %pI6c, Source Port: %u\n", &source_in6->sin6_addr, ntohs(source_in6->sin6_port));
-        wg_dbg("IPv6 Destination IP: %pI6c, Destination Port: %u\n", &dest_in6->sin6_addr, ntohs(dest_in6->sin6_port));
-        wg_dbg("Hexdump of IP and UDP headers: %*ph\n", (int)sizeof(struct sockaddr_in6), (void *)source_in6);
-
-    }
-#endif
-    else {
-        printk(KERN_ERR "Unsupported address family: %d\n", family);
-        return -1; // Unsupported address family
-    }
-
-    return 0; // Success
+	return 0;
 }
 
 /* FIX: -Wmissing-prototypes — made static (file-local only) */
@@ -2108,6 +2531,7 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 			continue;
 		}
 		wg_dbg("wg_tcp_listener_worker accepted socket: %px new_peer_connection: %px\n", tcp_socket, &new_peer_connection);
+		WRITE_ONCE(new_peer_connection->sk->sk_mark, wg->fwmark);
 
 		/* FIX #4: Disable Nagle's algorithm on accepted socket to avoid
 		 * ~200ms delayed ACK interaction that caused 1000ms RTT */
@@ -2131,6 +2555,16 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 		if (err < 0 ||
 		    !wg_sockaddr_length_valid(&new_endpoint.addr, err)) {
 			pr_err("Could not read accepted TCP peer address: %d\n", err);
+			kernel_sock_shutdown(new_peer_connection, SHUT_RDWR);
+			sock_release(new_peer_connection);
+			new_peer_connection = NULL;
+			continue;
+		}
+		if (!wg_tcp_accept_rate_allow(wg, &new_endpoint.addr) ||
+		    wg_tcp_source_at_capacity(wg, &new_endpoint.addr)) {
+			pr_debug_ratelimited(
+				"%s: throttling unauthenticated TCP source %pISpc\n",
+				wg->dev->name, &new_endpoint.addr);
 			kernel_sock_shutdown(new_peer_connection, SHUT_RDWR);
 			sock_release(new_peer_connection);
 			new_peer_connection = NULL;
@@ -2246,21 +2680,10 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 				copy_sock_addresses(new_peer_connection, &new_temp_peer->inbound_source, &new_temp_peer->inbound_dest);
 				wg_dbg("new_temp_peer Peer endpoint:");
 				log_wireguard_endpoint(&new_temp_peer->endpoint);
-				new_temp_peer->peer_endpoint = new_temp_peer->endpoint;
-				new_temp_peer->peer_endpoint_set = true;
-				// Set the port to incoming port
-				if (new_temp_peer->peer_endpoint.addr.sa_family == AF_INET) {
-        			// IPv4 address
-        				new_temp_peer->peer_endpoint.addr4.sin_port = htons(new_temp_peer->device->incoming_port);
-    				} else if (new_temp_peer->peer_endpoint.addr.sa_family == AF_INET6) {
-        			// IPv6 address
-        				new_temp_peer->peer_endpoint.addr6.sin6_port = htons(new_temp_peer->device->incoming_port);
-    				} else {
-        				// Unsupported address family, handle error if necessary
-        				printk(KERN_WARNING "Unsupported address family in WireGuard peer endpoint.\n");
-    				}
-				wg_dbg("new_temp_peer Peer endpoint:");
-				log_wireguard_endpoint(&new_temp_peer->endpoint);
+				/* This socket's remote port is an observed ephemeral source
+				 * port. A provisional peer has no authenticated dial target.
+				 */
+				new_temp_peer->peer_endpoint_set = false;
 				
 				if (wg_add_tcp_socket_to_list(wg, new_peer_connection,
 							      new_temp_peer)) {
@@ -2397,6 +2820,7 @@ int wg_setup_tcp_listen4(struct wg_device *wg, struct net *net, u16 port,
 		pr_err("%s: Could not create IPv4 TCP socket, error: %d\n", wg->dev->name, ret);
 		return ret;
 	}
+	WRITE_ONCE(socket->sk->sk_mark, wg->fwmark);
 	wg_dbg("IPv4 socket created successfully\n");
 
 	// Set socket options to reuse port
@@ -2452,6 +2876,7 @@ int wg_setup_tcp_listen6(struct wg_device *wg, struct net *net, u16 port,
 		pr_err("%s: Could not create IPv6 TCP socket, error: %d\n", wg->dev->name, ret);
 		return ret;
 	}
+	WRITE_ONCE(socket->sk->sk_mark, wg->fwmark);
 	wg_dbg("IPv6 socket created successfully\n");
 
 	/* Keep the IPv4 and IPv6 wildcard listeners independent. */
@@ -2608,6 +3033,7 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 {
 	struct wg_socket_data *socket_data = NULL;
 	struct sock *sk = socket ? socket->sk : NULL;
+	bool queue_reconnect = false;
 	bool owns_socket = false;
 
 	/* A connect callback can publish ESTABLISHED before kernel_connect()
@@ -2618,6 +3044,7 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	if (socket && (peer->peer_socket == socket ||
 		       peer->outbound_socket == socket)) {
 		peer->tcp_outbound_remove_scheduled = true;
+		peer->tcp_outbound_remove_socket = socket;
 		owns_socket = true;
 	}
 	spin_unlock_bh(&peer->tcp_lock);
@@ -2653,8 +3080,15 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	peer->tcp_established = false;
 	peer->outbound_connected = false;
 	peer->tcp_outbound_callbacks_set = false;
-	peer->tcp_outbound_remove_scheduled = false;
-	peer->tcp_reconnect_requested = false;
+	peer->tcp_outbound_remove_socket = NULL;
+	if (peer->tcp_reconnect_requested && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
+	    peer->device->transport == WG_TRANSPORT_TCP) {
+		peer->tcp_outbound_remove_scheduled = true;
+		queue_reconnect = true;
+	} else if (!peer->tcp_stopping) {
+		peer->tcp_outbound_remove_scheduled = false;
+	}
 	peer->clean_outbound = false;
 	peer->outbound_timestamp = ktime_set(0, 0);
 	peer->original_outbound_state_change = NULL;
@@ -2667,6 +3101,18 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	kfree(socket_data);
 	if (socket)
 		sock_release(socket);
+	if (queue_reconnect) {
+		/* The socket is gone before replacement work can run. Recheck the
+		 * stop barrier under the ownership lock so peer_stop cannot drain the
+		 * work item and then lose a late queue.
+		 */
+		spin_lock_bh(&peer->tcp_lock);
+		if (!peer->tcp_stopping && peer->tcp_reconnect_requested &&
+		    peer->tcp_outbound_remove_scheduled)
+			mod_delayed_work(system_wq,
+					 &peer->tcp_outbound_remove_work, 0);
+		spin_unlock_bh(&peer->tcp_lock);
+	}
 }
 
 // Attempt to establish a TCP connection
@@ -2675,10 +3121,13 @@ int wg_tcp_connect(struct wg_peer *peer)
 	struct wg_socket_data *socket_data;
 	struct socket *socket = NULL;
 	struct net *net;
+	struct endpoint target;
 	struct sockaddr_storage addr_storage;
 	struct sockaddr *addr = (struct sockaddr *)&addr_storage;
 	unsigned long timeout = 30 * HZ;
+	bool queue_remove = false;
 	bool queue_retry = false;
+	int family;
 	int ret;
 
 	if (!peer || IS_ERR(peer) || !peer->device)
@@ -2687,31 +3136,42 @@ int wg_tcp_connect(struct wg_peer *peer)
 	wg_dbg("Entering function wg_tcp_connect peer=%px\n", peer);
 	print_peer_socket_info(peer);
 
-	// Print initial diagnostics
-	wg_dbg("(Device) Peer transport: %d, TCP established: %d\n", peer->device->transport, peer->tcp_established);
-	wg_dbg("Peer endpoint address family: %d\n", peer->endpoint.addr.sa_family);
-	wg_dbg("Endpoint ");
-	log_wireguard_endpoint(&peer->endpoint);
-	wg_dbg("Peer Endpoint");
-	log_wireguard_endpoint(&peer->peer_endpoint);
-
-	// Check if endpoint is properly set before attempting to connect
-	if (peer->peer_endpoint.addr.sa_family != AF_INET &&
-	    peer->peer_endpoint.addr.sa_family != AF_INET6) {
-		printk(KERN_ERR "Invalid address family for connection: %d\n",
-		       peer->peer_endpoint.addr.sa_family);
-		return -EAFNOSUPPORT;
-	}
 	if (peer->device->transport != WG_TRANSPORT_TCP) {
 		pr_err("Invalid state for TCP connection attempt.\n");
 		return -EINVAL;
+	}
+
+	/* One connect attempt must use one coherent target even if an
+	 * authenticated packet or netlink update changes the next retry target.
+	 */
+	read_lock_bh(&peer->endpoint_lock);
+	if (peer->peer_endpoint_set)
+		target = peer->peer_endpoint;
+	else
+		memset(&target, 0, sizeof(target));
+	read_unlock_bh(&peer->endpoint_lock);
+	family = target.addr.sa_family;
+
+	wg_dbg("(Device) Peer transport: %d, TCP established: %d\n",
+	       peer->device->transport, peer->tcp_established);
+	wg_dbg("Peer endpoint address family: %d\n", family);
+	log_wireguard_endpoint(&target);
+
+	if (family != AF_INET && family != AF_INET6) {
+		printk(KERN_ERR "Invalid address family for connection: %d\n",
+		       family);
+		return -EAFNOSUPPORT;
 	}
 
 	/* tcp_pending is also the connect-attempt ownership claim. It prevents
 	 * retry, send, and endpoint-update paths from publishing a second socket.
 	 */
 	spin_lock_bh(&peer->tcp_lock);
-	if (peer->tcp_established || peer->tcp_pending ||
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    !netif_running(peer->device->dev) || peer->tcp_established ||
+	    peer->tcp_pending ||
 	    peer->inbound_connected || peer->outbound_connected ||
 	    peer->tcp_outbound_remove_scheduled) {
 		spin_unlock_bh(&peer->tcp_lock);
@@ -2729,39 +3189,29 @@ int wg_tcp_connect(struct wg_peer *peer)
 	peer->outbound_timestamp = ktime_set(0, 0);
 	spin_unlock_bh(&peer->tcp_lock);
 
-	// Ensure wg_tcp_listener_socket_init is called
-	if (!peer->device->tcp_socket4_ready && !peer->device->tcp_socket6_ready) {
-		ret = wg_tcp_listener_socket_init(peer->device,
-					  peer->device->incoming_port);
-		if (ret < 0) {
-			printk(KERN_ERR "Failed to initialize TCP sockets, exiting wg_tcp_connect\n");
-			goto fail;
-		}
-	}
-
 	memset(&addr_storage, 0, sizeof(addr_storage));
 
-	if (peer->peer_endpoint.addr.sa_family == AF_INET) {
+	if (family == AF_INET) {
 		struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr_storage;
 		addr4->sin_family = AF_INET;
-		addr4->sin_port = peer->peer_endpoint.addr4.sin_port; // Use correct port from endpoint
-		addr4->sin_addr.s_addr = peer->peer_endpoint.addr4.sin_addr.s_addr;
+		addr4->sin_port = target.addr4.sin_port;
+		addr4->sin_addr.s_addr = target.addr4.sin_addr.s_addr;
 		addr = (struct sockaddr *)addr4;
 		wg_dbg("Setting up IPv4 connection to %pI4:%d\n", &addr4->sin_addr, ntohs(addr4->sin_port));
 	}
 #ifdef CONFIG_IPV6
-	else if (peer->peer_endpoint.addr.sa_family == AF_INET6) {
+	else if (family == AF_INET6) {
 		struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr_storage;
 		addr6->sin6_family = AF_INET6;
-		addr6->sin6_port = peer->peer_endpoint.addr6.sin6_port; // Use correct port from endpoint
-		memcpy(&addr6->sin6_addr, &peer->peer_endpoint.addr6.sin6_addr, sizeof(peer->peer_endpoint.addr6.sin6_addr));
+		addr6->sin6_port = target.addr6.sin6_port;
+		addr6->sin6_addr = target.addr6.sin6_addr;
+		addr6->sin6_scope_id = target.addr6.sin6_scope_id;
 		addr = (struct sockaddr *)addr6;
 		wg_dbg("Setting up IPv6 connection to [%pI6c]:%d\n", &addr6->sin6_addr, ntohs(addr6->sin6_port));
     	}
 #endif
 	else {
-		pr_err("Unsupported address family: %d\n",
-		       peer->peer_endpoint.addr.sa_family);
+		pr_err("Unsupported address family: %d\n", family);
 		wg_dbg("Exiting function wg_tcp_connect\n");
 		ret = -EAFNOSUPPORT;
 		goto fail;
@@ -2780,18 +3230,27 @@ int wg_tcp_connect(struct wg_peer *peer)
 	}
 
 	// Create the socket
-	wg_dbg("Creating socket for address family: %d\n", peer->endpoint.addr.sa_family);
-	ret = sock_create_kern(net, peer->peer_endpoint.addr.sa_family,
+	wg_dbg("Creating socket for address family: %d\n", family);
+	ret = sock_create_kern(net, family,
 			       SOCK_STREAM, IPPROTO_TCP, &socket);
 	put_net(net);
 	if (ret) {
 		pr_err("Failed to create TCP socket for address family %d: %d\n",
-		       peer->peer_endpoint.addr.sa_family, ret);
+		       family, ret);
 		wg_dbg("Exiting function wg_tcp_connect\n");
 		goto fail;
 	}
 	WRITE_ONCE(socket->sk->sk_mark, peer->device->fwmark);
 	spin_lock_bh(&peer->tcp_lock);
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    !netif_running(peer->device->dev) || !peer->tcp_connecting ||
+	    !peer->tcp_pending || peer->peer_socket || peer->outbound_socket) {
+		spin_unlock_bh(&peer->tcp_lock);
+		ret = -ESHUTDOWN;
+		goto fail;
+	}
 	peer->peer_socket = socket;
 	peer->outbound_socket = socket;
 	spin_unlock_bh(&peer->tcp_lock);
@@ -2847,26 +3306,76 @@ int wg_tcp_connect(struct wg_peer *peer)
 		goto fail;
 	}
 
+	/* kernel_connect() selects the route, local address, and ephemeral source
+	 * port. Cache the tuple only after that selection; the pre-connect socket
+	 * fields are commonly still zero.
+	 */
+	{
+		struct inet_sock *inet = inet_sk(socket->sk);
+
+		memset(&peer->outbound_source, 0,
+		       sizeof(peer->outbound_source));
+		memset(&peer->outbound_dest, 0, sizeof(peer->outbound_dest));
+		if (family == AF_INET) {
+			struct sockaddr_in *source =
+				(struct sockaddr_in *)&peer->outbound_source;
+			struct sockaddr_in *dest =
+				(struct sockaddr_in *)&peer->outbound_dest;
+
+			source->sin_family = AF_INET;
+			source->sin_port = inet->inet_sport;
+			source->sin_addr.s_addr = inet->inet_saddr;
+			dest->sin_family = AF_INET;
+			dest->sin_port = inet->inet_dport;
+			dest->sin_addr.s_addr = inet->inet_daddr;
+#ifdef CONFIG_IPV6
+		} else if (family == AF_INET6) {
+			struct sockaddr_in6 *source6 =
+				(struct sockaddr_in6 *)&peer->outbound_source;
+			struct sockaddr_in6 *dest6 =
+				(struct sockaddr_in6 *)&peer->outbound_dest;
+
+			source6->sin6_family = AF_INET6;
+			source6->sin6_port = inet->inet_sport;
+			source6->sin6_addr = inet6_sk(socket->sk)->saddr;
+			dest6->sin6_family = AF_INET6;
+			dest6->sin6_port = inet->inet_dport;
+			dest6->sin6_addr = socket->sk->sk_v6_daddr;
+			dest6->sin6_scope_id = target.addr6.sin6_scope_id;
+#endif
+		}
+	}
+
 	wg_dbg("TCP connection attempt initiated\n");
 	spin_lock_bh(&peer->tcp_lock);
-	if (peer->peer_socket != socket || peer->outbound_socket != socket ||
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    !netif_running(peer->device->dev) ||
+	    peer->peer_socket != socket || peer->outbound_socket != socket ||
 	    READ_ONCE(socket->sk->sk_state) == TCP_CLOSE) {
 		spin_unlock_bh(&peer->tcp_lock);
 		ret = -ECONNABORTED;
 		goto fail;
 	}
 	peer->tcp_connecting = false;
-	if (peer->tcp_pending && !peer->tcp_retry_scheduled) {
+	if (peer->tcp_reconnect_requested && !peer->tcp_stopping &&
+	    !peer->tcp_outbound_remove_scheduled) {
+		peer->tcp_outbound_remove_scheduled = true;
+		peer->tcp_outbound_remove_socket = socket;
+		queue_remove = true;
+	} else if (peer->tcp_pending && !peer->tcp_retry_scheduled) {
 		peer->tcp_retry_scheduled = true;
 		queue_retry = true;
 	}
-	spin_unlock_bh(&peer->tcp_lock);
-
+	if (queue_remove)
+		mod_delayed_work(system_wq, &peer->tcp_outbound_remove_work, 0);
 	if (queue_retry) {
 		wg_dbg("Scheduling TCP retry work.\n");
 		mod_delayed_work(system_wq, &peer->tcp_retry_work,
 				 msecs_to_jiffies(10000));
 	}
+	spin_unlock_bh(&peer->tcp_lock);
 
 	wg_dbg("Exiting function wg_tcp_connect\n");
 	return 0;
@@ -3099,8 +3608,7 @@ void wg_tcp_state_change(struct sock *sk)
         			peer->tcp_established = true;
 				peer->outbound_connected = true;
 				peer->outbound_timestamp = ktime_get();
-				peer->tcp_outbound_remove_scheduled = false;
-    				if (peer->tcp_retry_scheduled) {
+				if (peer->tcp_retry_scheduled) {
        		 			peer->tcp_retry_scheduled = false;
 					cancel_retry = true;
 				}
@@ -3153,6 +3661,8 @@ void wg_tcp_state_change(struct sock *sk)
 				peer->tcp_reconnect_requested = true;
 				if (!peer->tcp_outbound_remove_scheduled) {
 					peer->tcp_outbound_remove_scheduled = true;
+					peer->tcp_outbound_remove_socket =
+						peer->outbound_socket;
 					queue_outbound_remove = true;
 				}
 			}
@@ -3176,10 +3686,31 @@ out:
 				peer->original_outbound_state_change(sk);
 		}
 	}
-	if (queue_inbound_remove)
-		mod_delayed_work(system_wq, &peer->tcp_inbound_remove_work, 0);
-	if (queue_outbound_remove)
-		mod_delayed_work(system_wq, &peer->tcp_outbound_remove_work, 0);
+	if (peer && (queue_inbound_remove || queue_outbound_remove)) {
+		/* The original callback can overlap device or peer stop. Recheck the
+		 * barrier and publish work while holding tcp_lock so a completed
+		 * cancel_delayed_work_sync() cannot be followed by a late queue.
+		 */
+		spin_lock_bh(&peer->tcp_lock);
+		if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+		    READ_ONCE(peer->device->tcp_cleanup_scheduled)) {
+			if (queue_inbound_remove &&
+			    peer->tcp_inbound_remove_scheduled &&
+			    peer->inbound_socket &&
+			    peer->inbound_socket->sk == sk)
+				mod_delayed_work(system_wq,
+						 &peer->tcp_inbound_remove_work, 0);
+			if (queue_outbound_remove &&
+			    peer->tcp_outbound_remove_scheduled &&
+			    peer->tcp_outbound_remove_socket ==
+				    peer->outbound_socket &&
+			    peer->outbound_socket &&
+			    peer->outbound_socket->sk == sk)
+				mod_delayed_work(system_wq,
+						 &peer->tcp_outbound_remove_work, 0);
+		}
+		spin_unlock_bh(&peer->tcp_lock);
+	}
 	if (cleanup_temp && READ_ONCE(cleanup_device->tcp_cleanup_scheduled))
 		mod_delayed_work(system_wq, &cleanup_device->tcp_cleanup_work, 0);
 	wg_dbg("Exiting function wg_tcp_state_change\n");
@@ -3456,17 +3987,22 @@ static bool wg_validate_header_checksum(const struct wg_tcp_encap_header *hdr)
 
 static int wg_tcp_send_frame(struct socket *sock, const struct sk_buff *frame)
 {
+	size_t send_len = wg_tcp_test_send_len(frame->len);
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL };
 	struct kvec vec = {
 		.iov_base = (void *)frame->data,
-		.iov_len = frame->len
+		.iov_len = send_len
 	};
 	int sent;
 
 #if WG_TCP_DIAG_ENABLED
 	wg_tcp_diag_dump_sock(sock->sk, "tx:frame:pre", 0, frame->len);
 #endif
-	sent = kernel_sendmsg(sock, &msg, &vec, 1, frame->len);
+	sent = kernel_sendmsg(sock, &msg, &vec, 1, send_len);
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+	if (sent > 0 && (unsigned int)sent < frame->len)
+		atomic64_inc(&wg_tcp_test_short_writes);
+#endif
 #if WG_TCP_DIAG_ENABLED
 	wg_tcp_diag_dump_sock(sock->sk, "tx:frame:post", sent, frame->len);
 	if (sent > 0)
@@ -3495,6 +4031,7 @@ void wg_tcp_write_worker(struct work_struct *work)
 	struct socket *socket = NULL;
 	struct sock *sk = NULL;
     	struct sk_buff *skb;
+	unsigned int write_delay_ms;
     	int sent;
 
 	wg_dbg("Entering function wg_tcp_write_worker\n");
@@ -3508,7 +4045,8 @@ void wg_tcp_write_worker(struct work_struct *work)
 	 * alive until this worker returns.
 	 */
 	spin_lock_bh(&peer->tcp_lock);
-	if (!READ_ONCE(peer->is_dead) &&
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled && peer->peer_socket &&
 	    peer->tcp_established) {
@@ -3525,6 +4063,26 @@ void wg_tcp_write_worker(struct work_struct *work)
 #endif
 	wg_dbg("wg_tcp_write_worker: start peer=%llu send_queue_len=%u\n",
 				 peer->internal_id, skb_queue_len(&peer->send_queue));
+
+	/* A single bounded DEBUG delay lets the fully counted queue fill without
+	 * making teardown wait once per queued frame. Recheck ownership after the
+	 * sleep because a remover can publish its stop flag while waiting for this
+	 * worker to return.
+	 */
+	write_delay_ms = wg_tcp_test_take_write_delay_ms();
+	if (write_delay_ms) {
+		msleep(write_delay_ms);
+		spin_lock_bh(&peer->tcp_lock);
+		if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+		    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+		    peer->tcp_outbound_remove_scheduled ||
+		    peer->tcp_inbound_remove_scheduled ||
+		    peer->peer_socket != socket || !peer->tcp_established)
+			socket = NULL;
+		spin_unlock_bh(&peer->tcp_lock);
+		if (!socket)
+			goto out;
+	}
 
 	/* BUG FIX: dequeue under lock, send outside lock.
 	 * kernel_sendmsg() calls lock_sock() which can sleep —
@@ -3601,7 +4159,8 @@ out:
 	spin_lock_bh(&peer->tcp_lock);
 	spin_lock(&peer->tcp_write_lock);
 	peer->tcp_write_worker_scheduled = false;
-	if (!READ_ONCE(peer->is_dead) &&
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled && socket && sk &&
 	    peer->peer_socket == socket && peer->tcp_established &&
@@ -3629,11 +4188,14 @@ void wg_peer_discard_partial_read(struct wg_peer *peer)
 	peer->received_len = 0;
 }
 
-bool wg_sync_header(struct wg_peer *peer);
+bool wg_sync_header(struct wg_peer *peer, struct socket *socket);
 
-bool wg_sync_header(struct wg_peer *peer)
+bool wg_sync_header(struct wg_peer *peer, struct socket *socket)
 {
 	size_t i, suffix_len;
+
+	if (!peer || !socket || !socket->sk)
+		return false;
 
 	wg_dbg("Entering function wg_sync_header\n");
 	wg_dbg("wg_sync_header: Trying to synchonize to new header.\n");
@@ -3661,7 +4223,7 @@ bool wg_sync_header(struct wg_peer *peer)
 	/* No complete candidate exists yet. Preserve the maximum possible header
 	 * prefix so the next ordinary reader invocation can append bytes from a
 	 * later TCP segment. Keeping fewer than a full header also prevents the
-	 * processable-buffer exit guard from spinning on known-invalid data.
+	 * worker from spinning on known-invalid data.
 	 */
 	suffix_len = min_t(size_t, peer->received_len,
 			   WG_TCP_ENCAP_HDR_LEN - 1);
@@ -3695,21 +4257,6 @@ bool wg_check_potential_header_validity(struct wg_tcp_encap_header *hdr, size_t 
 		minimum_len += WG_TCP_FRAG_HDR_LEN;
 	total_len = ntohl(candidate.length);
 	return total_len >= minimum_len && total_len <= WG_MAX_PACKET_SIZE;
-}
-
-static bool wg_tcp_partial_buffer_processable(const struct wg_peer *peer)
-{
-	struct wg_tcp_encap_header header;
-
-	if (!peer->partial_skb ||
-	    peer->received_len < WG_TCP_ENCAP_HDR_LEN)
-		return false;
-
-	memcpy(&header, peer->partial_skb->data, sizeof(header));
-	if (!wg_check_potential_header_validity(&header, peer->received_len))
-		return true;
-
-	return peer->received_len >= ntohl(header.length);
 }
 
 /* FIX: -Wmissing-prototypes — made static (file-local only);
@@ -3747,8 +4294,10 @@ static int wg_tcp_build_fake_headers(struct sk_buff *skb, struct wg_peer *peer,
 		return -ENOTCONN;
 	sk = socket->sk;
 
-	// The reader keeps this socket alive until it returns; derive the outer
-	// tuple after connect so ephemeral source ports are reflected accurately.
+	/* Use the socket pinned by the reader. For outbound streams, derive the
+	 * tuple from the connected socket so route-selected source addresses and
+	 * ephemeral ports cannot be stale.
+	 */
 	if (socket == READ_ONCE(peer->inbound_socket)) {
 		if (peer->inbound_source.ss_family == AF_INET) {
 			source = (struct sockaddr_in *)&peer->inbound_dest;
@@ -3911,6 +4460,13 @@ static int wg_tcp_build_fake_headers(struct sk_buff *skb, struct wg_peer *peer,
 		if (udph->check == 0)
 			udph->check = CSUM_MANGLED_0;
 
+		/* endpoint_from_skb derives a link-local scope from skb_iif. Carry
+		 * the accepted/dialed socket's scope through the synthetic datagram so
+		 * authenticated roaming does not replace a scoped target with scope 0.
+		 */
+		skb->skb_iif = source6->sin6_scope_id;
+		if (!skb->skb_iif)
+			skb->skb_iif = READ_ONCE(sk->sk_bound_dev_if);
 		skb->protocol = htons(ETH_P_IPV6);
 #endif
 	} else {
@@ -3939,24 +4495,38 @@ void wg_tcp_read_worker(struct work_struct *work)
 	struct wg_tcp_frag_header frag_hdr;
 	bool has_frag_header = false;
 	struct wg_peer *peer = container_of(work, struct wg_peer, tcp_read_work);
-	struct socket *socket;
+	struct socket *socket = NULL;
 	struct sock *sk;
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT };
 	struct kvec vec;
 	size_t packet_header_length;
 	ssize_t read_bytes;
 	unsigned int packets_processed = 0;
+	bool budget_exhausted = false;
 	struct sk_buff *new_skb = NULL;
 
-	/* BUG FIX: check peer and peer_socket BEFORE dereferencing ->sk */
+	/* Pin the selected socket while holding the same lifetime lock used by
+	 * removers. Once a remover publishes its flag, cancel_work_sync() keeps
+	 * this socket alive until the reader returns.
+	 */
 	if (!peer || IS_ERR(peer))
 		goto out;
-	socket = READ_ONCE(peer->peer_socket);
-	if (!socket || !socket->sk)
+	spin_lock_bh(&peer->tcp_lock);
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
+	    !peer->tcp_outbound_remove_scheduled &&
+	    !peer->tcp_inbound_remove_scheduled && peer->tcp_established &&
+	    peer->peer_socket && peer->peer_socket->sk) {
+		socket = peer->peer_socket;
+		sk = socket->sk;
+	}
+	spin_unlock_bh(&peer->tcp_lock);
+	if (!socket)
 		goto out;
-	sk = socket->sk;
 	print_peer_socket_info(peer);
 	while (true) {
+		bool record_ready;
+
 		wg_dbg("wg_peer diagnostic: partial_skb=%px, expected_len=%zu, received_len=%zu\n",
 		       peer->partial_skb, peer->expected_len, peer->received_len);
 		if (!peer->partial_skb) {
@@ -3976,29 +4546,26 @@ void wg_tcp_read_worker(struct work_struct *work)
 			peer->expected_len = 0;
 			peer->partial_skb = new_skb;
 		}
-		// Make sure we have enough room for at least an encapsulation header
-		if (skb_tailroom(peer->partial_skb) < WG_TCP_ENCAP_HDR_LEN) {
-			wg_dbg("wg_tcp_read_worker: Reallocating skb to fit the encapsulation header.\n");
-			// Check if the current skb has enough room; if not, reallocate a new skb with sufficient space;
-			new_skb = skb_copy_expand(peer->partial_skb, skb_headroom(peer->partial_skb),
-						  WG_TCP_SKB_READ_ALLOC_SIZE + WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN,
-						  GFP_ATOMIC);
-			if (!new_skb) {
-				pr_err("WireGuard: Failed to reallocate skb\n");
-				wg_peer_discard_partial_read(peer);
-				break;
+		record_ready = peer->expected_len ?
+			peer->received_len >= peer->expected_len :
+			peer->received_len >= WG_TCP_ENCAP_HDR_LEN;
+		if (!record_ready) {
+			// Make sure we have enough room for at least an encapsulation header
+			if (skb_tailroom(peer->partial_skb) < WG_TCP_ENCAP_HDR_LEN) {
+				wg_dbg("wg_tcp_read_worker: Reallocating skb to fit the encapsulation header.\n");
+				// Check if the current skb has enough room; if not, reallocate a new skb with sufficient space;
+				new_skb = skb_copy_expand(peer->partial_skb, skb_headroom(peer->partial_skb),
+							  WG_TCP_SKB_READ_ALLOC_SIZE + WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN,
+							  GFP_ATOMIC);
+				if (!new_skb) {
+					pr_err("WireGuard: Failed to reallocate skb\n");
+					wg_peer_discard_partial_read(peer);
+					break;
+				}
+				// Replace the old skb with the new one
+				kfree_skb(peer->partial_skb);
+				peer->partial_skb = new_skb;
 			}
-			// Replace the old skb with the new one
-			kfree_skb(peer->partial_skb);
-			peer->partial_skb = new_skb;
-		}
-		// Read as much data as fits into the skb buffer
-		// When reading more data, make sure to append after existing data
-		/* Drain complete records already buffered by a prior bulk read before
-		 * asking the nonblocking socket for more data. Otherwise EAGAIN
-		 * strands the leftover record until another frame arrives.
-		 */
-		if (!wg_tcp_partial_buffer_processable(peer)) {
 			// Read as much data as fits into the skb buffer
 			// When reading more data, make sure to append after existing data
 			vec.iov_base = skb_tail_pointer(peer->partial_skb);
@@ -4006,7 +4573,8 @@ void wg_tcp_read_worker(struct work_struct *work)
 			if (!vec.iov_len)
 				break;
 			//lock_sock(peer->peer_socket->sk); // XXX - Lock ONLY for reading - Jeff
-			read_bytes = kernel_recvmsg(socket, &msg, &vec, 1, vec.iov_len, msg.msg_flags);
+			read_bytes = kernel_recvmsg(socket, &msg, &vec, 1,
+					    vec.iov_len, msg.msg_flags);
 			if (read_bytes > 0) {
 #if WG_TCP_DIAG_ENABLED
 				wg_tcp_diag_dump_sock(sk, "rx:recvmsg", read_bytes, vec.iov_len);
@@ -4069,11 +4637,24 @@ void wg_tcp_read_worker(struct work_struct *work)
 
 			if (!wg_check_potential_header_validity(&header,
 							peer->received_len)) {
-				pr_err("WireGuard: Invalid packet header detected, attempting to resynchronize\n");
-				if (!wg_sync_header(peer)) {
-					wg_dbg("WireGuard: Waiting for more bytes while resynchronizing\n");
+				pr_debug_ratelimited(
+					"WireGuard: Invalid TCP record header, attempting resynchronization\n");
+				if (!wg_sync_header(peer, socket)) {
+					/* A bounded suffix may be an incomplete header split
+					 * across recvmsg calls. Keep it for data_ready rather
+					 * than treating normal stream segmentation as damage.
+					 */
+					if (peer->partial_skb &&
+					    peer->received_len < WG_TCP_ENCAP_HDR_LEN)
+						break;
+					pr_debug_ratelimited(
+						"WireGuard: No valid TCP record header found\n");
+					wg_peer_discard_partial_read(peer);
 					break;
 				}
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+				atomic64_inc(&wg_tcp_test_resyncs);
+#endif
 				/* Resynchronization can pull, free, or replace partial_skb.
 				 * Copy and validate the selected candidate again before use.
 				 */
@@ -4255,7 +4836,8 @@ void wg_tcp_read_worker(struct work_struct *work)
 			}
 
 			// Build the UDP and IP headers
-			if (wg_tcp_build_fake_headers(peer->partial_skb, peer, socket)) {
+			if (wg_tcp_build_fake_headers(peer->partial_skb, peer,
+						      socket)) {
 				pr_err("WireGuard: Failed to build UDP/IP headers\n");
 				wg_peer_discard_partial_read(peer);
 				break;
@@ -4302,8 +4884,10 @@ void wg_tcp_read_worker(struct work_struct *work)
 			}
 			peer->expected_len = 0; // Reset for the next packet
 		}
-		if (++packets_processed > 64)
+		if (++packets_processed >= 64) {
+			budget_exhausted = true;
 			break;
+		}
 	}
 // XXX not sure needed	release_sock(sk); // Unlock the socket
 	
@@ -4318,12 +4902,15 @@ out:
 	spin_lock_bh(&peer->tcp_lock);
 	spin_lock(&peer->tcp_read_lock);
 	peer->tcp_read_worker_scheduled = false;
-	if (!READ_ONCE(peer->is_dead) &&
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled && peer->tcp_read_wq &&
-	    peer->peer_socket && peer->peer_socket->sk &&
-	    (wg_tcp_partial_buffer_processable(peer) ||
-	     !skb_queue_empty(&peer->peer_socket->sk->sk_receive_queue))) {
+	    socket && peer->peer_socket == socket && socket->sk &&
+	    (!skb_queue_empty(&socket->sk->sk_receive_queue) ||
+	     (budget_exhausted && peer->partial_skb &&
+	      !peer->expected_len &&
+	      peer->received_len >= WG_TCP_ENCAP_HDR_LEN))) {
 		peer->tcp_read_worker_scheduled = true;
 		queue_work(peer->tcp_read_wq, &peer->tcp_read_work);
 	}
@@ -4370,7 +4957,8 @@ void wg_tcp_data_ready(struct sock *sk)
 	spin_lock(&peer->tcp_read_lock);
 
 	// Check if the worker is already scheduled and wq still exists
-	if (!READ_ONCE(peer->is_dead) &&
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
 	    !peer->tcp_outbound_remove_scheduled &&
 	    !peer->tcp_inbound_remove_scheduled &&
 	    !peer->tcp_read_worker_scheduled && peer->tcp_read_wq) {
@@ -4588,19 +5176,19 @@ void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound)
 void wg_tcp_retry_worker(struct work_struct *work)
 {
 	struct wg_peer *peer = container_of(work, struct wg_peer, tcp_retry_work.work);
-	struct socket *socket = NULL;
 	bool queue_outbound_remove = false;
+	bool removal_pending;
 	int ret;
 
 	wg_dbg("Entering function wg_tcp_retry_worker peer=%px\n", peer);
-	if (READ_ONCE(peer->is_dead) ||
-	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
-	    peer->device->transport != WG_TRANSPORT_TCP) {
-		peer->tcp_retry_scheduled = false;
-		goto out;
-	}
 	spin_lock_bh(&peer->tcp_lock);
 	peer->tcp_retry_scheduled = false;
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP) {
+		spin_unlock_bh(&peer->tcp_lock);
+		goto out;
+	}
 	if (!peer->tcp_established && peer->tcp_pending) {
 		/* Delegate destruction to the single outbound removal owner. It sets
 		 * the lifetime flag before canceling stream work and releasing the
@@ -4609,26 +5197,26 @@ void wg_tcp_retry_worker(struct work_struct *work)
 		peer->tcp_reconnect_requested = true;
 		if (!peer->tcp_outbound_remove_scheduled) {
 			peer->tcp_outbound_remove_scheduled = true;
+			peer->tcp_outbound_remove_socket = peer->outbound_socket;
 			queue_outbound_remove = true;
-			socket = peer->outbound_socket;
 		}
 	}
-	spin_unlock_bh(&peer->tcp_lock);
-	if (queue_outbound_remove) {
-		if (socket)
-			kernel_sock_shutdown(socket, SHUT_RDWR);
+	if (queue_outbound_remove)
 		mod_delayed_work(system_wq, &peer->tcp_outbound_remove_work, 0);
-		goto out;
-	}
-	if (READ_ONCE(peer->tcp_outbound_remove_scheduled))
+	removal_pending = peer->tcp_outbound_remove_scheduled;
+	spin_unlock_bh(&peer->tcp_lock);
+	if (removal_pending)
 		goto out;
 
 	ret = wg_tcp_connect(peer);
 	if (ret < 0) {
-		// Reschedule the work if the connection attempt fails
-		peer->tcp_retry_scheduled = true;
-		mod_delayed_work(system_wq, &peer->tcp_retry_work,
-				 msecs_to_jiffies(30000));
+		spin_lock_bh(&peer->tcp_lock);
+		if (!peer->tcp_stopping && !peer->tcp_retry_scheduled) {
+			peer->tcp_retry_scheduled = true;
+			mod_delayed_work(system_wq, &peer->tcp_retry_work,
+					 msecs_to_jiffies(30000));
+		}
+		spin_unlock_bh(&peer->tcp_lock);
 	}
 
 out:
@@ -4659,11 +5247,13 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
 		kfree(entry);
 		return -EINVAL;
 	}
-	entry->stream_id = atomic64_inc_return(&wg_tcp_stream_id);
-	WRITE_ONCE(socket_data->stream_id, entry->stream_id);
-	entry->initializing = true;
 	entry->created_at = ktime_get();
 	entry->timestamp = entry->created_at;
+	entry->connection_id = atomic64_inc_return(
+		&wg->tcp_connection_sequence);
+	entry->admission_counted = true;
+	entry->initializing = true;
+	temp_peer->tcp_connection_id = entry->connection_id;
 
     	// Initialize addr structure to zero
     	memset(&addr, 0, sizeof(addr));
@@ -4671,10 +5261,11 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
     	// Get the source address from the socket
 	ret = receive_socket->ops->getname(receive_socket,
 					    (struct sockaddr *)&addr, 1);
-	if (ret < 0) {
+	if (ret < 0 ||
+	    !wg_sockaddr_length_valid((const struct sockaddr *)&addr, ret)) {
 		pr_err("Failed to get peer address from socket\n");
 		kfree(entry);
-		return ret;
+		return ret < 0 ? ret : -EINVAL;
 	}
 	if (!READ_ONCE(wg->tcp_cleanup_scheduled)) {
 		kfree(entry);
@@ -4686,13 +5277,24 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socke
 	
 	spin_lock_bh(&wg->tcp_connection_list_lock);
 	if (!READ_ONCE(wg->tcp_cleanup_scheduled) ||
-	    wg->tcp_pending_connections >= WG_TCP_MAX_PENDING_CONNECTIONS) {
+	    wg->tcp_tracked_connections >= WG_TCP_MAX_TRACKED_CONNECTIONS ||
+	    wg->tcp_pending_connections >= WG_TCP_MAX_PENDING_CONNECTIONS ||
+	    wg_tcp_pending_from_source_locked(
+		    wg, (const struct sockaddr *)&addr) >=
+		    WG_TCP_MAX_PENDING_PER_SOURCE) {
 		spin_unlock_bh(&wg->tcp_connection_list_lock);
 		kfree(entry);
 		return -ENOSPC;
 	}
+	/* Serialize carrier publication with live device-mark refresh. Either
+	 * this write observes the new mark, or the updater sees the published
+	 * entry and applies it while holding the same list lock.
+	 */
+	if (receive_socket->sk)
+		WRITE_ONCE(receive_socket->sk->sk_mark, wg->fwmark);
 	list_add_tail_rcu(&entry->tcp_connection_ll, &wg->tcp_connection_list);
 	++wg->tcp_pending_connections;
+	++wg->tcp_tracked_connections;
 	spin_unlock_bh(&wg->tcp_connection_list_lock);
 	/* Run once immediately, then the worker keeps checking live provisional
 	 * sockets until the list is empty. mod_delayed_work also closes the race
@@ -4715,7 +5317,9 @@ static void wg_finish_tcp_connection_init(struct wg_device *wg,
 		if (entry->tcp_socket != socket)
 			continue;
 		if (!socket->sk ||
-		    READ_ONCE(socket->sk->sk_state) != TCP_ESTABLISHED) {
+		    READ_ONCE(socket->sk->sk_state) != TCP_ESTABLISHED ||
+		    !entry->temp_peer || IS_ERR(entry->temp_peer) ||
+		    READ_ONCE(entry->temp_peer->is_dead)) {
 			if (entry->temp_peer && !IS_ERR(entry->temp_peer))
 				WRITE_ONCE(entry->temp_peer->is_dead, true);
 			cleanup = true;
@@ -4747,26 +5351,6 @@ static void wg_touch_tcp_connection(struct wg_peer *peer)
 	spin_unlock_bh(&wg->tcp_connection_list_lock);
 }
 
-bool wg_tcp_mark_pending_authenticated(struct wg_device *wg, u64 stream_id)
-{
-	struct wg_tcp_socket_list_entry *entry;
-	bool marked = false;
-
-	if (!wg || !stream_id || wg->transport != WG_TRANSPORT_TCP)
-		return false;
-
-	spin_lock_bh(&wg->tcp_connection_list_lock);
-	list_for_each_entry(entry, &wg->tcp_connection_list, tcp_connection_ll) {
-		if (entry->stream_id != stream_id)
-			continue;
-		entry->authenticated = true;
-		marked = true;
-		break;
-	}
-	spin_unlock_bh(&wg->tcp_connection_list_lock);
-	return marked;
-}
-
 static struct wg_tcp_socket_list_entry *
 wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,
 			bool cleanup_only)
@@ -4784,15 +5368,17 @@ wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,
 		if (cleanup_only && entry->temp_peer &&
 		    !IS_ERR(entry->temp_peer) &&
 		    !READ_ONCE(entry->temp_peer->is_dead) &&
-		    ((entry->authenticated &&
-		      ktime_ms_delta(now, entry->timestamp) <
-			      WG_TCP_AUTHENTICATED_IDLE_TIMEOUT_MS) ||
-		     (!entry->authenticated &&
-		      ktime_ms_delta(now, entry->timestamp) <
-			      WG_TCP_AUTH_IDLE_TIMEOUT_MS &&
+		    (entry->authenticated ||
+		     (ktime_ms_delta(now, entry->timestamp) <
+			     WG_TCP_AUTH_IDLE_TIMEOUT_MS &&
 		      ktime_ms_delta(now, entry->created_at) <
-			      WG_TCP_AUTH_MAX_LIFETIME_MS)))
+			     WG_TCP_AUTH_MAX_LIFETIME_MS)))
 			continue;
+		wg_tcp_release_admission_locked(wg, entry);
+		if (WARN_ON_ONCE(!wg->tcp_tracked_connections))
+			wg->tcp_tracked_connections = 0;
+		else
+			--wg->tcp_tracked_connections;
 		list_del_rcu(&entry->tcp_connection_ll);
 		claimed = entry;
 		break;
@@ -4839,10 +5425,11 @@ static void wg_destroy_temp_peer(struct wg_peer *peer)
 		}
 		write_unlock_bh(&sk->sk_callback_lock);
 	}
-	if (peer->tcp_read_wq)
-		destroy_workqueue(peer->tcp_read_wq);
-	if (peer->tcp_write_wq)
-		destroy_workqueue(peer->tcp_write_wq);
+	/* Both pointers reference the device-scoped provisional queue. It remains
+	 * alive until every pending entry has been drained during device teardown.
+	 */
+	peer->tcp_read_wq = NULL;
+	peer->tcp_write_wq = NULL;
 	if (peer->partial_skb)
 		kfree_skb(peer->partial_skb);
 	skb_queue_purge(&peer->send_queue);
@@ -4869,12 +5456,6 @@ wg_destroy_tcp_connection_entry(struct wg_device *wg,
 		kernel_sock_shutdown(entry->tcp_socket, SHUT_RDWR);
 		sock_release(entry->tcp_socket);
 	}
-	spin_lock_bh(&wg->tcp_connection_list_lock);
-	if (WARN_ON(!wg->tcp_pending_connections))
-		wg->tcp_pending_connections = 0;
-	else
-		--wg->tcp_pending_connections;
-	spin_unlock_bh(&wg->tcp_connection_list_lock);
 	kfree(entry);
 }
 
@@ -4894,12 +5475,19 @@ void wg_remove_from_tcp_connection_list(struct wg_device *wg,
 void wg_tcp_outbound_remove_worker(struct work_struct *work)
 {
 	struct wg_peer *peer = container_of(work, struct wg_peer, tcp_outbound_remove_work.work);
-	struct socket *socket = READ_ONCE(peer->outbound_socket);
-	struct sock *sk = socket ? socket->sk : NULL;
-	bool retry_needed, reconnect;
+	struct socket *socket;
+	struct sock *sk;
+	bool clean_claim, reclaim_current = false;
+	bool retry_needed, reconnect, stopping;
 	int ret;
 
 	wg_dbg("Entering function wg_tcp_outbound_remove _worker\n");
+	spin_lock_bh(&peer->tcp_lock);
+	socket = peer->tcp_outbound_remove_socket;
+	clean_claim = socket ? peer->outbound_socket == socket :
+				 !peer->outbound_socket;
+	sk = clean_claim && socket ? socket->sk : NULL;
+	spin_unlock_bh(&peer->tcp_lock);
 
 	/* No new stream work is queued while the remove flag is set. Wait for
 	 * callbacks that passed that check, then quiesce workers before freeing
@@ -4922,30 +5510,50 @@ void wg_tcp_outbound_remove_worker(struct work_struct *work)
 			 delayed_work_pending(&peer->tcp_retry_work);
 	cancel_delayed_work_sync(&peer->tcp_retry_work);
 	peer->tcp_retry_scheduled = false;
-	wg_reset_tcp_socket_callbacks(peer, false);
-	wg_clean_peer_socket(peer, true, false, false); // clean and release
+	if (clean_claim) {
+		wg_reset_tcp_socket_callbacks(peer, false);
+		wg_clean_peer_socket(peer, true, false, false);
+	} else {
+		/* Never let an old work item tear down a replacement socket. */
+		reclaim_current = true;
+	}
 
 	spin_lock_bh(&peer->tcp_lock);
 	reconnect = peer->tcp_reconnect_requested;
+	stopping = peer->tcp_stopping;
 	peer->tcp_reconnect_requested = false;
 	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_outbound_remove_socket = NULL;
 	spin_unlock_bh(&peer->tcp_lock);
 
-	if (READ_ONCE(peer->is_dead) ||
+	if (stopping || READ_ONCE(peer->is_dead) ||
 	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
 	    peer->device->transport != WG_TRANSPORT_TCP)
 		goto out;
+	if (reclaim_current) {
+		wg_tcp_peer_request_reconnect(peer);
+		goto out;
+	}
 	if (reconnect) {
 		ret = wg_tcp_connect(peer);
 		if (ret < 0) {
-			peer->tcp_retry_scheduled = true;
-			mod_delayed_work(system_wq, &peer->tcp_retry_work,
-					 msecs_to_jiffies(30000));
+			spin_lock_bh(&peer->tcp_lock);
+			if (!peer->tcp_stopping &&
+			    !peer->tcp_retry_scheduled) {
+				peer->tcp_retry_scheduled = true;
+				mod_delayed_work(system_wq, &peer->tcp_retry_work,
+						 msecs_to_jiffies(30000));
+			}
+			spin_unlock_bh(&peer->tcp_lock);
 		}
 	} else if (retry_needed) {
-		peer->tcp_retry_scheduled = true;
-		mod_delayed_work(system_wq, &peer->tcp_retry_work,
-				 msecs_to_jiffies(10000));
+		spin_lock_bh(&peer->tcp_lock);
+		if (!peer->tcp_stopping && !peer->tcp_retry_scheduled) {
+			peer->tcp_retry_scheduled = true;
+			mod_delayed_work(system_wq, &peer->tcp_retry_work,
+					 msecs_to_jiffies(10000));
+		}
+		spin_unlock_bh(&peer->tcp_lock);
 	}
 
 out:
@@ -4966,6 +5574,9 @@ void wg_tcp_inbound_remove_worker(struct work_struct *work)
 	} else {
 		wg_reset_tcp_socket_callbacks(peer, true);
 		wg_clean_peer_socket(peer, true, false, true); // clean and release
+		spin_lock_bh(&peer->tcp_lock);
+		peer->tcp_inbound_remove_scheduled = false;
+		spin_unlock_bh(&peer->tcp_lock);
 	}
     	wg_dbg("Exiting function wg_inbound_remove_worker\n");
 }
@@ -5058,6 +5669,9 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 	peer->tcp_inbound_remove_scheduled = false;
 	peer->tcp_outbound_remove_scheduled = false;
 	peer->tcp_reconnect_requested = false;
+	peer->tcp_stopping = false;
+	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_roaming_connection_id = 0;
 
 	// Initialize the spinlock for protecting TCP-related state
 	spin_lock_init(&peer->tcp_lock);
@@ -5075,20 +5689,12 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 
 	// Initialize the work structure, associating it with the worker functions
 	INIT_WORK(&peer->tcp_read_work, wg_tcp_read_worker);
-	// Create a workqueue for processing TCP read data
-	peer->tcp_read_wq = alloc_workqueue("tcp_read_wq", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
-	if (!peer->tcp_read_wq) {
-        	pr_err("Failed to allocate read workqueue\n");
-		goto err;
-	}
+	peer->tcp_read_wq = wg->tcp_auth_wq;
 
 	INIT_WORK(&peer->tcp_write_work, wg_tcp_write_worker);
-	/* BUG FIX: tcp_write_wq was never allocated — crash when wg_tcp_write_space fires */
-	peer->tcp_write_wq = alloc_workqueue("tcp_write_wq", WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
-	if (!peer->tcp_write_wq) {
-		pr_err("Failed to allocate write workqueue\n");
-		if (peer->tcp_read_wq)
-			destroy_workqueue(peer->tcp_read_wq);
+	peer->tcp_write_wq = wg->tcp_auth_wq;
+	if (!peer->tcp_read_wq) {
+		pr_err("Provisional TCP workqueue is unavailable\n");
 		goto err;
 	}
 

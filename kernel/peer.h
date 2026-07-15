@@ -56,9 +56,11 @@ struct wg_peer {
 	struct list_head allowedips_list;
 	struct napi_struct napi;
 	u64 internal_id;
+	u64 tcp_connection_id; /* Nonzero only for a provisional accepted stream. */
 
-        // TCP-related members
+	// TCP-related members
 	bool peer_endpoint_set;
+	__be16 tcp_peer_listen_port; /* Configured, never an accepted source port. */
 	struct socket *peer_socket, *inbound_socket, *outbound_socket;
 	void (*original_outbound_state_change)(struct sock *sk);
 	void (*original_outbound_write_space)(struct sock *sk);
@@ -85,6 +87,9 @@ struct wg_peer {
 	struct delayed_work tcp_outbound_remove_work;	// Work for removing outbound peer TCP connection
 	bool tcp_outbound_remove_scheduled;		// Flag to track outbound peer removal scheduling
 	bool tcp_reconnect_requested;		// Reconnect after the current outbound socket is quiesced
+	bool tcp_stopping;			// Device/peer stop owns all TCP work cancellation
+	struct socket *tcp_outbound_remove_socket;	// Exact socket claimed by the removal owner
+	u64 tcp_roaming_connection_id;		// Newest authenticated accepted carrier
 	struct delayed_work tcp_inbound_remove_work;	// Work for removing inbound peer TCP connection
 	bool tcp_inbound_remove_scheduled;		// Flag to track inbound peer removal scheduling
 

@@ -26,7 +26,6 @@ int wg_socket_send_buffer_as_reply_to_skb(struct wg_device *wg,
 
 int wg_socket_endpoint_from_skb(struct endpoint *endpoint,
 				const struct sk_buff *skb);
-bool wg_tcp_mark_pending_authenticated(struct wg_device *wg, u64 stream_id);
 void wg_socket_set_peer_endpoint(struct wg_peer *peer,
 				 const struct endpoint *endpoint);
 void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer,
@@ -77,6 +76,11 @@ int wg_socket_endpoint_from_skb(struct endpoint *endpoint, const struct sk_buff 
 void wg_socket_set_peer_endpoint(struct wg_peer *peer, const struct endpoint *endpoint);
 void wg_socket_set_peer_endpoint_configured(struct wg_peer *peer,
 					    const struct endpoint *endpoint);
+void wg_socket_set_peer_endpoint_authenticated(struct wg_peer *peer,
+					       const struct endpoint *endpoint,
+					       u64 connection_id);
+void wg_socket_set_peer_endpoint_authenticated_from_skb(
+	struct wg_peer *peer, const struct sk_buff *skb);
 void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer, const struct sk_buff *skb);
 void wg_socket_clear_peer_endpoint_src(struct wg_peer *peer);
 void wg_socket_reinit(struct wg_device *wg, struct sock *new4, struct sock *new6);
@@ -109,6 +113,8 @@ int wg_tcp_listener6_thread(void *data);
 
 void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool inbound);
 void wg_tcp_peer_stop(struct wg_peer *peer);
+void wg_tcp_peer_request_reconnect(struct wg_peer *peer);
+void wg_tcp_set_device_mark(struct wg_device *wg, u32 mark);
 void wg_tcp_write_worker(struct work_struct *work);
 void wg_tcp_read_worker(struct work_struct *work);
 void wg_tcp_cleanup_worker(struct work_struct *work);
