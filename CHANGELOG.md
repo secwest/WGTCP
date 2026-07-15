@@ -57,6 +57,11 @@ affects design and externally visible behavior.
 - Added compact evidence for the complete 20-execution burst-breadth base, six
   exact invalid-cell reruns, the permanently stopped composite path, and a
   reproducible 162-execution inclusion/exclusion ledger.
+- Added `docs/TCP_MELTDOWN.md` as a concise operating-envelope, stall-duration,
+  and replication guide.
+- Added `analyze.py stalls` to export every contiguous zero-delivery interval
+  from a reproduced cell using the campaign's exact receiver and 100 ms
+  alignment rules.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.
@@ -111,6 +116,10 @@ affects design and externally visible behavior.
 
 ### Changed
 
+- Calibrated user-facing meltdown wording: all clean finite-queue/RTT screening
+  cells were stable, severe degradation appeared only in the deliberately
+  extreme persistent-loss breadth envelope, and the unrun onset sweep prevents
+  claiming an exact lower threshold or common modern-network prevalence.
 - Changed accepted TCP streams to carry stable, device-local nonzero connection
   IDs through asynchronous Noise processing.
 - Changed authenticated accepted carriers to release pre-authentication

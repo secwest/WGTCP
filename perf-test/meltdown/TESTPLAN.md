@@ -10,6 +10,14 @@ The stock UDP WireGuard mode from the same module is the control in every
 scored cell. A result is about this implementation and build, not every TCP
 tunnel.
 
+This plan stresses a causal mechanism; it is not a prevalence survey. The
+completed no-loss finite-queue and 100-400 ms RTT screening matrix was stable.
+Severe behavior appeared only in the later 16-flow, 200-400 ms, persistent-loss
+breadth envelope. The lowest demonstrated severe profile had 4.42% nominal
+stationary Gilbert-Elliott loss at 200 ms, but the planned 0.3% random-loss
+onset row remained disabled. That point must not be reported as an exact lower
+threshold or as representative of ordinary healthy networks.
+
 ## 2. Predeclared operational definition
 
 The measurement window excludes iperf's configured warm-up. Inner delivery is

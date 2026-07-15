@@ -18,6 +18,13 @@ campaign reran those seven with complete evidence; all are valid/stable. The
 qualified composite is therefore 68/68 stable screening cells, and the combined
 calibration/screening inventory is 82/82 valid/stable.
 
+Those controls matter for interpretation: 16-flow TCP at 200-400 ms with no
+induced loss remained near 47 Mb/s with essentially no zero-delivery stalls.
+Severe degradation appeared only after the breadth campaign combined a 50
+Mb/s, 1x-BDP FIFO, 16 saturated CUBIC flows, 200-400 ms RTT, and persistent
+random or Gilbert-Elliott loss. This is an extreme laboratory corner rather
+than evidence that healthy modern networks commonly enter meltdown.
+
 Four matched 0.25x-BDP mechanism-smoke cells were valid/stable, but their queue
 did not overflow, so the original 12 broader rows remain intentionally unrun.
 A separately predeclared 0.10x-BDP adaptive smoke then completed 4/4
@@ -857,9 +864,17 @@ near-meltdown behavior are established, but formal meltdown is not established
 because no valid execution meets the stall, significant-decline, and inner-RTO
 conditions together.**
 
+The lowest demonstrated severe profile used 4.42% nominal stationary burst
+loss at 200 ms. Its valid repetitions had 0.7- and 6.3-second longest stalls.
+Across all nine valid logical TCP breadth cells, longest stalls ranged from 0.7
+to 40.2 seconds, with a 6.3-second median. The disabled 0.3% random-loss onset
+row was never run, so no exact lower threshold or real-network prevalence claim
+is supported. The concise operator interpretation and reproduction index are in
+[`docs/TCP_MELTDOWN.md`](../../docs/TCP_MELTDOWN.md).
+
 ## 12. Validation completed
 
-- 157 repository source-contract, analysis, matrix, and composite-integrity
+- 158 repository source-contract, analysis, matrix, and composite-integrity
   tests pass;
 - Python compilation, Bash syntax, PowerShell parsing, and diff whitespace
   checks pass;

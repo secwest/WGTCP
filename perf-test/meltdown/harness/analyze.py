@@ -594,6 +594,95 @@ def longest_zero_run(values: list[float]) -> int:
     return longest
 
 
+def zero_delivery_runs(
+    values: list[float], measurement_start_ns: int | None = None
+) -> list[dict[str, int | float | bool]]:
+    runs: list[dict[str, int | float | bool]] = []
+    start: int | None = None
+    for index, value in enumerate([*values, 1.0]):
+        if value <= 0 and start is None:
+            start = index
+        elif value > 0 and start is not None:
+            run = {
+                "start_bin": start,
+                "end_bin_exclusive": index,
+                "start_s": start * DELIVERY_BIN_NS / 1_000_000_000,
+                "end_s": index * DELIVERY_BIN_NS / 1_000_000_000,
+                "duration_ms": (index - start) * DELIVERY_BIN_NS // 1_000_000,
+                "left_censored": start == 0,
+                "right_censored": index == len(values),
+            }
+            if measurement_start_ns is not None:
+                run["start_ns"] = measurement_start_ns + start * DELIVERY_BIN_NS
+                run["end_ns"] = measurement_start_ns + index * DELIVERY_BIN_NS
+            runs.append(run)
+            start = None
+    return runs
+
+
+def stall_timeline(cell_dir: Path) -> dict[str, Any]:
+    document = analyze_cell(cell_dir)
+    axes = document.get("axes", {})
+    delivery = interface_delivery_bins(
+        cell_dir,
+        str(axes.get("direction", "")),
+        as_float(axes.get("warmup_s")),
+        as_float(axes.get("duration_s")),
+    )
+    covered = as_int(delivery.get("covered_bins"))
+    expected = as_int(delivery.get("expected_bins"))
+    if expected <= 0 or covered != expected:
+        raise ValueError(
+            f"complete delivery coverage required: covered {covered} of {expected} bins"
+        )
+
+    values = delivery["bps"]
+    measurement_start_ns = as_int(delivery.get("measurement_start_ns"))
+    runs = zero_delivery_runs(values, measurement_start_ns)
+    stall_bins = sum(value <= 0 for value in values)
+    return {
+        "cell_id": document.get("cell_id", cell_dir.name),
+        "valid": document.get("valid"),
+        "classification": document.get("classification"),
+        "bin_ms": DELIVERY_BIN_NS // 1_000_000,
+        "measurement_start_ns": measurement_start_ns,
+        "measurement_end_ns": delivery.get("measurement_end_ns"),
+        "covered_bins": covered,
+        "expected_bins": expected,
+        "stall_bins": stall_bins,
+        "stall_fraction_100ms": stall_bins / len(values) if values else None,
+        "longest_stall_ms": max(
+            (as_int(run["duration_ms"]) for run in runs), default=0
+        ),
+        "stall_count": len(runs),
+        "left_censored_stall_count": sum(
+            bool(run["left_censored"]) for run in runs
+        ),
+        "right_censored_stall_count": sum(
+            bool(run["right_censored"]) for run in runs
+        ),
+        "stalls": runs,
+    }
+
+
+def write_stall_csv(path: Path, report: dict[str, Any]) -> None:
+    fieldnames = [
+        "start_ns",
+        "end_ns",
+        "start_bin",
+        "end_bin_exclusive",
+        "start_s",
+        "end_s",
+        "duration_ms",
+        "left_censored",
+        "right_censored",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(report["stalls"])
+
+
 def parse_ping(path: Path) -> dict[str, int | float | None]:
     try:
         text = path.read_text()
@@ -2239,6 +2328,9 @@ def main() -> int:
     campaign_parser.add_argument("root", type=Path)
     campaign_parser.add_argument("--csv", type=Path, required=True)
     campaign_parser.add_argument("--report", type=Path)
+    stalls_parser = sub.add_parser("stalls")
+    stalls_parser.add_argument("cell_dir", type=Path)
+    stalls_parser.add_argument("--csv", type=Path)
     args = parser.parse_args()
     if args.command == "cell":
         print(json.dumps(analyze_cell(args.cell_dir), indent=2, sort_keys=True))
@@ -2247,6 +2339,16 @@ def main() -> int:
         metrics, valid = baseline_preflight(args.ping_path)
         print(json.dumps(metrics, indent=2, sort_keys=True))
         return 0 if valid else 1
+    if args.command == "stalls":
+        try:
+            report = stall_timeline(args.cell_dir)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.csv:
+            write_stall_csv(args.csv, report)
+        else:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     return campaign(args.root, args.csv, args.report)
 
 

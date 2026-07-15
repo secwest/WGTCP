@@ -5,6 +5,26 @@ and known limitations. Update it in the same commit as every substantive design
 or behavioral change. Append a new entry when a decision changes; mark older
 entries as superseded instead of silently rewriting their history.
 
+## 2026-07-15: Meltdown documentation reports the measured operating envelope
+
+**Decision:** Describe the severe behavior as an extreme tested corner, not as
+a routine property of modern networks. State that clean 16-flow finite-queue
+and 100-400 ms RTT controls were stable, while severe stalls appeared only
+after persistent loss was combined with high RTT, saturation, and one ordered
+outer stream. Preserve the finding that no valid execution was formal
+meltdown.
+
+**Boundary:** The 4.42%-nominal Gilbert-Elliott profile is the lowest
+demonstrated severe point, not an onset threshold. The planned 0.3% random-loss
+row was not executed. Documentation must therefore avoid both alarmist
+prevalence claims and unsupported claims that pathology is impossible below
+the tested point.
+
+**Consequence:** `docs/TCP_MELTDOWN.md` is the concise operator-facing
+interpretation. `perf-test/meltdown/` remains the reproducible evidence source,
+and its analyzer exports exact contiguous stall intervals from raw 100 ms
+receiver counters.
+
 ## 2026-07-14: Meltdown conclusions use separate evidence inventories
 
 ### Severe degradation is not promoted to formal meltdown
