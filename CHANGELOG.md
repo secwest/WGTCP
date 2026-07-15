@@ -9,6 +9,213 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a dedicated `perf-test/meltdown/` campaign for mechanistic
+  TCP-over-TCP meltdown testing.
+- Added selective HTB plus finite-queue bottleneck construction, with IFB/netem
+  propagation delay and optional loss isolated from SSH and control traffic.
+- Added matched TCP and UDP WireGuard cells covering calibration, BDP queue
+  depth, and RTT-boundary screening.
+- Added a predeclared lower-rate mechanism matrix that gates broader testing on
+  observed finite-queue overflow in matched 35 Mb/s/200 ms/0.25x-BDP smoke
+  cells.
+- Added a separately fingerprinted 0.10x-BDP adaptive smoke with a gated
+  0.05x-BDP fallback after the 0.25x-BDP queue did not overflow.
+- Added a 0.05x-BDP recovery smoke that gates lower-rate, higher-RTT, and
+  contention rows on observed outer TCP retransmission or RTO.
+- Added a matched Gilbert-Elliott burst-recovery smoke at 50 Mb/s, 200 ms, and
+  1x BDP that gates broader burst testing on valid observed outer recovery.
+- Added a separately fingerprinted corrected burst-recovery smoke with netem
+  `P/R/1-H/1-K` parameters `2/25/90/1` after the original good-state loss made
+  every preflight invalid.
+- Added 100 ms receiver tunnel-interface sampling, layered BPF
+  retransmission/RTO tracing, socket and qdisc sampling, clock normalization,
+  carrier-tuple tracking, and cross-layer coupling metrics.
+- Added predeclared meltdown classification and strict per-cell validity checks.
+- Added fail-closed validation of the live netem random or Gilbert-Elliott loss
+  model and its exact configured probabilities.
+- Added realized-loss validation from monotonic IFB netem packet/drop counters,
+  with a predeclared 0.5x-2x stationary-expectation band.
+- Added source, runtime build, matrix-axis, repetition, cell, and campaign
+  fingerprints so resumed evidence cannot cross implementation or test-plan
+  boundaries.
+- Added explicit socket-sampler completion records and six BPF event summaries.
+  Summaries must not exceed emitted events and may trail by at most one final
+  event racing tracer shutdown.
+- Added focused analysis tests for BOM-prefixed JSON, diagnostic-prefixed iperf
+  output, interface delivery, carrier stability, and matched UDP controls.
+- Added lifecycle, roaming, and stream contracts for accepted-connection
+  provenance, admission accounting, listener handoff, and buffered record
+  draining.
+- Added the investigation report and design decision log.
+- Added compact reviewable evidence for the 14-cell clean calibration, 68-cell
+  initial finite-queue/RTT screening, seven-cell qualification rerun, and final
+  68-cell qualified composite, plus the 0.25x- and 0.10x-BDP mechanism smoke
+  gates, the failed 0.05x-BDP outer-recovery gate and invalid-cell retry, and
+  the four invalid preflight-only Gilbert-Elliott burst-smoke cells, corrected
+  burst-recovery gate, exact invalid-cell rerun, bounded transport-aware gate,
+  exact TCP replacement, and qualified four-cell composite.
+- Added compact evidence for the complete 20-execution burst-breadth base, six
+  exact invalid-cell reruns, the permanently stopped composite path, and a
+  reproducible 162-execution inclusion/exclusion ledger.
+- Added a fail-closed campaign composite generator that requires complete source
+  manifests, identical runtime identities and matrix axes, valid replacement
+  evidence, and explicit per-cell source fingerprints.
+- Added an opt-in prospective interval-completion policy that can qualify only
+  allowlisted final-control failures with exact flow count, near-full
+  continuous interval output in every active direction, and complete
+  independent interface delivery. Missing policy remains strict, so historical
+  invalid evidence is unchanged.
+- Added common endpoint iperf version fingerprinting, exact restarted-server
+  process identity, and an attached-command BPF event cutoff with one second of
+  pre-summary quiescence. The fixed iperf executable hash and JSON-reported
+  client version are also reconciled.
+- Replaced concurrent shared-scalar BPF event summaries with versioned per-CPU
+  `count()` aggregation and exact raw/summary reconciliation while retaining
+  historical trace semantics.
+- Replaced the separate per-CPU aggregate for new evidence with monotonic
+  event/layer/CPU sequences, making every missing or duplicated detail row
+  directly detectable while retaining historical summary parsers. The final
+  production-form live validation reconciled 957 rows across eight streams.
+- Required explicit workload exit-status evidence and exact restarted process
+  identity for both inner and selected competitor iperf servers.
+- Added a pre-impairment endpoint-role check that binds physical and fixed
+  tunnel addresses, preventing reversed controllers from running local iperf
+  traffic.
+- Marked targeted cell manifests as non-qualifying subsets and barred them from
+  serving as qualified-composite bases. Composite bases now require explicit
+  full-matrix attestation and complete iperf identity, without changing exact
+  cell-fingerprint rerun semantics.
+- Predeclared a separate four-execution `2/25/90/1` burst-qualified smoke using
+  the prospective workload and tracing contracts.
+- Predeclared one bounded transport-aware rerun at unchanged `2/25/90/1`
+  severity. It adds a clean per-cell tunnel control, retains strict UDP
+  RTT/loss bands and exact TCP impairment/counter checks, and measures
+  post-loss TCP RTT amplification and adaptive realized loss as outcomes
+  without rescoring historical evidence.
+- Qualified the transport-aware burst gate with four valid cells and observed
+  TCP outer recovery. The provenance-bound composite contains three degraded
+  cells and one near-meltdown cell; neither TCP cell meets the full formal
+  meltdown definition.
+- Added the fixed 20-execution burst-breadth matrix released by that gate. It
+  compares matched TCP/UDP independent loss, lower and higher stationary
+  Gilbert-Elliott loss, longer bursts at the qualified stationary loss, and
+  doubled RTT without changing the qualified center reference.
+- Added a fingerprint-bound campaign safety latch. Clean-control acquisition
+  and validation now finish before shaping, while shaping, restoration, kernel,
+  and carrier safety failures stop the campaign and prevent that directory from
+  being resumed or targeted.
+- Made resume fail closed on campaign, selection, or cell-fingerprint drift and
+  on any partial or mismatched local cell directory. Generated Python bytecode
+  is excluded from source identity and deployment, so it cannot stale or
+  overwrite completed evidence.
+
+### Changed
+
+- Changed accepted TCP streams to carry stable, device-local nonzero connection
+  IDs through asynchronous Noise processing.
+- Changed authenticated accepted carriers to release pre-authentication
+  accounting and remain tracked until socket close or device teardown, while
+  retaining the five-second idle, 30-second absolute, 128-entry device, and
+  eight-entry per-source limits before authentication.
+- Changed the TCP read worker to process complete buffered records before
+  issuing another nonblocking receive and to reschedule bounded buffered work.
+- Changed campaign delivery and stall scoring from iperf block-completion
+  intervals to receiver tunnel-interface counters.
+- Changed campaign analysis to report measurement-window sampled peak queue
+  backlog in bytes and as a fraction of the configured byte limit.
+- Changed the campaign topology to the implementation's supported
+  dual-configured-endpoint mode and made both outer carrier tuples validity
+  requirements.
+- Changed TCP carrier validation to require complete 200 ms sampling coverage
+  across the workload, rather than accepting isolated snapshots.
+- Changed shaping cleanup to reject resources it does not own and verify exact
+  qdisc restoration.
+- Changed result publication to write `cell.json`, its fingerprint, and its
+  completion marker only after verified shaping cleanup. Campaign aggregation
+  now requires a complete manifest with every expected cell and fingerprint.
+- Changed BPF collection to use a bounded traced child process, allowing END
+  summaries to flush without accepting interrupted telemetry.
+- Changed BPF RTO/retransmission summaries to use atomic map increments so
+  concurrent CPUs cannot lose counter updates.
+- Changed framing resynchronization to retain a possible seven-byte split-header
+  suffix for the ordinary reader instead of issuing a separate one-shot read.
+- Changed the TCP writer to drive nonblocking sends until empty, partial, or
+  `EAGAIN`, then arm write-space notification for the retained exact frame.
+- Changed orchestration to use pinned, identity-only workstation SSH with no
+  host-to-host controller key.
+- Changed orchestration to support exact `-Cell` reruns and extended sampler
+  lifetime to cover ARM BPF attachment and high-RTT setup without replacing
+  already-qualified cells.
+- Updated the TCP transport design for authenticated temporary carriers and
+  buffered-record drain ordering.
+- Reconciled performance documentation with the completed mechanistic campaign,
+  separating the 106-cell released selection, 162 raw executions, and the
+  non-qualifying 20-cell breadth state.
+- Removed plaintext VM passwords and private keys from legacy node
+  documentation and its generated patch artifact.
+
+### Fixed
+
+- Fixed five-second rotation of an accepted stream after it had carried a valid
+  Noise handshake.
+- Fixed complete records being stranded in a bulk-read leftover buffer after a
+  subsequent `recvmsg()` returned `EAGAIN`.
+- Fixed campaign aggregation failures caused by UTF-8 BOM output.
+- Fixed false multi-flow stall bins caused by synchronized iperf interval
+  completion.
+- Fixed measurement-window filtering and bidirectional inner-RTO normalization.
+- Fixed workload-window qdisc accounting and forward-direction receiver
+  selection.
+- Fixed missing interface samples being interpreted as zero-delivery stalls.
+- Fixed incomplete campaigns, header-only BPF traces, one-snapshot carrier
+  captures, and stale resumed cells being accepted as negative meltdown
+  evidence.
+- Fixed competitor cells being accepted without successful, nonzero,
+  sufficiently long competing traffic.
+- Fixed resynchronization discarding a valid record header split across TCP
+  reads while preserving captured-socket tuple reconstruction and exact
+  leftover-buffer sizing from the parallel ARM lifetime work.
+- Fixed qdisc time-series records being split across lines, shaped-queue
+  accounting selecting the bypass queue, and samplers ending before the scored
+  workload window.
+- Fixed a TCP writer lost wakeup that stranded exactly 1,024 serialized frames
+  under concurrent flows because a pre-send writeability gate prevented
+  `EAGAIN` from arming `SOCK_NOSPACE`.
+- Preserved the accepted-socket initialization handoff across the parity
+  lifecycle integration so cleanup cannot free a temporary peer while the
+  listener is still installing callbacks or inspecting queued data.
+- Fixed concurrent BPF summary updates disagreeing with their emitted raw events.
+- Completed 14/14 valid/stable clean calibration cells and all 68 initial
+  screening executions. Seven exact-cell reruns replaced only the initial
+  evidence-invalid repetitions, qualifying all 68 screening cells as stable
+  with no degraded, near-meltdown, meltdown, or remaining invalid cells.
+- Completed the four-cell 35 Mb/s/200 ms/0.25x-BDP mechanism smoke as
+  valid/stable. It recorded zero queue drops and therefore correctly stopped
+  the 12 broader mechanism rows at their predeclared overflow gate.
+- Completed all 20 burst-breadth base executions and six exact reruns. The base
+  has 14 valid and six invalid records; reruns add five valid and one remaining
+  invalid record. No valid execution is formal meltdown.
+
+### Known limitations
+
+- The breadth phase demonstrates severe stalls, outer recovery, degradation,
+  and near-meltdown behavior, but no valid execution satisfies all three formal
+  conditions. AQM/ECN, dynamics, workload breadth, and endurance remain before
+  any general resilience claim.
+- The latest parity/lifecycle integration passed contracts and matching ARM
+  compilation but was not loaded for the recorded traffic campaign.
+- At high concurrency the bounded internal writer queue can still reject new
+  frames during sustained overload. This is distinct from the repaired stranded
+  queue and must be reported separately from outer TCP meltdown.
+- The earlier one-packet lag did not reproduce after recreating stale tunnels;
+  its exact stale Noise/carrier trigger remains an endurance concern.
+- TCP responder-only operation, automatic socket promotion, and automatic TCP
+  roaming remain unsupported.
+
+## 2026-07-14 parity validation
+
+### Added
+
 - Established project design and change logs as required release artifacts.
 - Added complete TCP configuration round-trip coverage for `showconf`,
   `setconf`, `syncconf`, and a real `wg-quick` save/down/up reload, with all

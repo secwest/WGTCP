@@ -70,6 +70,22 @@ class TcpStreamContract(unittest.TestCase):
         self.assertNotIn("wg_tcp_build_frame", worker)
         self.assertNotIn("struct wg_tcp_encap_header", worker)
 
+    def test_writer_arms_write_space_instead_of_prechecking_it(self) -> None:
+        writer = section(
+            self.socket,
+            "static void wg_tcp_arm_write_space(",
+            "void wg_peer_discard_partial_read(",
+        )
+        send_loop = writer[: writer.index("\nout:")]
+
+        self.assertIn("set_bit(SOCK_NOSPACE, &socket->flags);", writer)
+        self.assertIn("smp_mb__after_atomic();", writer)
+        self.assertIn("while (true)", send_loop)
+        self.assertNotIn("if (!sk_stream_is_writeable(sk))", send_loop)
+        self.assertNotIn("while (sk_stream_is_writeable(sk))", send_loop)
+        self.assertEqual(send_loop.count("wg_tcp_arm_write_space(socket);"), 2)
+        self.assertIn("sk_stream_is_writeable(sk)", writer[writer.index("\nout:") :])
+
     def test_writer_claim_and_teardown_share_the_socket_lifetime_lock(self) -> None:
         schedule_locked = section(
             self.socket,
@@ -162,16 +178,38 @@ class TcpStreamContract(unittest.TestCase):
         )
 
         self.assertGreaterEqual(
-            sync.count("wg_check_potential_header_validity("), 2
+            sync.count("wg_check_potential_header_validity("), 1
         )
         self.assertNotIn("wg_validate_header_checksum(potential_hdr)", sync)
-        self.assertIn("WG_MAX_PACKET_SIZE +", sync)
-        self.assertIn("WG_TCP_RESERVED_HEADER_SIZE + NET_IP_ALIGN", sync)
-        self.assertIn("skb_put(read_skb, read_bytes);", sync)
-        self.assertNotIn("skb_trim(read_skb, read_bytes)", sync)
-        self.assertIn("WG_TCP_ENCAP_HDR_LEN - 1", sync)
-        self.assertIn("peer->received_len = keep;", sync)
-        self.assertIn("kernel_recvmsg(socket,", sync)
+
+    def test_resynchronization_preserves_a_split_header_suffix(self) -> None:
+        sync = section(
+            self.socket,
+            "bool wg_sync_header(struct wg_peer *peer, struct socket *socket)\n{",
+            "bool wg_check_potential_header_validity(",
+        )
+
+        self.assertIn(
+            "suffix_len = min_t(size_t, peer->received_len,", sync
+        )
+        self.assertIn("memmove(peer->partial_skb->data,", sync)
+        self.assertIn("skb_trim(peer->partial_skb, suffix_len);", sync)
+        self.assertIn("peer->received_len = suffix_len;", sync)
+        self.assertNotIn("kernel_recvmsg(", sync)
+
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+        wait = reader.index("if (!wg_sync_header(peer, socket))")
+        suffix = reader.index(
+            "peer->received_len < WG_TCP_ENCAP_HDR_LEN", wait
+        )
+        preserve = reader.index("break;", suffix)
+        discard = reader.index("wg_peer_discard_partial_read(peer);", preserve)
+        self.assertLess(suffix, preserve)
+        self.assertLess(preserve, discard)
 
     def test_reader_rebinds_and_revalidates_after_resynchronization(self) -> None:
         reader = section(
@@ -191,6 +229,22 @@ class TcpStreamContract(unittest.TestCase):
         self.assertLess(revalidate, resize)
         self.assertIn("needed = peer->expected_len - peer->received_len", reader)
         self.assertIn("skb_headroom(peer->partial_skb)", reader)
+
+    def test_leftover_storage_matches_the_retained_suffix(self) -> None:
+        reader = section(
+            self.socket,
+            "void wg_tcp_read_worker(",
+            "void wg_tcp_data_ready(",
+        )
+        leftovers = section(
+            reader,
+            "size_t leftover_len = peer->received_len - peer->expected_len;",
+            "skb_set_tail_pointer(peer->partial_skb, peer->expected_len);",
+        )
+
+        self.assertIn("leftover_skb = alloc_skb(leftover_len +", leftovers)
+        self.assertNotIn("max_t(size_t,", leftovers)
+        self.assertIn("WG_TCP_RESERVED_HEADER_SIZE +", leftovers)
 
     def test_reader_drains_buffered_records_before_receiving_more(self) -> None:
         reader = section(

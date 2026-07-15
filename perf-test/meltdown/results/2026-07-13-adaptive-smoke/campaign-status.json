@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T00:31:39.8230589Z",
+  "expected_cells": [
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r1",
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r2",
+    "adaptive-smoke-r35-q010-r200-16f-udp-r1",
+    "adaptive-smoke-r35-q010-r200-16f-udp-r2"
+  ],
+  "completed_cells": [
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r1",
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r2",
+    "adaptive-smoke-r35-q010-r200-16f-udp-r1",
+    "adaptive-smoke-r35-q010-r200-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "3a9925c1ec5b8867e51c2624931aa44411db3bb37a14f84d8781cf0bee0bb0cd",
+  "cell_fingerprints": {
+    "adaptive-smoke-r35-q010-r200-16f-udp-r1": "6902449f3ea11a3bef17a68bf940ac130425d85df601fcc2defcba039eec7243",
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r2": "d94ff27f655fd4f2abeaab71024409de8b983854b5d8e529d0bb439ac6b810c5",
+    "adaptive-smoke-r35-q010-r200-16f-udp-r2": "5acba554b13dc77bb624e58ed11d4ecdd7078c5234b1f44863411014ca95a488",
+    "adaptive-smoke-r35-q010-r200-16f-tcp-r1": "05ae9e269d68d0a47b8b105f4e468035249bb1fe65c9afc732b0bf8bda262852"
+  }
+}

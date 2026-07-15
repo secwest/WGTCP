@@ -31,7 +31,9 @@ Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 > reload and the guest-owned fault-module lifecycle on both VMs.
 > See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
-> [design document](docs/TCP_TRANSPORT_DESIGN.md).
+> [design document](docs/TCP_TRANSPORT_DESIGN.md). Investigation decisions and
+> repository changes are tracked in the [design log](docs/DESIGN_LOG.md) and
+> [changelog](CHANGELOG.md).
 
 ## Design summary
 
@@ -244,11 +246,13 @@ validation.
 
 ## Performance and TCP-over-TCP behavior
 
-The repository includes an empirical application-level Azure campaign comparing
-TCP-WG and UDP-WG across x64/arm64, four latency tiers, and configured loss
-values from 0% to 20%. These are synthetic two-vCPU VM tests: bulk TCP uses four
-parallel streams, bulk UDP is capped at 1 Gbps, and injected loss is iid random.
-Its published tables contain striking results. Examples include:
+The repository contains two distinct evidence sets.
+
+The legacy application-level Azure campaign compares TCP-WG and UDP-WG across
+x64/arm64, four latency tiers, and configured loss values from 0% to 20%. These
+are synthetic two-vCPU VM tests: bulk TCP uses four parallel streams, bulk UDP
+is capped at 1 Gbps, and injected loss is iid random. Its published tables
+contain striking results. Examples include:
 
 - LAN x64 bulk TCP: 2789.4 Mbps over TCP-WG versus 2588.2 Mbps over UDP-WG on
   the clean cell.
@@ -259,37 +263,56 @@ Its published tables contain striking results. Examples include:
 - Clean high-latency x64 bulk TCP also shows the cost side: TCP-WG is 14% behind
   UDP-WG at the report's HIGH tier and 23% behind at MAX.
 
-No classic nested-TCP throughput collapse is visible in the published
-application tables, including the 60-second bulk runs. These real-world
-application tests support a working hypothesis: severe TCP-over-TCP meltdown
-may be a narrower, path- and workload-dependent condition than broad warnings
-first suggest. The campaign did not impair or instrument the physical outer TCP
-carrier, so it neither demonstrates general meltdown resilience nor identifies
-the boundary conditions.
-
-The executable harness applies `netem` to `wg-tcp0` or `wg-udp0` for tunneled
-runs, not demonstrably to the physical outer carrier. It therefore does not
-exercise outer TCP segment loss in the way required to validate retransmission,
-congestion-window recovery, or nested timer interaction. The stored data also
-lacks sufficient qdisc and outer retransmission evidence for a causal claim.
-Impairment is installed only on the client VM/interface, so the data and ACK
-directions were not symmetrically impaired either.
+No classic nested-TCP throughput collapse is visible in those application
+tables, including the 60-second bulk runs. That legacy harness impaired the
+WireGuard interface rather than demonstrably impairing and instrumenting the
+physical outer TCP carrier, so it does not establish general meltdown
+resilience or locate the boundary conditions.
 
 The report records a contrary stability event as well: a prolonged arm64,
 high-latency, configured 10-20% loss test wedged the VM network stack until a
 hard reboot. A later 360-second cap avoided the condition but did not establish
 a root-cause fix.
 
-The defensible conclusion is that the prototype produced unexpectedly strong
-published application results and makes the narrower-condition hypothesis worth
-testing directly. Establishing where meltdown begins still requires
-outer-interface random/burst loss, congestion and finite queues, reorder, many
-inner flows, TCP_INFO/retransmission capture, roaming, blackouts, and multi-hour
-soak tests.
+The newer mechanistic campaign tests the physical carrier path directly with
+selective finite queues, delay, random and Gilbert-Elliott loss, matched UDP
+controls, 16 inner flows, and synchronized delivery, qdisc, socket, carrier, and
+inner/outer retransmission telemetry. Its released pre-breadth inventory is
+106/106 complete: 98 valid (92 stable, five degraded, one near-meltdown), zero
+meltdown, and eight invalid.
+
+The subsequent 20-execution breadth base and six exact invalid-cell reruns add
+26 raw executions. Nineteen are valid (10 degraded and nine near-meltdown) and
+seven are invalid. Among the nine valid logical TCP breadth cells, goodput is
+0.07-1.09 Mb/s, 52.8%-94.0% of 100 ms bins stall, and every cell records outer
+recovery. Two pair stalls with significant decline but no qualifying inner-RTO
+rate; three pair stalls with a qualifying inner-RTO rate but no significant
+decline; four meet only the stall condition. No valid cell combines all three
+predeclared formal-meltdown conditions.
+
+Across every post-repair raw campaign, the audit contains 162 executions:
+122 valid (92 stable, 17 degraded, 13 near-meltdown), zero meltdown, and
+40 invalid. One earlier invalid corrected-burst rerun met all three conditions,
+but invalid evidence is never promoted. The breadth composite is also
+permanently disqualified because one random-loss TCP cell remained invalid
+after its sole allowed rerun.
+
+The defensible conclusion is therefore not that TCP-over-TCP effects are
+absent. Severe degradation, head-of-line stalls, inner timeouts, and outer
+recovery are demonstrated. Formal meltdown is not established because no valid
+execution contains the required stall, declining-goodput, and inner-RTO
+conditions together. Endurance, AQM/ECN, dynamic recovery, reordering, blackout,
+roaming, and broader workload tests remain before any resilience claim.
+
+The traffic evidence applies to its recorded runtime fingerprint. The later
+parity/lifecycle integration was contract-tested and built identically on both
+ARM hosts, but it was not loaded for another traffic campaign.
 
 See [`perf-test/REPORT.md`](perf-test/REPORT.md) for the published tables and
-[`docs/TCP_TRANSPORT_DESIGN.md`](docs/TCP_TRANSPORT_DESIGN.md#performance-evidence)
-for the methodology audit and required follow-up campaign.
+[`perf-test/meltdown/INVESTIGATION_STATUS.md`](perf-test/meltdown/INVESTIGATION_STATUS.md)
+and
+[`perf-test/meltdown/results/2026-07-14-final-audit/`](perf-test/meltdown/results/2026-07-14-final-audit/)
+for the mechanistic evidence and inventory.
 
 ## Repository structure
 

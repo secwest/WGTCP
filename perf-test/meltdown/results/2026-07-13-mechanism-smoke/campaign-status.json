@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T00:00:35.4027931Z",
+  "expected_cells": [
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r1",
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r2",
+    "mechanism-smoke-r35-q025-r200-16f-udp-r1",
+    "mechanism-smoke-r35-q025-r200-16f-udp-r2"
+  ],
+  "completed_cells": [
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r1",
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r2",
+    "mechanism-smoke-r35-q025-r200-16f-udp-r1",
+    "mechanism-smoke-r35-q025-r200-16f-udp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "a9927e52a1a1a05f9ddb33c2357dcade3e711b4151032e3d82481324a008d24b",
+  "cell_fingerprints": {
+    "mechanism-smoke-r35-q025-r200-16f-udp-r2": "52dbe716d69841591dd418fd46d2ded7f0c957cb50660ebb2071ba02ff63e712",
+    "mechanism-smoke-r35-q025-r200-16f-udp-r1": "3aae25a45b1952b830d0c4993dbb621fe6466afdb815c9030def52ca462e345c",
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r2": "27d43edd6cde7331993146cc9f03cd3e15668a70a5fe7d8aa9880f4d1eb6b6c4",
+    "mechanism-smoke-r35-q025-r200-16f-tcp-r1": "2af1cfd2113d44cb7204cf4580bf51430e25952df19a746cadcd1b210a577480"
+  }
+}

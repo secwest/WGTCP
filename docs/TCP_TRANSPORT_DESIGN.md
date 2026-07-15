@@ -245,10 +245,13 @@ WireGuard message receives cryptographic authentication.
 4. Only the per-peer write worker calls nonblocking `kernel_sendmsg`. It advances
    the same queued byte sequence after a short write and requeues the exact
    suffix; it never emits a second header or retransmits an emitted prefix.
-5. A full socket buffer returns `EAGAIN`; `sk_write_space` schedules the worker
-   to continue draining queued records when the TCP stack has room. A full
-   1024-frame queue rejects the newest record so a partially emitted head is
-   never discarded.
+5. The worker attempts the nonblocking send instead of stopping on a pre-send
+   writeability hint. A full socket buffer returns `EAGAIN`; the exact retained
+   frame is requeued before `SOCK_NOSPACE` is armed. A memory barrier plus the
+   final scheduler/lifetime-lock writeability recheck prevents a transition from
+   being missed, and `sk_write_space` schedules later draining without busy
+   looping. A full 1024-frame queue rejects the newest record so a partially
+   emitted head is never discarded.
 6. `TCP_NODELAY` is enabled on accepted and outbound sockets to avoid Nagle and
    delayed-ACK latency amplification.
 
@@ -266,9 +269,15 @@ The record write path is in
 3. It checks the framing checksum, rejects unknown type or flag values, enforces
    the WireGuard-message minimum and `WG_MAX_PACKET_SIZE`, handles an optional
    fragment header, and preserves leftover bytes when one receive contains
-   multiple records. The same validation is used while resynchronizing.
-4. It reconstructs synthetic IP and UDP headers from the TCP socket's endpoints.
-   This lets the existing WireGuard receive code obtain endpoint metadata and
+   multiple records. Complete buffered leftovers are drained before another
+   nonblocking socket read, and bounded worker batches reschedule themselves
+   while buffered records remain. Resynchronization uses the same validation,
+   retains at most seven bytes that could prefix a header split across reads,
+   and lets the ordinary reader append later bytes instead of issuing a second
+   one-shot socket read.
+4. It reconstructs synthetic IP and UDP headers from the live socket captured by
+   the read worker. This preserves connected source ports and IPv6 tuples while
+   letting the existing WireGuard receive code obtain endpoint metadata and
    reuse the normal handshake/data dispatch.
 5. The standard WireGuard pipeline authenticates the handshake or AEAD data,
    performs replay checks, applies AllowedIPs, updates timers, and only then
@@ -349,7 +358,9 @@ Each real or temporary peer owns read/write work items, scheduling locks, TCP
 state locks, and a send queue. Socket callbacks remain short; stream reads and
 writes run on workqueues. Pending accepted sockets are held on a device list
 protected by a spinlock and RCU operations. Claiming removes the entry once;
-the claimant is the sole owner that quiesces and destroys it. See
+the claimant is the sole owner that quiesces and destroys it. Cleanup cannot
+claim a newly published entry until the listener finishes installing callbacks,
+checking queued data, and releasing its initialization handoff. See
 [`peer.h`](../kernel/peer.h#L60-L116) and
 [`socket.c`](../kernel/socket.c#L4506-L4700).
 
@@ -645,8 +656,9 @@ Implemented controls include:
 - Cap each peer send queue at 1024 maximum-sized records and reject the newest
   record under pressure, preserving a partially emitted head.
 - Cap provisional objects at 128 per device, expire them after five idle
-  seconds or 30 total pre-authentication seconds, and retain one
-  claim/remove/destroy owner.
+  seconds or 30 total pre-authentication seconds, retain authenticated carriers
+  until socket close or device teardown, and retain one claim/remove/destroy
+  owner.
 - Cap unauthenticated provisional objects at eight per source and throttle each
   tracked source after a 32-accept burst in a one-second window. A fixed-size,
   deliberately lossy source table avoids attacker-controlled tracking
@@ -733,14 +745,15 @@ No design using one reliable ordered stream can make this risk disappear. The
 goal is bounded, observable degradation and a clear choice to retain UDP where
 its datagram semantics are preferable.
 
-The real-world application tests motivate a more specific working hypothesis:
-severe TCP-over-TCP meltdown may be a narrower, path- and workload-dependent
-condition than broad warnings first suggest. Harmful interaction may require a
-particular conjunction of outer loss or congestion, head-of-line blocking,
-enough multiplexed inner traffic and queue growth, and recovery delays long
-enough to engage both retransmission timers. The campaign did not impair or
-instrument the physical outer TCP carrier, so it neither demonstrates general
-meltdown resilience nor locates those boundary conditions.
+The legacy real-world application tests motivated a more specific working
+hypothesis: severe TCP-over-TCP meltdown may be a narrower, path- and
+workload-dependent condition than broad warnings first suggest. Harmful
+interaction may require a particular conjunction of outer loss or congestion,
+head-of-line blocking, enough multiplexed inner traffic and queue growth, and
+recovery delays long enough to engage both retransmission timers. That legacy
+campaign did not impair or instrument the physical outer TCP carrier, so it
+neither demonstrates general meltdown resilience nor locates those boundary
+conditions.
 
 ### Implemented properties that can help
 
@@ -786,7 +799,7 @@ meltdown resilience nor locates those boundary conditions.
 
 ## Performance evidence
 
-### Published campaign
+### Legacy published application campaign
 
 The published report describes eight isolated two-vCPU Azure VM pairs across
 x64 and arm64, four latency tiers, TCP and UDP WireGuard interfaces, four
@@ -858,25 +871,45 @@ until reboot; a 360-second workload ceiling avoided the condition rather than
 demonstrating a fix. See
 [`REPORT.md`](../perf-test/REPORT.md#L493-L514).
 
-### Required meltdown validation
+### Mechanistic finite-queue and burst evidence
 
-A release claim should require a new, reproducible campaign that:
+The newer fail-closed campaign selectively impairs the physical carrier path
+and verifies the live qdisc, finite queue, traffic, drops, cleanup, runtime
+identity, and clean controls. It compares matched TCP and UDP WireGuard cells
+while recording 100 ms inner delivery, carrier tuples, socket state, qdisc
+series, and inner/outer retransmission and RTO events.
 
-1. Applies impairment to the physical outer interface and verifies it with
-   before/after qdisc counters.
-2. Separates random non-congestive loss, burst loss, reordering, delay, bandwidth
-   bottlenecks, and finite queue congestion.
-3. Captures outer `TCP_INFO`, cwnd, RTT/RTO, SACK/retransmits, socket memory, and
-   per-record queue age alongside inner-flow metrics.
-4. Tests one and many inner TCP/UDP flows, short requests, interactive traffic,
-   flow fairness, and cross-flow head-of-line blocking.
-5. Includes blackouts longer than inner and outer RTOs, route changes, reconnect,
-   rekey, and endpoint roaming.
-6. Runs multi-hour soaks without workload time caps hiding a stall.
-7. Stores raw cells, exact scripts, kernel/tool commits, qdisc configuration,
-   and aggregate code so every table can be regenerated.
-8. Defines failure thresholds for queue growth, latency, kernel warnings, lost
-   connectivity, and required reboot, not throughput alone.
+Its pre-breadth released selection is 106/106 complete: 98 valid (92 stable,
+five degraded, one near-meltdown), zero meltdown, and eight invalid. The
+20-execution breadth base plus six bounded reruns contain 19 valid outcomes
+(10 degraded and nine near-meltdown) and seven invalid outcomes. Every valid
+logical TCP breadth cell has 52.8%-94.0% stalls and outer recovery, but the
+declining-goodput and inner-RTO conditions occur in different executions. No
+valid execution meets all three formal conditions.
+
+The full raw-execution audit is 162: 122 valid (92 stable, 17 degraded,
+13 near-meltdown), zero meltdown, and 40 invalid. This demonstrates severe
+degradation and nested recovery interaction, not immunity. An invalid earlier
+rerun met all three conditions and remains unscored. The breadth composite is
+also stopped because one cell remained invalid after its sole allowed rerun.
+See
+[`INVESTIGATION_STATUS.md`](../perf-test/meltdown/INVESTIGATION_STATUS.md) and
+the
+[`final audit`](../perf-test/meltdown/results/2026-07-14-final-audit/).
+
+### Remaining meltdown validation
+
+Before making a resilience claim, extend the fixed evidence contracts to:
+
+1. 10-minute and multi-hour endurance with post-impairment recovery measured
+   against the clean baseline.
+2. Reordering, jitter, blackout, reverse-only impairment, fq_codel/AQM, ECN,
+   competing traffic, bidirectional traffic, and multiple inner congestion
+   controls.
+3. Short-flow completion, fairness, route changes, reconnect, rekey, and
+   authenticated roaming.
+4. Exported production queue age, drop high-water marks, cwnd, RTT/RTO,
+   retransmission, parser-resync, and reconnect counters.
 
 ## Benefits analysis
 
@@ -884,7 +917,7 @@ A release claim should require a new, reproducible campaign that:
 |---|---|---|
 | Connectivity where UDP is blocked | Networks that permit raw TCP to the configured port | This is not HTTP/TLS camouflage and may still be blocked by policy or DPI |
 | Reuse of WireGuard identity and crypto | Operators wanting the same keys, peers, AllowedIPs, rekey, and keepalives | Both endpoints need the modified Linux implementation |
-| Potential outer-loss recovery | Non-congestive carrier loss where ordered reliable delivery is valuable | Can add latency and head-of-line blocking; the current campaign does not validate physical-carrier loss |
+| Potential outer-loss recovery | Non-congestive carrier loss where ordered reliable delivery is valuable | The mechanistic campaign validates recovery but also severe stalls; it does not establish general resilience |
 | Reliable delivery for inner UDP | Bulk or transactional UDP where completeness matters more than timeliness | Changes datagram loss semantics; late data may be worse than dropped data for real-time media |
 | Long-lived connection through stateful policy | TCP-friendly firewalls/NATs | Requires connection limits, keepalive validation, and half-open detection |
 | Operational choice | Separate TCP and UDP interfaces can serve different routes | Mode is device-wide, with additional configuration and resource cost |

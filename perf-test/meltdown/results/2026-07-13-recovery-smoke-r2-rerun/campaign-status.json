@@ -1,0 +1,15 @@
+{
+  "status": "complete",
+  "updated_at": "2026-07-14T01:00:22.9578230Z",
+  "expected_cells": [
+    "recovery-smoke-r35-q005-r200-16f-tcp-r2"
+  ],
+  "completed_cells": [
+    "recovery-smoke-r35-q005-r200-16f-tcp-r2"
+  ],
+  "failed_cells": [],
+  "campaign_fingerprint": "f18533c06e354f62aac4d48daf9774fa4368437632da3a889fa385511c1758c8",
+  "cell_fingerprints": {
+    "recovery-smoke-r35-q005-r200-16f-tcp-r2": "9f4c3c50e042c30f9aa59a51e642e973936baa6d84c050f4e4c9d6a0246d1e45"
+  }
+}

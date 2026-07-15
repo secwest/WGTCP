@@ -151,6 +151,43 @@ class TcpLifecycleContract(unittest.TestCase):
             create.index("INIT_WORK(&peer->tcp_write_work"),
         )
 
+    def test_listener_handoff_blocks_provisional_cleanup(self) -> None:
+        listener = section(
+            self.socket,
+            "int wg_tcp_listener_worker(",
+            "int wg_tcp_listener4_thread(",
+        )
+        add = final_section(
+            self.socket,
+            "int wg_add_tcp_socket_to_list(struct wg_device *wg, struct socket *receive_socket,",
+            "static void wg_finish_tcp_connection_init(",
+        )
+        finish = final_section(
+            self.socket,
+            "static void wg_finish_tcp_connection_init(struct wg_device *wg,",
+            "static void wg_touch_tcp_connection(",
+        )
+        claim = section(
+            self.socket,
+            "wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,",
+            "static void wg_destroy_temp_peer(",
+        )
+
+        publish = add.index("list_add_tail_rcu(&entry->tcp_connection_ll")
+        self.assertLess(add.index("entry->initializing = true;"), publish)
+        callbacks = listener.index(
+            "wg_setup_tcp_socket_callbacks(new_temp_peer, true);"
+        )
+        handoff = listener.index("wg_finish_tcp_connection_init(wg,", callbacks)
+        self.assertLess(callbacks, handoff)
+        self.assertIn("entry->initializing = false;", finish)
+        self.assertIn("socket->sk->sk_state) != TCP_ESTABLISHED", finish)
+        self.assertIn("READ_ONCE(entry->temp_peer->is_dead)", finish)
+        self.assertIn(
+            "mod_delayed_work(system_wq, &wg->tcp_cleanup_work, 0);", finish
+        )
+        self.assertIn("if (cleanup_only && entry->initializing)", claim)
+
     def test_live_temp_connections_age_out_and_keep_the_sweeper_armed(self) -> None:
         add = final_section(
             self.socket,
