@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ACTION="${1:-}"
-[[ -n "$ACTION" ]] || { echo "usage: $0 apply|clear|status [options]" >&2; exit 2; }
+[[ -n "$ACTION" ]] || { echo "usage: $0 apply|change-loss|clear|status [options]" >&2; exit 2; }
 shift
 
 IFACE=eth0
@@ -78,6 +78,42 @@ clear_shape() {
 	fi
 }
 
+validate_loss_options() {
+	[[ "$RTT_MS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+		{ echo "RTT must be numeric" >&2; exit 2; }
+	[[ "$LOSS_MODEL" == none || "$LOSS_MODEL" == random || "$LOSS_MODEL" == gemodel ]] ||
+		{ echo "unsupported loss model" >&2; exit 2; }
+	for value in "$JITTER_MS" "$LOSS_PCT" "$BURST_P" "$BURST_R" "$BURST_H" "$BURST_K"; do
+		[[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+			{ echo "delay and loss values must be numeric" >&2; exit 2; }
+	done
+	for value in "$LOSS_PCT" "$BURST_P" "$BURST_R" "$BURST_H" "$BURST_K"; do
+		awk -v value="$value" 'BEGIN { exit !(value <= 100) }' ||
+			{ echo "loss percentages must not exceed 100" >&2; exit 2; }
+	done
+}
+
+build_netem_args() {
+	local one_way_ms
+	one_way_ms="$(awk -v t="$RTT_MS" 'BEGIN { printf "%.3f", t/2 }')"
+	netem=(limit 100000)
+	if awk -v d="$one_way_ms" 'BEGIN { exit !(d > 0) }'; then
+		if awk -v j="$JITTER_MS" 'BEGIN { exit !(j > 0) }'; then
+			netem+=(delay "${one_way_ms}ms" "${JITTER_MS}ms" distribution normal)
+		else
+			netem+=(delay "${one_way_ms}ms")
+		fi
+	fi
+	case "$LOSS_MODEL" in
+	random)
+		netem+=(loss random "${LOSS_PCT}%")
+		;;
+	gemodel)
+		netem+=(loss gemodel "${BURST_P}%" "${BURST_R}%" "${BURST_H}%" "${BURST_K}%")
+		;;
+	esac
+}
+
 case "$ACTION" in
 clear)
 	clear_shape
@@ -93,6 +129,30 @@ status)
 		tc -s qdisc show dev "$IFB" || true
 	exit 0
 	;;
+change-loss)
+	[[ $EUID -eq 0 ]] ||
+		{ echo "shape-link.sh change-loss must run as root" >&2; exit 1; }
+	[[ -e "$MARKER" ]] ||
+		{ echo "no active meltdown shaping marker for $IFACE" >&2; exit 1; }
+	[[ -d "/sys/class/net/$IFB" ]] ||
+		{ echo "active IFB is unavailable: $IFB" >&2; exit 1; }
+	validate_loss_options
+	marker_rtt="$(python3 -c \
+		'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["rtt_ms"])' \
+		"$MARKER")"
+	awk -v configured="$marker_rtt" -v requested="$RTT_MS" \
+		'BEGIN { difference = configured - requested; if (difference < 0) difference = -difference; exit !(difference <= 0.001) }' ||
+		{ echo "requested RTT does not match the active shape" >&2; exit 1; }
+	build_netem_args
+	change_start_ns="$(date -u +%s%N)"
+	tc qdisc change dev "$IFB" root handle 40: netem "${netem[@]}"
+	change_end_ns="$(date -u +%s%N)"
+	qdisc_json="$(tc -s -j qdisc show dev "$IFB")"
+	[[ -n "$qdisc_json" ]] || { echo "empty IFB qdisc state" >&2; exit 1; }
+	printf '{"change_start_ns":%s,"change_end_ns":%s,"qdisc":%s}\n' \
+		"$change_start_ns" "$change_end_ns" "$qdisc_json"
+	exit 0
+	;;
 apply) ;;
 *) echo "unknown action: $ACTION" >&2; exit 2 ;;
 esac
@@ -105,8 +165,7 @@ esac
 	{ echo "rate and RTT must be numeric" >&2; exit 2; }
 [[ "$QUEUE_BDP" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "queue BDP must be numeric" >&2; exit 2; }
 [[ "$QUEUE_KIND" == bfifo || "$QUEUE_KIND" == fq_codel ]] || { echo "unsupported queue kind" >&2; exit 2; }
-[[ "$LOSS_MODEL" == none || "$LOSS_MODEL" == random || "$LOSS_MODEL" == gemodel ]] ||
-	{ echo "unsupported loss model" >&2; exit 2; }
+validate_loss_options
 
 mkdir -p "$STATE_DIR"
 clear_shape
@@ -131,7 +190,6 @@ tc -s -j filter show dev "$IFACE" ingress > "$STATE_DIR/${IFACE}.before-ingress.
 qdisc_signature > "$QDISC_SIGNATURE"
 queue_bytes="$(awk -v r="$RATE_MBPS" -v t="$RTT_MS" -v q="$QUEUE_BDP" \
 	'BEGIN { n=r*t*125*q; if (n < 16384) n=16384; printf "%.0f", n }')"
-one_way_ms="$(awk -v t="$RTT_MS" 'BEGIN { printf "%.3f", t/2 }')"
 
 printf '{"iface":"%s","ifb":"%s","peer_ip":"%s","rate_mbps":%s,"rtt_ms":%s,"queue_bdp":%s,"queue_bytes":%s,"queue_kind":"%s","loss_model":"%s","loss_pct":%s,"burst_p":%s,"burst_r":%s,"burst_h":%s,"burst_k":%s}\n' \
 	"$IFACE" "$IFB" "$PEER_IP" "$RATE_MBPS" "$RTT_MS" "$QUEUE_BDP" "$queue_bytes" "$QUEUE_KIND" "$LOSS_MODEL" "$LOSS_PCT" "$BURST_P" "$BURST_R" "$BURST_H" "$BURST_K" > "$MARKER"
@@ -164,22 +222,7 @@ modprobe ifb
 ip link add "$IFB" type ifb
 ip link set "$IFB" up
 
-netem=(limit 100000)
-if awk -v d="$one_way_ms" 'BEGIN { exit !(d > 0) }'; then
-	if awk -v j="$JITTER_MS" 'BEGIN { exit !(j > 0) }'; then
-		netem+=(delay "${one_way_ms}ms" "${JITTER_MS}ms" distribution normal)
-	else
-		netem+=(delay "${one_way_ms}ms")
-	fi
-fi
-case "$LOSS_MODEL" in
-random)
-	netem+=(loss random "${LOSS_PCT}%")
-	;;
-gemodel)
-	netem+=(loss gemodel "${BURST_P}%" "${BURST_R}%" "${BURST_H}%" "${BURST_K}%")
-	;;
-esac
+build_netem_args
 tc qdisc add dev "$IFB" root handle 40: netem "${netem[@]}"
 tc qdisc add dev "$IFACE" clsact
 

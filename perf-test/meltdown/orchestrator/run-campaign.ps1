@@ -19,6 +19,8 @@ param(
     [Parameter(Mandatory)] [string] $KnownHostsFile,
     [Parameter(Mandatory)] [string] $ResultsDir,
     [string] $AdminUser = "azureuser",
+    [string] $ExpectedHostA = "wgtcp-amp-b",
+    [string] $ExpectedHostB = "wgtcp-amp-a",
     [string] $RemoteSourceDir = "/home/azureuser/WireguardTCP-build",
     [string] $RemoteResultsDir = "/home/azureuser/wgtcp-meltdown-results",
     [string] $MatrixFile = "",
@@ -270,6 +272,7 @@ function Get-CellSafetyStopReasons {
             $_ -in @(
                 "baseline_preflight",
                 "kernel_anomaly",
+                "timed_impairment",
                 "unstable_tcp_carriers"
             )
         }
@@ -448,6 +451,10 @@ function Get-CampaignSourceFingerprint {
         $relative = [IO.Path]::GetRelativePath($meltdownRoot, $file.FullName)
         "$relative=$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
     }
+    $entries += "expected_host_a=$ExpectedHostA"
+    $entries += "expected_host_b=$ExpectedHostB"
+    $entries += "private_ip_a=$PrivateIpA"
+    $entries += "private_ip_b=$PrivateIpB"
     return Get-StringSha256 ($entries -join "`n")
 }
 
@@ -475,6 +482,19 @@ function Assert-MatrixValue {
     if ($Value -notmatch $Pattern) {
         throw "invalid matrix value for ${Name}: $Value"
     }
+}
+
+function Get-MatrixValue {
+    param(
+        [Parameter(Mandatory)] [psobject] $Row,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Default
+    )
+    $property = $Row.PSObject.Properties[$Name]
+    if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        return $Default
+    }
+    return [string]$property.Value
 }
 
 function Wait-RemoteFiles {
@@ -512,6 +532,23 @@ function Wait-RemoteFile {
     throw "remote readiness timeout: $Path"
 }
 
+function Wait-RemoteNonemptyFile {
+    param(
+        [Parameter(Mandatory)] [string] $HostName,
+        [Parameter(Mandatory)] [int] $Port,
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [int] $TimeoutSeconds
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-Remote $HostName $Port "test -s $(ConvertTo-ShellQuoted $Path)") {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "remote nonempty-file timeout: $Path"
+}
+
 function Invoke-Cell {
     param(
         [Parameter(Mandatory)] [pscustomobject] $Row,
@@ -543,6 +580,38 @@ function Invoke-Cell {
         $impairmentValidation = "strict"
     }
     Assert-MatrixValue "impairment_validation" $impairmentValidation "^(strict|transport_aware)$"
+    $impairmentSchedule = Get-MatrixValue $Row "impairment_schedule" "static"
+    Assert-MatrixValue "impairment_schedule" $impairmentSchedule "^(static|timed)$"
+    $lossEpochStart = Get-MatrixValue $Row "loss_epoch_start_s" ""
+    $lossEpochMs = Get-MatrixValue $Row "loss_epoch_ms" ""
+    $workloadDuration = Get-MatrixValue $Row "workload_duration_s" ([string]$Row.duration_s)
+    Assert-MatrixValue "workload_duration_s" $workloadDuration "^[1-9][0-9]*$"
+    if ([int]$workloadDuration -lt [int]$Row.duration_s) {
+        throw "workload duration cannot be shorter than scored duration"
+    }
+    if ($impairmentSchedule -eq "timed") {
+        Assert-MatrixValue "loss_epoch_start_s" $lossEpochStart "^[0-9]+([.][0-9]+)?$"
+        Assert-MatrixValue "loss_epoch_ms" $lossEpochMs "^[1-9][0-9]*$"
+        if ($Row.loss_model -eq "none") {
+            throw "timed impairment requires a nonzero loss model"
+        }
+        if ([int]$Row.competitor -ne 0) {
+            throw "timed impairment does not support a competitor flow"
+        }
+        if ($Row.direction -ne "reverse") {
+            throw "timed impairment currently requires reverse traffic"
+        }
+        $recoverySeconds = [double]$Row.duration_s - [double]$lossEpochStart -
+            ([double]$lossEpochMs / 1000.0)
+        if ($recoverySeconds -lt 60.0) {
+            throw "timed impairment must retain at least 60 seconds of recovery"
+        }
+        if ([int]$workloadDuration -lt [int]$Row.duration_s + 1) {
+            throw "timed impairment requires a one-second unscored guard"
+        }
+    } elseif ($lossEpochStart -or $lossEpochMs) {
+        throw "static impairment cannot declare a loss epoch"
+    }
 
     $cellId = "$($Row.stage)-$($Row.name)-$($Row.tunnel)-r$Repetition"
     $localCell = Join-Path (Join-Path $ResultsDir "cells") $cellId
@@ -552,14 +621,21 @@ function Invoke-Cell {
     $serverUnit = "wgtcp-sample-$safeId-a"
     $clientUnit = "wgtcp-sample-$safeId-b"
     $competitorUnit = "wgtcp-competitor-$safeId"
+    $clientWorkloadUnit = "wgtcp-workload-$safeId"
+    $serverImpairmentUnit = "wgtcp-impairment-$safeId-a"
+    $clientImpairmentUnit = "wgtcp-impairment-$safeId-b"
     # bpftrace attachment takes 10-15 seconds on the ARM hosts. Keep the qdisc,
     # interface, and socket samplers alive beyond that startup interval.
-    $sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 30
+    $sampleDuration = [int]$workloadDuration + [int]$Row.warmup_s + 30
     $shape = "/opt/wgtcp-meltdown/harness/shape-link.sh"
     $sample = "/opt/wgtcp-meltdown/harness/sample-endpoint.sh"
+    $timedImpairment = "/opt/wgtcp-meltdown/harness/timed-impairment.py"
     $serverShaped = $false
     $clientShaped = $false
     $cellJson = $null
+    [long]$workloadStartNs = 0
+    [long]$scheduledLossStartNs = 0
+    [long]$scheduledLossStopNs = 0
 
     if ($Row.tunnel -eq "tcp") {
         $tunnelInterface = "wg-mt-tcp"
@@ -569,13 +645,18 @@ function Invoke-Cell {
         $targetIp = "10.99.0.1"
     }
 
+    $activeLossModel = if ($impairmentSchedule -eq "timed") {
+        "none"
+    } else {
+        [string]$Row.loss_model
+    }
     $shapeArgs = @(
         "--iface eth0",
         "--rate-mbps $($Row.rate_mbps)",
         "--rtt-ms $($Row.rtt_ms)",
         "--queue-bdp $($Row.queue_bdp)",
         "--queue-kind $($Row.queue_kind)",
-        "--loss-model $($Row.loss_model)",
+        "--loss-model $activeLossModel",
         "--loss-pct $($Row.loss_pct)",
         "--burst-p $($Row.burst_p)",
         "--burst-r $($Row.burst_r)",
@@ -683,18 +764,83 @@ function Invoke-Cell {
             "bidir" { "--bidir" }
         }
         $iperfCommand = (
-            "set +e; /usr/bin/iperf3 -c $targetIp -p 5201 -t $($Row.duration_s) " +
+            "set +e; /usr/bin/iperf3 -c $targetIp -p 5201 -t $workloadDuration " +
             "-P $($Row.flows) -O $($Row.warmup_s) -i 0.1 -C $($Row.inner_cc) " +
             "--json --get-server-output $directionArgument " +
             "> $(ConvertTo-ShellQuoted "$remoteCellB/iperf3.json") " +
             "2> $(ConvertTo-ShellQuoted "$remoteCellB/iperf3.stderr"); " +
             "rc=`$?; printf '%s\n' `"`$rc`" > $(ConvertTo-ShellQuoted "$remoteCellB/workload.rc"); exit 0"
         )
-        Invoke-Remote $HostB $PortB $iperfCommand | Out-Null
+        if ($impairmentSchedule -eq "timed") {
+            try {
+                Invoke-Remote $HostB $PortB (
+                "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $clientWorkloadUnit) --collect --quiet " +
+                "/bin/bash -c $(ConvertTo-ShellQuoted $iperfCommand)"
+                ) | Out-Null
+                Wait-RemoteNonemptyFile $HostB $PortB "$remoteCellB/client/first-inner-data.txt" 10
+                $firstDataText = [string](
+                    Invoke-Remote $HostB $PortB (
+                    "awk 'NF {print `$1; exit}' " +
+                    "$(ConvertTo-ShellQuoted "$remoteCellB/client/first-inner-data.txt")"
+                    ) | Select-Object -Last 1
+                )
+                $firstDataText = $firstDataText.Trim()
+                if ($firstDataText -notmatch "^[0-9]+([.][0-9]+)?$") {
+                    throw "could not obtain the receiver first-data timestamp"
+                }
+                $workloadStartNs = [long][decimal]::Round(
+                    [decimal]$firstDataText * 1000000000
+                )
+                $scheduledLossStartNs = $workloadStartNs + [long][Math]::Round(
+                    ([double]$Row.warmup_s + [double]$lossEpochStart) * 1000000000.0
+                )
+                $scheduledLossStopNs = $scheduledLossStartNs + [long]$lossEpochMs * 1000000L
+                $stateMarker = "/run/wgtcp-meltdown/eth0.active"
+                $timedArguments = @(
+                    "python3 $timedImpairment",
+                    "--shape-link $shape",
+                    "--iface eth0",
+                    "--rtt-ms $($Row.rtt_ms)",
+                    "--loss-model $($Row.loss_model)",
+                    "--loss-pct $($Row.loss_pct)",
+                    "--burst-p $($Row.burst_p)",
+                    "--burst-r $($Row.burst_r)",
+                    "--burst-h $($Row.burst_h)",
+                    "--burst-k $($Row.burst_k)",
+                    "--start-ns $scheduledLossStartNs",
+                    "--duration-ms $lossEpochMs",
+                    "--state-marker $stateMarker"
+                ) -join " "
+                Invoke-Remote $HostA $PortA (
+                "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverImpairmentUnit) --collect --quiet " +
+                "$timedArguments --event-log $(ConvertTo-ShellQuoted "$remoteCellA/impairment-events.jsonl") " +
+                "--ready-file $(ConvertTo-ShellQuoted "$remoteCellA/impairment-ready") " +
+                "--done-file $(ConvertTo-ShellQuoted "$remoteCellA/impairment-done")"
+                ) | Out-Null
+                Invoke-Remote $HostB $PortB (
+                "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $clientImpairmentUnit) --collect --quiet " +
+                "$timedArguments --event-log $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-events.jsonl") " +
+                "--ready-file $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-ready") " +
+                "--done-file $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-done")"
+                ) | Out-Null
+                Wait-RemoteFiles "$remoteCellA/impairment-ready" "$remoteCellB/client/impairment-ready" 10
+                $transitionTimeout = [int][Math]::Ceiling(
+                    [double]$Row.warmup_s + [double]$lossEpochStart +
+                    [double]$lossEpochMs / 1000.0 + 10.0
+                )
+                Wait-RemoteFiles "$remoteCellA/impairment-done" "$remoteCellB/client/impairment-done" $transitionTimeout
+                Wait-RemoteFile $HostB $PortB "$remoteCellB/workload.rc" (
+                    [int]$workloadDuration + [int]$Row.warmup_s + 30
+                )
+            } catch {
+                throw "safety timed impairment failed: $($_.Exception.Message)"
+            }
+        } else {
+            Invoke-Remote $HostB $PortB $iperfCommand | Out-Null
+        }
         if ([int]$Row.competitor -eq 1) {
             Wait-RemoteFile $HostB $PortB "$remoteCellB/competitor.rc" ($competitorDuration + 30)
         }
-
         Wait-RemoteFiles "$remoteCellA/done" "$remoteCellB/client/done" ($sampleDuration + 30)
         Invoke-RemoteSafe $HostA $PortA "sudo systemctl stop $(ConvertTo-ShellQuoted "$serverUnit.service") 2>/dev/null || true"
         Invoke-RemoteSafe $HostB $PortB "sudo systemctl stop $(ConvertTo-ShellQuoted "$clientUnit.service") 2>/dev/null || true"
@@ -731,9 +877,16 @@ function Invoke-Cell {
             "burst_k=$($Row.burst_k)",
             "flows=$($Row.flows)",
             "duration_s=$($Row.duration_s)",
+            "workload_duration_s=$workloadDuration",
             "warmup_s=$($Row.warmup_s)",
             "workload_completion=$workloadCompletion",
             "impairment_validation=$impairmentValidation",
+            "impairment_schedule=$impairmentSchedule",
+            "loss_epoch_start_s=$lossEpochStart",
+            "loss_epoch_ms=$lossEpochMs",
+            "scheduled_workload_start_ns=$workloadStartNs",
+            "scheduled_loss_start_ns=$scheduledLossStartNs",
+            "scheduled_loss_stop_ns=$scheduledLossStopNs",
             "inner_cc=$($Row.inner_cc)",
             "direction=$($Row.direction)",
             "competitor=$($Row.competitor)",
@@ -762,6 +915,9 @@ function Invoke-Cell {
         Invoke-RemoteSafe $HostA $PortA "sudo systemctl stop $(ConvertTo-ShellQuoted "$serverUnit.service") 2>/dev/null || true"
         Invoke-RemoteSafe $HostB $PortB "sudo systemctl stop $(ConvertTo-ShellQuoted "$clientUnit.service") 2>/dev/null || true"
         Invoke-RemoteSafe $HostB $PortB "sudo systemctl stop $(ConvertTo-ShellQuoted "$competitorUnit.service") 2>/dev/null || true"
+        Invoke-RemoteSafe $HostB $PortB "sudo systemctl stop $(ConvertTo-ShellQuoted "$clientWorkloadUnit.service") 2>/dev/null || true"
+        Invoke-RemoteSafe $HostA $PortA "sudo systemctl stop $(ConvertTo-ShellQuoted "$serverImpairmentUnit.service") 2>/dev/null || true"
+        Invoke-RemoteSafe $HostB $PortB "sudo systemctl stop $(ConvertTo-ShellQuoted "$clientImpairmentUnit.service") 2>/dev/null || true"
         if ($serverShaped) {
             try {
                 Invoke-Remote $HostA $PortA "sudo $shape clear --iface eth0" | Out-Null
@@ -801,16 +957,13 @@ function Invoke-Cell {
     return ($cellJson -join [Environment]::NewLine)
 }
 
-$expectedPrivateIpA = "10.20.1.6"
-$expectedPrivateIpB = "10.20.1.7"
-if ($PrivateIpA -ne $expectedPrivateIpA -or $PrivateIpB -ne $expectedPrivateIpB) {
-    throw "physical addresses do not match the fixed endpoint roles"
-}
+Assert-MatrixValue "ExpectedHostA" $ExpectedHostA "^[A-Za-z0-9.-]+$"
+Assert-MatrixValue "ExpectedHostB" $ExpectedHostB "^[A-Za-z0-9.-]+$"
 Invoke-Remote $HostA $PortA (
-    Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA
+    Get-EndpointIdentityVerificationCommand $ExpectedHostA $PrivateIpA
 ) | Out-Null
 Invoke-Remote $HostB $PortB (
-    Get-EndpointIdentityVerificationCommand "wgtcp-amp-a" $PrivateIpB
+    Get-EndpointIdentityVerificationCommand $ExpectedHostB $PrivateIpB
 ) | Out-Null
 
 $archive = Join-Path $env:TEMP "wgtcp-meltdown-$PID.tar.gz"
@@ -1051,6 +1204,8 @@ try {
                     $safetyStopReasons = @("shape_application")
                 } elseif ($_.Exception.Message -like "safety runtime identity failed:*") {
                     $safetyStopReasons = @("runtime_identity")
+                } elseif ($_.Exception.Message -like "safety timed impairment failed:*") {
+                    $safetyStopReasons = @("timed_impairment")
                 } elseif ($_.Exception.Message -like "shape restoration failed:*") {
                     $safetyStopReasons = @("shape_restoration")
                 }

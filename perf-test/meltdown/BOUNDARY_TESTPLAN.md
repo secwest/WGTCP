@@ -72,6 +72,13 @@ impaired epoch: D s
 clean recovery observation: 60 s
 ```
 
+The runner adds one unscored second after this window so command latency cannot
+shorten the required 60 seconds of verified clean recovery. Recovery metrics
+and right-censoring remain capped at the predeclared 60-second boundary.
+Each transition must complete within 100 ms of its requested absolute time,
+while the stricter inter-endpoint transition-skew bound remains 20 ms. Phase
+metrics use the recorded qdisc change intervals rather than requested times.
+
 The scored workload duration is therefore `75 + D` seconds after iperf's
 omitted warm-up. Rate, RTT, finite queue, and selective traffic filters remain
 installed during all three measured phases. Only the loss component changes at

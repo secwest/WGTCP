@@ -620,6 +620,187 @@ def zero_delivery_runs(
     return runs
 
 
+def rolling_minimum_mbps(values: list[float], window_bins: int) -> float | None:
+    if window_bins <= 0 or len(values) < window_bins:
+        return None
+    return (
+        min(
+            statistics.fmean(values[index : index + window_bins])
+            for index in range(len(values) - window_bins + 1)
+        )
+        / 1_000_000
+    )
+
+
+def dynamic_episode_metrics(
+    values: list[float],
+    measurement_start_ns: int | None,
+    measurement_end_ns: int | None,
+    impairment_start_ns: int | None,
+    impairment_stop_ns: int | None,
+    recovery_start_ns: int | None,
+    timed_events: list[dict[str, Any]],
+    tunnel: str,
+) -> tuple[dict[str, int | float | bool | None], list[str]]:
+    defaults: dict[str, int | float | bool | None] = {
+        "pre_median_mbps": None,
+        "pre_mean_mbps": None,
+        "impairment_mean_mbps": None,
+        "post_0_1s_mbps": None,
+        "post_1_5s_mbps": None,
+        "post_5_10s_mbps": None,
+        "post_10_30s_mbps": None,
+        "post_30_60s_mbps": None,
+        "episode_min_1s_mbps": None,
+        "episode_min_5s_mbps": None,
+        "episode_longest_stall_ms": None,
+        "episode_stall_fraction_100ms": None,
+        "bandwidth_deficit_mbit": None,
+        "first_delivery_after_recovery_ms": None,
+        "recovery_90_ms": None,
+        "recovery_90_right_censored": None,
+        "episode_outer_recovery_events": None,
+        "mechanism_observed": False,
+        "user_visible_disruption": False,
+        "episode_below_half_pre": False,
+        "quasi_meltdown_episode": False,
+    }
+    if (
+        not values
+        or measurement_start_ns is None
+        or measurement_end_ns is None
+        or impairment_start_ns is None
+        or impairment_stop_ns is None
+        or recovery_start_ns is None
+        or not (
+            measurement_start_ns
+            < impairment_start_ns
+            < impairment_stop_ns
+            <= recovery_start_ns
+            < measurement_end_ns
+        )
+    ):
+        return defaults, ["dynamic_phase_window"]
+
+    episode_end_ns = min(
+        measurement_end_ns,
+        recovery_start_ns + 60_000_000_000,
+    )
+    indexed = [
+        (
+            measurement_start_ns + index * DELIVERY_BIN_NS,
+            measurement_start_ns + (index + 0.5) * DELIVERY_BIN_NS,
+            value,
+        )
+        for index, value in enumerate(values)
+    ]
+
+    def phase(start_ns: int, end_ns: int) -> list[float]:
+        return [
+            value
+            for _, center_ns, value in indexed
+            if start_ns <= center_ns < end_ns
+        ]
+
+    pre_values = phase(measurement_start_ns, impairment_start_ns)
+    impairment_values = phase(impairment_start_ns, impairment_stop_ns)
+    episode_values = phase(impairment_start_ns, episode_end_ns)
+    if len(pre_values) < 100 or not impairment_values:
+        return defaults, ["dynamic_phase_coverage"]
+    pre_median = statistics.median(pre_values)
+    if pre_median <= 0:
+        return defaults, ["dynamic_baseline"]
+
+    recovery_values = [
+        (start_ns, value)
+        for start_ns, center_ns, value in indexed
+        if recovery_start_ns <= center_ns < episode_end_ns
+    ]
+    first_delivery_ms = next(
+        (
+            max(0.0, (start_ns - recovery_start_ns) / 1_000_000)
+            for start_ns, value in recovery_values
+            if value > 0
+        ),
+        None,
+    )
+    recovery_90_ms: float | None = None
+    for index in range(max(0, len(recovery_values) - 99)):
+        first = [value for _, value in recovery_values[index : index + 50]]
+        second = [value for _, value in recovery_values[index + 50 : index + 100]]
+        if (
+            statistics.fmean(first) >= pre_median * 0.90
+            and statistics.fmean(second) >= pre_median * 0.90
+            and sum(value <= 0 for value in first) / len(first) <= 0.05
+            and sum(value <= 0 for value in second) / len(second) <= 0.05
+        ):
+            recovery_90_ms = max(
+                0.0,
+                (recovery_values[index][0] - recovery_start_ns) / 1_000_000,
+            )
+            break
+    recovery_censored = recovery_90_ms is None
+    episode_longest_stall_ms = longest_zero_run(episode_values) * 100
+    episode_min_5s = rolling_minimum_mbps(episode_values, 50)
+    below_half_pre = bool(
+        episode_min_5s is not None
+        and episode_min_5s <= pre_median / 1_000_000 * 0.50
+    )
+    outer_events = sum(
+        event.get("layer") == "outer"
+        and event.get("event") in {"retrans", "rto"}
+        and impairment_start_ns <= as_int(event.get("timestamp_ns")) <= episode_end_ns
+        for event in timed_events
+    )
+    mechanism_observed = tunnel == "tcp" and outer_events > 0
+    user_visible = bool(
+        episode_longest_stall_ms >= 1000
+        or recovery_censored
+        or (recovery_90_ms is not None and recovery_90_ms >= 5000)
+    )
+
+    def phase_mean_mbps(start_offset_s: float, end_offset_s: float) -> float | None:
+        phase_values = phase(
+            recovery_start_ns + round(start_offset_s * 1_000_000_000),
+            min(
+                episode_end_ns,
+                recovery_start_ns + round(end_offset_s * 1_000_000_000),
+            ),
+        )
+        return statistics.fmean(phase_values) / 1_000_000 if phase_values else None
+
+    return {
+        **defaults,
+        "pre_median_mbps": pre_median / 1_000_000,
+        "pre_mean_mbps": statistics.fmean(pre_values) / 1_000_000,
+        "impairment_mean_mbps": statistics.fmean(impairment_values) / 1_000_000,
+        "post_0_1s_mbps": phase_mean_mbps(0, 1),
+        "post_1_5s_mbps": phase_mean_mbps(1, 5),
+        "post_5_10s_mbps": phase_mean_mbps(5, 10),
+        "post_10_30s_mbps": phase_mean_mbps(10, 30),
+        "post_30_60s_mbps": phase_mean_mbps(30, 60),
+        "episode_min_1s_mbps": rolling_minimum_mbps(episode_values, 10),
+        "episode_min_5s_mbps": episode_min_5s,
+        "episode_longest_stall_ms": episode_longest_stall_ms,
+        "episode_stall_fraction_100ms": (
+            sum(value <= 0 for value in episode_values) / len(episode_values)
+        ),
+        "bandwidth_deficit_mbit": sum(
+            max(0.0, pre_median - value) * DELIVERY_BIN_NS / 1_000_000_000
+            for value in episode_values
+        )
+        / 1_000_000,
+        "first_delivery_after_recovery_ms": first_delivery_ms,
+        "recovery_90_ms": recovery_90_ms,
+        "recovery_90_right_censored": recovery_censored,
+        "episode_outer_recovery_events": outer_events,
+        "mechanism_observed": mechanism_observed,
+        "user_visible_disruption": user_visible,
+        "episode_below_half_pre": below_half_pre,
+        "quasi_meltdown_episode": False,
+    }, []
+
+
 def stall_timeline(cell_dir: Path) -> dict[str, Any]:
     document = analyze_cell(cell_dir)
     axes = document.get("axes", {})
@@ -736,11 +917,12 @@ def impairment_ping_validation(
     transport_aware_tcp = (
         policy_valid and policy == "transport_aware" and tunnel == "tcp"
     )
+    timed_impairment = axes.get("impairment_schedule") == "timed"
     rtt_valid = (
         measured_rtt is not None
         and measured_rtt >= max(0.0, target_rtt * 0.70)
         and (
-            transport_aware_tcp
+            transport_aware_tcp and not timed_impairment
             or measured_rtt <= target_rtt * 1.35 + 5.0
         )
     )
@@ -763,7 +945,18 @@ def impairment_ping_validation(
     issues: list[str] = []
     if not policy_valid:
         issues.append("impairment_validation_policy")
-    if ping["ping_loss_pct"] is None or ping["ping_loss_pct"] >= 100:
+    if (
+        ping["ping_loss_pct"] is None
+        or ping["ping_loss_pct"] >= 100
+        or (
+            timed_impairment
+            and (
+                ping["ping_transmitted"] != 10
+                or ping["ping_received"] != 10
+                or ping["ping_loss_pct"] != 0.0
+            )
+        )
+    ):
         issues.append("tunnel_preflight")
     if baseline_valid is False:
         issues.append("baseline_preflight")
@@ -1348,12 +1541,14 @@ def qdisc_window_values(
     key: str,
     start_ns: int | None,
     end_ns: int | None,
+    handle_prefix: str = "20:",
+    series_name: str = "qdisc-series.jsonl",
 ) -> list[int] | None:
     if start_ns is None or end_ns is None:
         return None
     samples: list[tuple[int, int]] = []
     try:
-        lines = (endpoint / "qdisc-series.jsonl").read_text(
+        lines = (endpoint / series_name).read_text(
             encoding="utf-8-sig"
         ).splitlines()
     except OSError:
@@ -1364,7 +1559,7 @@ def qdisc_window_values(
         except json.JSONDecodeError:
             continue
         timestamp_ns = parse_timestamp_ns(str(row.get("timestamp", "")))
-        qdisc = find_qdisc_in(row.get("qdisc"), kind, handle_prefix="20:")
+        qdisc = find_qdisc_in(row.get("qdisc"), kind, handle_prefix=handle_prefix)
         metric = qdisc_metric(qdisc, key)
         if timestamp_ns is not None and metric is not None:
             samples.append((timestamp_ns, metric))
@@ -1389,8 +1584,18 @@ def qdisc_window_delta(
     key: str,
     start_ns: int | None,
     end_ns: int | None,
+    handle_prefix: str = "20:",
+    series_name: str = "qdisc-series.jsonl",
 ) -> int | None:
-    values = qdisc_window_values(endpoint, kind, key, start_ns, end_ns)
+    values = qdisc_window_values(
+        endpoint,
+        kind,
+        key,
+        start_ns,
+        end_ns,
+        handle_prefix,
+        series_name,
+    )
     if values is None:
         return None
     return max(0, values[-1] - values[0])
@@ -1402,9 +1607,450 @@ def qdisc_window_peak(
     key: str,
     start_ns: int | None,
     end_ns: int | None,
+    handle_prefix: str = "20:",
+    series_name: str = "qdisc-series.jsonl",
 ) -> int | None:
-    values = qdisc_window_values(endpoint, kind, key, start_ns, end_ns)
+    values = qdisc_window_values(
+        endpoint,
+        kind,
+        key,
+        start_ns,
+        end_ns,
+        handle_prefix,
+        series_name,
+    )
     return max(values) if values else None
+
+
+def load_jsonl_objects(path: Path) -> tuple[list[dict[str, Any]], bool]:
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return [], False
+    rows: list[dict[str, Any]] = []
+    valid = True
+    for line in lines:
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            valid = False
+            continue
+        if not isinstance(row, dict):
+            valid = False
+            continue
+        rows.append(row)
+    return rows, valid
+
+
+def qdisc_series_rows(
+    endpoint: Path,
+    series_name: str,
+    kind: str,
+    handle_prefix: str,
+) -> tuple[list[tuple[int, int, dict[str, Any]]], bool]:
+    rows, valid = load_jsonl_objects(endpoint / series_name)
+    samples: list[tuple[int, int, dict[str, Any]]] = []
+    for row in rows:
+        timestamp_ns = parse_timestamp_ns(str(row.get("timestamp", "")))
+        query_start_ns = as_int(row.get("query_start_ns"))
+        query_end_ns = as_int(row.get("query_end_ns"))
+        qdiscs = row.get("qdisc")
+        qdisc = find_qdisc_in(qdiscs, kind, handle_prefix)
+        if (
+            timestamp_ns is None
+            or query_start_ns <= 0
+            or query_end_ns < query_start_ns
+            or not isinstance(qdiscs, list)
+            or len(qdiscs) != 1
+            or qdisc is None
+        ):
+            valid = False
+            continue
+        samples.append((query_start_ns, query_end_ns, qdisc))
+    samples.sort(key=lambda item: item[0])
+    return samples, valid
+
+
+def qdisc_phase_coverage_valid(
+    samples: list[tuple[int, int, dict[str, Any]]],
+    start_ns: int,
+    end_ns: int,
+) -> bool:
+    return bool(
+        samples
+        and samples[0][0] - start_ns <= 100_000_000
+        and end_ns - samples[-1][1] <= 100_000_000
+        and all(
+            right[0] - left[1] <= 250_000_000
+            for left, right in zip(samples, samples[1:])
+        )
+    )
+
+
+def counter_metrics_from_values(
+    packet_values: list[int | None] | None,
+    drop_values: list[int | None] | None,
+) -> dict[str, int | float | None]:
+    packets = (
+        packet_values[-1] - packet_values[0]
+        if packet_values
+        and len(packet_values) >= 2
+        and all(isinstance(value, int) for value in packet_values)
+        and all(left <= right for left, right in zip(packet_values, packet_values[1:]))
+        else None
+    )
+    drops = (
+        drop_values[-1] - drop_values[0]
+        if drop_values
+        and len(drop_values) >= 2
+        and all(isinstance(value, int) for value in drop_values)
+        and all(left <= right for left, right in zip(drop_values, drop_values[1:]))
+        else None
+    )
+    total = (
+        packets + drops
+        if packets is not None and drops is not None
+        else None
+    )
+    return {
+        "packets": packets,
+        "drops": drops,
+        "loss_fraction": (
+            drops / total
+            if drops is not None and total is not None and total > 0
+            else None
+        ),
+    }
+
+
+def timed_counter_issues(
+    metrics: dict[str, int | float | None],
+    axes: dict[str, str],
+) -> list[str]:
+    packets = metrics["packets"]
+    drops = metrics["drops"]
+    loss_fraction = metrics["loss_fraction"]
+    if not isinstance(packets, int) or not isinstance(drops, int):
+        return ["impairment_counter_window"]
+    if packets + drops <= 0:
+        return ["netem_path_unused"]
+    if drops <= 0 or not isinstance(loss_fraction, float):
+        return ["netem_loss_not_realized"]
+    if not netem_loss_band_required(axes):
+        return []
+    expected = expected_netem_loss_fraction(axes)
+    if (
+        expected is None
+        or loss_fraction < expected * 0.5
+        or loss_fraction > min(1.0, expected * 2.0)
+    ):
+        return ["netem_loss_rate"]
+    return []
+
+
+def timed_impairment_evidence(
+    cell_dir: Path,
+    axes: dict[str, str],
+    measurement_start_ns: int | None,
+    measurement_end_ns: int | None,
+) -> tuple[
+    dict[str, int | float | bool | None],
+    dict[str, dict[str, int | float | None]],
+    list[str],
+]:
+    metrics: dict[str, int | float | bool | None] = {
+        "timed_impairment_valid": False,
+        "impairment_start_ns": None,
+        "impairment_stop_ns": None,
+        "recovery_start_ns": None,
+        "impairment_start_skew_ms": None,
+        "impairment_stop_skew_ms": None,
+        "transition_clock_error_bound_ms": None,
+        "actual_loss_epoch_ms": None,
+        "actual_loss_epoch_offset_s": None,
+        "recovery_observation_s": None,
+    }
+    endpoint_metrics: dict[str, dict[str, int | float | None]] = {}
+    issues: list[str] = []
+    scheduled_start_ns = as_int(axes.get("scheduled_loss_start_ns"))
+    scheduled_stop_ns = as_int(axes.get("scheduled_loss_stop_ns"))
+    expected_duration_ns = as_int(axes.get("loss_epoch_ms")) * 1_000_000
+    if (
+        scheduled_start_ns <= 0
+        or scheduled_stop_ns - scheduled_start_ns != expected_duration_ns
+    ):
+        return metrics, endpoint_metrics, ["impairment_transition_schedule"]
+
+    endpoint_events: dict[str, dict[str, dict[str, Any]]] = {}
+    for endpoint_name in ("client", "server"):
+        endpoint = cell_dir / endpoint_name
+        rows, rows_valid = load_jsonl_objects(endpoint / "impairment-events.jsonl")
+        if (
+            not rows_valid
+            or not (endpoint / "impairment-ready").is_file()
+            or not (endpoint / "impairment-done").is_file()
+            or [row.get("event") for row in rows] != ["loss_start", "loss_stop"]
+        ):
+            issues.append("impairment_transition_evidence")
+            continue
+        events = {str(row["event"]): row for row in rows}
+        endpoint_events[endpoint_name] = events
+        for event_name, expected_requested_ns, expected_model in (
+            ("loss_start", scheduled_start_ns, axes.get("loss_model")),
+            ("loss_stop", scheduled_stop_ns, "none"),
+        ):
+            event = events[event_name]
+            requested_ns = as_int(event.get("requested_ns"))
+            command_start_ns = as_int(event.get("command_start_ns"))
+            command_end_ns = as_int(event.get("command_end_ns"))
+            change_start_ns = as_int(event.get("change_start_ns"))
+            change_end_ns = as_int(event.get("change_end_ns"))
+            clock_error_bound_ns = as_int(event.get("clock_error_bound_ns"))
+            if (
+                event.get("success") is not True
+                or event.get("loss_model") != expected_model
+                or requested_ns != expected_requested_ns
+                or not (
+                    requested_ns
+                    <= command_start_ns
+                    <= change_start_ns
+                    <= change_end_ns
+                    <= command_end_ns
+                )
+                or as_int(event.get("applied_ns")) != change_end_ns
+                or change_end_ns - requested_ns > 100_000_000
+                or not 0 <= clock_error_bound_ns <= 5_000_000
+            ):
+                issues.append("impairment_transition_schedule")
+            event_qdiscs = event.get("qdisc")
+            netem = find_qdisc_in(event_qdiscs, "netem", "40:")
+            expected_axes = (
+                axes if event_name == "loss_start" else {**axes, "loss_model": "none"}
+            )
+            if (
+                not isinstance(event_qdiscs, list)
+                or len(event_qdiscs) != 1
+                or netem_base_configuration_issues(netem, expected_axes)
+                or netem_loss_configuration_issues(netem, expected_axes)
+            ):
+                issues.append("impairment_transition_configuration")
+
+    if len(endpoint_events) != 2:
+        return metrics, endpoint_metrics, issues
+
+    start_intervals = [
+        (
+            as_int(endpoint_events[name]["loss_start"].get("change_start_ns")),
+            as_int(endpoint_events[name]["loss_start"].get("change_end_ns")),
+        )
+        for name in ("client", "server")
+    ]
+    stop_intervals = [
+        (
+            as_int(endpoint_events[name]["loss_stop"].get("change_start_ns")),
+            as_int(endpoint_events[name]["loss_stop"].get("change_end_ns")),
+        )
+        for name in ("client", "server")
+    ]
+    start_clock_error_bound_ns = sum(
+        as_int(
+            endpoint_events[name]["loss_start"].get("clock_error_bound_ns")
+        )
+        for name in ("client", "server")
+    )
+    stop_clock_error_bound_ns = sum(
+        as_int(
+            endpoint_events[name]["loss_stop"].get("clock_error_bound_ns")
+        )
+        for name in ("client", "server")
+    )
+    start_skew_bound_ns = (
+        max(interval[1] for interval in start_intervals)
+        - min(interval[0] for interval in start_intervals)
+        + start_clock_error_bound_ns
+    )
+    stop_skew_bound_ns = (
+        max(interval[1] for interval in stop_intervals)
+        - min(interval[0] for interval in stop_intervals)
+        + stop_clock_error_bound_ns
+    )
+    impairment_start_ns = max(interval[1] for interval in start_intervals)
+    impairment_stop_ns = min(interval[0] for interval in stop_intervals)
+    recovery_start_ns = max(interval[1] for interval in stop_intervals)
+    actual_duration_ns = impairment_stop_ns - impairment_start_ns
+    metrics.update(
+        {
+            "impairment_start_ns": impairment_start_ns,
+            "impairment_stop_ns": impairment_stop_ns,
+            "recovery_start_ns": recovery_start_ns,
+            "impairment_start_skew_ms": start_skew_bound_ns / 1_000_000,
+            "impairment_stop_skew_ms": stop_skew_bound_ns / 1_000_000,
+            "transition_clock_error_bound_ms": (
+                max(
+                    start_clock_error_bound_ns,
+                    stop_clock_error_bound_ns,
+                )
+                / 1_000_000
+            ),
+            "actual_loss_epoch_ms": actual_duration_ns / 1_000_000,
+            "actual_loss_epoch_offset_s": (
+                (impairment_start_ns - measurement_start_ns) / 1_000_000_000
+                if measurement_start_ns is not None
+                else None
+            ),
+            "recovery_observation_s": (
+                (measurement_end_ns - recovery_start_ns) / 1_000_000_000
+                if measurement_end_ns is not None
+                else None
+            ),
+        }
+    )
+    if (
+        start_skew_bound_ns > 20_000_000
+        or stop_skew_bound_ns > 20_000_000
+    ):
+        issues.append("impairment_transition_skew")
+    if abs(actual_duration_ns - expected_duration_ns) > 50_000_000:
+        issues.append("impairment_transition_window")
+    expected_offset_ns = round(as_float(axes.get("loss_epoch_start_s")) * 1_000_000_000)
+    if (
+        measurement_start_ns is None
+        or measurement_end_ns is None
+        or abs(
+            impairment_start_ns - measurement_start_ns - expected_offset_ns
+        )
+        > 100_000_000
+        or measurement_end_ns - recovery_start_ns < 60_000_000_000
+    ):
+        issues.append("impairment_transition_window")
+
+    for endpoint_name in ("client", "server"):
+        endpoint = cell_dir / endpoint_name
+        events = endpoint_events[endpoint_name]
+        endpoint_start_ns = as_int(events["loss_start"].get("change_start_ns"))
+        endpoint_active_ns = as_int(events["loss_start"].get("change_end_ns"))
+        endpoint_stop_ns = as_int(events["loss_stop"].get("change_start_ns"))
+        endpoint_clear_ns = as_int(events["loss_stop"].get("change_end_ns"))
+        samples, samples_valid = qdisc_series_rows(
+            endpoint,
+            "ifb-qdisc-series.jsonl",
+            "netem",
+            "40:",
+        )
+        baseline_samples = [
+            (query_start_ns, query_end_ns, qdisc)
+            for query_start_ns, query_end_ns, qdisc in samples
+            if measurement_start_ns is not None
+            and measurement_start_ns <= query_start_ns
+            and query_end_ns <= endpoint_start_ns
+        ]
+        active_samples = [
+            (query_start_ns, query_end_ns, qdisc)
+            for query_start_ns, query_end_ns, qdisc in samples
+            if endpoint_active_ns <= query_start_ns
+            and query_end_ns <= endpoint_stop_ns
+        ]
+        recovery_samples = [
+            (query_start_ns, query_end_ns, qdisc)
+            for query_start_ns, query_end_ns, qdisc in samples
+            if measurement_end_ns is not None
+            and endpoint_clear_ns <= query_start_ns
+            and query_end_ns <= measurement_end_ns
+        ]
+        clean_axes = {**axes, "loss_model": "none"}
+        if (
+            not samples_valid
+            or not qdisc_phase_coverage_valid(
+                baseline_samples,
+                as_int(measurement_start_ns),
+                endpoint_start_ns,
+            )
+            or not qdisc_phase_coverage_valid(
+                active_samples,
+                endpoint_active_ns,
+                endpoint_stop_ns,
+            )
+            or not qdisc_phase_coverage_valid(
+                recovery_samples,
+                endpoint_clear_ns,
+                as_int(measurement_end_ns),
+            )
+            or any(
+                netem_base_configuration_issues(qdisc, clean_axes)
+                or netem_loss_configuration_issues(qdisc, clean_axes)
+                for _, _, qdisc in baseline_samples
+            )
+            or any(
+                netem_base_configuration_issues(qdisc, axes)
+                or netem_loss_configuration_issues(qdisc, axes)
+                for _, _, qdisc in active_samples
+            )
+            or any(
+                netem_base_configuration_issues(qdisc, clean_axes)
+                or netem_loss_configuration_issues(qdisc, clean_axes)
+                for _, _, qdisc in recovery_samples
+            )
+        ):
+            issues.append("impairment_transition_configuration")
+        start_event_netem = find_qdisc_in(
+            events["loss_start"].get("qdisc"),
+            "netem",
+            "40:",
+        )
+        stop_event_netem = find_qdisc_in(
+            events["loss_stop"].get("qdisc"),
+            "netem",
+            "40:",
+        )
+        packet_values = [
+            qdisc_metric(start_event_netem, "packets"),
+            qdisc_metric(stop_event_netem, "packets"),
+        ]
+        drop_values = [
+            qdisc_metric(start_event_netem, "drops"),
+            qdisc_metric(stop_event_netem, "drops"),
+        ]
+        counters = counter_metrics_from_values(packet_values, drop_values)
+        endpoint_metrics[endpoint_name] = counters
+        issues.extend(timed_counter_issues(counters, axes))
+        clear_event_netem = find_qdisc_in(
+            events["loss_stop"].get("qdisc"),
+            "netem",
+            "40:",
+        )
+        clean_drop_phases = (
+            [
+                qdisc_metric(qdisc, "drops")
+                for _, _, qdisc in baseline_samples
+            ],
+            [
+                qdisc_metric(clear_event_netem, "drops"),
+                *[
+                    qdisc_metric(qdisc, "drops")
+                    for _, _, qdisc in recovery_samples
+                ],
+            ],
+        )
+        for clean_drop_values in clean_drop_phases:
+            if (
+                len(clean_drop_values) < 2
+                or any(value is None for value in clean_drop_values)
+                or any(
+                    left > right
+                    for left, right in zip(
+                        clean_drop_values,
+                        clean_drop_values[1:],
+                    )
+                    if left is not None and right is not None
+                )
+                or clean_drop_values[-1] != clean_drop_values[0]
+            ):
+                issues.append("impairment_clean_window")
+
+    metrics["timed_impairment_valid"] = not issues
+    return metrics, endpoint_metrics, issues
 
 
 def htb_rate_mbps(path: Path) -> float | None:
@@ -1520,6 +2166,51 @@ def netem_loss_configuration_issues(
     return []
 
 
+def netem_base_configuration_issues(
+    netem: dict[str, Any] | None,
+    axes: dict[str, str],
+) -> list[str]:
+    options = ((netem or {}).get("options") or {})
+    delay = options.get("delay") or {}
+    configured_delay_ms = as_float(delay.get("delay")) * 1000.0
+    expected_delay_ms = as_float(axes.get("rtt_ms")) / 2.0
+    model = axes.get("loss_model", "none")
+    loss_key = {
+        "random": "loss-random",
+        "gemodel": "loss-gemodel",
+    }.get(model)
+    expected_option_keys = {"limit", "delay", "ecn", "gap"}
+    if loss_key is not None:
+        expected_option_keys.add(loss_key)
+    if (
+        set(options) != expected_option_keys
+        or as_int(options.get("limit")) != 100000
+        or set(delay) != {"delay", "jitter", "correlation"}
+        or abs(configured_delay_ms - expected_delay_ms) > 1.0
+        or as_float(delay.get("jitter")) != 0.0
+        or as_float(delay.get("correlation")) != 0.0
+        or options.get("ecn") is not False
+        or as_int(options.get("gap"), -1) != 0
+        or (
+            model == "random"
+            and (
+                not isinstance(options.get("loss-random"), dict)
+                or set(options["loss-random"]) != {"loss", "correlation"}
+                or as_float(options["loss-random"].get("correlation")) != 0.0
+            )
+        )
+        or (
+            model == "gemodel"
+            and (
+                not isinstance(options.get("loss-gemodel"), dict)
+                or set(options["loss-gemodel"]) != {"p", "r", "1-h", "1-k"}
+            )
+        )
+    ):
+        return ["netem_base_parameters"]
+    return []
+
+
 def impairment_configuration_issues(
     endpoint: Path, axes: dict[str, str], queue_bytes: int
 ) -> list[str]:
@@ -1559,14 +2250,18 @@ def impairment_configuration_issues(
     expected_delay_ms = as_float(axes.get("rtt_ms")) / 2.0
     if abs(configured_delay_ms - expected_delay_ms) > 1.0:
         issues.append("netem_delay")
-    issues.extend(netem_loss_configuration_issues(netem, axes))
+    configuration_axes = axes
+    if axes.get("impairment_schedule") == "timed":
+        configuration_axes = {**axes, "loss_model": "none"}
+    issues.extend(netem_loss_configuration_issues(netem, configuration_axes))
 
     port = 51821 if axes.get("tunnel") == "tcp" else 51820
     if matching_filter_count(endpoint / "filter-pre.json", port, False) < 2:
         issues.append("egress_filters")
     if matching_filter_count(endpoint / "ingress-pre.json", port, True) < 2:
         issues.append("ingress_filters")
-    issues.extend(netem_counter_issues(endpoint, axes))
+    if axes.get("impairment_schedule") != "timed":
+        issues.extend(netem_counter_issues(endpoint, axes))
     return issues
 
 
@@ -1614,16 +2309,43 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     iperf = load_json(cell_dir / "iperf3.json", {})
     intervals = iperf_intervals(iperf if isinstance(iperf, dict) else {})
     duration = as_float(axes.get("duration_s"))
+    workload_duration = as_float(axes.get("workload_duration_s"), duration)
     warmup = as_float(axes.get("warmup_s"))
     direction = axes.get("direction", "reverse")
     delivery = interface_delivery_bins(cell_dir, direction, warmup, duration)
+    runtime_delivery = (
+        delivery
+        if math.isclose(workload_duration, duration)
+        else interface_delivery_bins(
+            cell_dir,
+            direction,
+            warmup,
+            workload_duration,
+        )
+    )
     bps = delivery["bps"]
-    iperf_bps = [row["bits_per_second"] for row in intervals]
+    runtime_bps = runtime_delivery["bps"]
+    scored_intervals = (
+        intervals
+        if math.isclose(workload_duration, duration)
+        else [
+            row
+            for row in intervals
+            if row["start"] < duration
+            and row["end"] <= duration + WORKLOAD_MAX_INTERVAL_BOUNDARY_ERROR_S
+        ]
+    )
+    iperf_bps = [row["bits_per_second"] for row in scored_intervals]
+    completion_axes = (
+        axes
+        if math.isclose(workload_duration, duration)
+        else {**axes, "duration_s": str(workload_duration)}
+    )
     completion_metrics, completion_issues = workload_completion(
-        axes,
+        completion_axes,
         iperf if isinstance(iperf, dict) else {},
         intervals,
-        delivery,
+        runtime_delivery,
         (
             (cell_dir / "iperf3.stderr").read_text(errors="replace")
             if (cell_dir / "iperf3.stderr").is_file()
@@ -1651,6 +2373,16 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         delivery["measurement_end_ns"],
         data_flow_ports,
     )
+    runtime_timed_events = (
+        timed_events
+        if runtime_delivery is delivery
+        else scored_tcp_events(
+            cell_dir,
+            runtime_delivery["measurement_start_ns"],
+            runtime_delivery["measurement_end_ns"],
+            data_flow_ports,
+        )
+    )
     events = Counter((event["event"], event["layer"]) for event in timed_events)
     inner_rto = events[("rto", "inner")]
     outer_rto = events[("rto", "outer")]
@@ -1673,8 +2405,8 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     carrier_endpoints = {
         endpoint: tcp_carrier_stability(
             cell_dir / endpoint / "ss-series.txt",
-            delivery["measurement_start_ns"],
-            delivery["measurement_end_ns"],
+            runtime_delivery["measurement_start_ns"],
+            runtime_delivery["measurement_end_ns"],
         )
         for endpoint in ("client", "server")
     }
@@ -1727,10 +2459,41 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         if all(value is not None for value in queue_peak_backlogs)
         else None
     )
-    netem_endpoints = [
-        netem_counter_metrics(cell_dir / endpoint)
-        for endpoint in ("client", "server")
-    ]
+    timed_schedule = axes.get("impairment_schedule") == "timed"
+    timed_metrics: dict[str, int | float | bool | None] = {}
+    episode_metrics: dict[str, int | float | bool | None] = {}
+    timed_issues: list[str] = []
+    episode_issues: list[str] = []
+    if timed_schedule:
+        timed_metrics, timed_endpoint_metrics, timed_issues = timed_impairment_evidence(
+            cell_dir,
+            axes,
+            runtime_delivery["measurement_start_ns"],
+            runtime_delivery["measurement_end_ns"],
+        )
+        netem_endpoints = [
+            timed_endpoint_metrics.get(endpoint, {
+                "packets": None,
+                "drops": None,
+                "loss_fraction": None,
+            })
+            for endpoint in ("client", "server")
+        ]
+        episode_metrics, episode_issues = dynamic_episode_metrics(
+            runtime_bps,
+            runtime_delivery["measurement_start_ns"],
+            runtime_delivery["measurement_end_ns"],
+            as_int(timed_metrics.get("impairment_start_ns")) or None,
+            as_int(timed_metrics.get("impairment_stop_ns")) or None,
+            as_int(timed_metrics.get("recovery_start_ns")) or None,
+            runtime_timed_events,
+            axes.get("tunnel", ""),
+        )
+    else:
+        netem_endpoints = [
+            netem_counter_metrics(cell_dir / endpoint)
+            for endpoint in ("client", "server")
+        ]
     netem_counter_complete = all(
         metric[key] is not None
         for metric in netem_endpoints
@@ -1802,6 +2565,12 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         )
     if delivery["covered_bins"] < expected_bins * 0.80:
         invalid_reasons.append("missing_delivery_bins")
+    if timed_schedule and (
+        workload_duration < duration
+        or delivery["covered_bins"] != expected_bins
+        or runtime_delivery["covered_bins"] != runtime_delivery["expected_bins"]
+    ):
+        invalid_reasons.append("dynamic_delivery_bins")
     invalid_reasons.extend(ping_issues)
     if impairment_issues:
         invalid_reasons.append("impairment_configuration")
@@ -1813,6 +2582,10 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         invalid_reasons.append("clock_unsynchronized")
     if telemetry_issues:
         invalid_reasons.append("tcp_event_telemetry")
+    if timed_issues:
+        invalid_reasons.append("timed_impairment")
+    if episode_issues:
+        invalid_reasons.append("dynamic_episode")
     if competitor_issues:
         invalid_reasons.append("competitor_workload")
     if anomalies:
@@ -1852,8 +2625,23 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
     return {
         "cell_id": axes.get("cell_id", cell_dir.name),
         "axes": {
-            key: axes.get(key)
-            for key in PUBLISHED_AXIS_FIELDS
+            **{
+                key: axes.get(key)
+                for key in PUBLISHED_AXIS_FIELDS
+            },
+            **(
+                {
+                    key: axes.get(key)
+                    for key in (
+                        "impairment_schedule",
+                        "loss_epoch_start_s",
+                        "loss_epoch_ms",
+                        "workload_duration_s",
+                    )
+                }
+                if timed_schedule
+                else {}
+            ),
         },
         "runtime": {
             key: axes.get(key)
@@ -1869,11 +2657,32 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "queue_bytes": queue_bytes,
             "expected_delivery_bins": expected_bins,
             "delivery_source_endpoints": delivery["source_endpoints"],
+            **(
+                {
+                    "runtime_expected_delivery_bins": runtime_delivery[
+                        "expected_bins"
+                    ],
+                }
+                if timed_schedule
+                else {}
+            ),
         },
         "metrics": {
             "delivery_bins": delivery["covered_bins"],
             "delivery_bin_coverage": (
                 delivery["covered_bins"] / expected_bins if expected_bins else None
+            ),
+            **(
+                {
+                    "runtime_delivery_bin_coverage": (
+                        runtime_delivery["covered_bins"]
+                        / runtime_delivery["expected_bins"]
+                        if runtime_delivery["expected_bins"]
+                        else None
+                    ),
+                }
+                if timed_schedule
+                else {}
             ),
             "goodput_mbps": mean_bps / 1e6 if mean_bps is not None else None,
             "iperf_goodput_mbps": (
@@ -1926,6 +2735,8 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
                 if len(netem_loss_fractions) == len(netem_endpoints)
                 else None
             ),
+            **timed_metrics,
+            **episode_metrics,
             **competitor_metrics,
             "tcp_carrier_samples": sum(
                 status["samples"] for status in carrier_endpoints.values()
@@ -1958,6 +2769,20 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
             "stall": stall_condition,
             "negative_trend": trend_condition,
             "inner_rto": rto_condition,
+            **(
+                {
+                    "formal_meltdown": condition_count == 3,
+                    "mechanism_observed": bool(
+                        episode_metrics.get("mechanism_observed")
+                    ),
+                    "user_visible_disruption": bool(
+                        episode_metrics.get("user_visible_disruption")
+                    ),
+                    "quasi_meltdown_episode": False,
+                }
+                if timed_schedule
+                else {}
+            ),
         },
         "thresholds": {
             "stall_fraction_100ms": STALL_THRESHOLD,
@@ -1975,6 +2800,14 @@ def analyze_cell(cell_dir: Path) -> dict[str, Any]:
         "valid": not invalid_reasons,
         "invalid_reasons": invalid_reasons,
         "impairment_configuration_issues": impairment_issues,
+        **(
+            {
+                "timed_impairment_issues": sorted(set(timed_issues)),
+                "dynamic_episode_issues": sorted(set(episode_issues)),
+            }
+            if timed_schedule
+            else {}
+        ),
         "tcp_event_telemetry_issues": telemetry_issues,
         "workload_completion_issues": completion_issues,
         "competitor_workload_issues": competitor_issues,
@@ -2000,6 +2833,10 @@ CSV_FIELDS = [
     "duration_s",
     "workload_completion",
     "impairment_validation",
+    "impairment_schedule",
+    "loss_epoch_start_s",
+    "loss_epoch_ms",
+    "workload_duration_s",
     "inner_cc",
     "direction",
     "competitor",
@@ -2042,6 +2879,7 @@ CSV_FIELDS = [
     "workload_interface_delivery_complete",
     "udp_control_goodput_ratio",
     "delivery_bin_coverage",
+    "runtime_delivery_bin_coverage",
     "stall_fraction_100ms",
     "longest_stall_ms",
     "trend_drop_fraction",
@@ -2072,6 +2910,36 @@ CSV_FIELDS = [
     "netem_loss_band_valid",
     "netem_loss_fraction_min",
     "netem_loss_fraction_max",
+    "timed_impairment_valid",
+    "impairment_start_skew_ms",
+    "impairment_stop_skew_ms",
+    "transition_clock_error_bound_ms",
+    "actual_loss_epoch_ms",
+    "actual_loss_epoch_offset_s",
+    "recovery_observation_s",
+    "pre_median_mbps",
+    "pre_mean_mbps",
+    "impairment_mean_mbps",
+    "post_0_1s_mbps",
+    "post_1_5s_mbps",
+    "post_5_10s_mbps",
+    "post_10_30s_mbps",
+    "post_30_60s_mbps",
+    "episode_min_1s_mbps",
+    "episode_min_5s_mbps",
+    "episode_longest_stall_ms",
+    "episode_stall_fraction_100ms",
+    "bandwidth_deficit_mbit",
+    "first_delivery_after_recovery_ms",
+    "recovery_90_ms",
+    "recovery_90_right_censored",
+    "episode_outer_recovery_events",
+    "mechanism_observed",
+    "user_visible_disruption",
+    "episode_below_half_pre",
+    "udp_control_episode_min_5s_ratio",
+    "episode_below_half_udp_control",
+    "quasi_meltdown_episode",
     "competitor_goodput_mbps",
     "competitor_seconds",
     "tcp_carrier_min_count",
@@ -2134,6 +3002,41 @@ def apply_udp_control_comparison(docs: list[dict[str, Any]]) -> None:
         doc.setdefault("conditions", {})["below_half_udp_control"] = below_half
         if below_half and doc.get("classification") == "stable":
             doc["classification"] = "degraded"
+        if doc.get("axes", {}).get("impairment_schedule") == "timed":
+            metrics = doc.setdefault("metrics", {})
+            udp_metrics = (udp or {}).get("metrics", {})
+            tcp_episode_min = metrics.get("episode_min_5s_mbps")
+            udp_episode_min = udp_metrics.get("episode_min_5s_mbps")
+            episode_ratio = (
+                as_float(tcp_episode_min) / as_float(udp_episode_min)
+                if tcp_episode_min is not None
+                and udp_episode_min is not None
+                and as_float(udp_episode_min) > 0
+                else None
+            )
+            below_half_episode_control = bool(
+                doc.get("valid")
+                and udp
+                and udp.get("valid")
+                and episode_ratio is not None
+                and episode_ratio <= 0.50
+            )
+            quasi_meltdown = bool(
+                below_half_episode_control
+                and metrics.get("episode_below_half_pre")
+                and metrics.get("mechanism_observed")
+                and metrics.get("user_visible_disruption")
+                and as_int(metrics.get("episode_longest_stall_ms")) >= 1000
+            )
+            metrics["udp_control_episode_min_5s_ratio"] = episode_ratio
+            metrics["episode_below_half_udp_control"] = (
+                below_half_episode_control
+            )
+            metrics["quasi_meltdown_episode"] = quasi_meltdown
+            doc.setdefault("conditions", {})[
+                "below_half_udp_episode_control"
+            ] = below_half_episode_control
+            doc["conditions"]["quasi_meltdown_episode"] = quasi_meltdown
 
 
 def write_report(path: Path, docs: list[dict[str, Any]]) -> None:

@@ -119,6 +119,21 @@ PIDS+=("$!")
 ) > "$OUT/qdisc-series.jsonl" &
 PIDS+=("$!")
 
+(
+	end=$((SECONDS + DURATION))
+	while ((SECONDS < end)); do
+		query_start_ns="$(date -u +%s%N)"
+		qdisc_json="$(tc -s -j qdisc show dev "$IFB" 2>/dev/null || printf '[]')"
+		query_end_ns="$(date -u +%s%N)"
+		[[ -n "$qdisc_json" ]] || qdisc_json='[]'
+		printf '{"timestamp":"%s","query_start_ns":%s,"query_end_ns":%s,"qdisc":%s}\n' \
+			"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+			"$query_start_ns" "$query_end_ns" "$qdisc_json"
+		sleep 0.05
+	done
+) > "$OUT/ifb-qdisc-series.jsonl" &
+PIDS+=("$!")
+
 if ! bpftrace -l 'tracepoint:tcp:tcp_retransmit_skb' |
 	grep -Fxq 'tracepoint:tcp:tcp_retransmit_skb'; then
 	echo "tcp_retransmit_skb tracepoint is unavailable" >&2

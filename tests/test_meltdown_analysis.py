@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
+from datetime import datetime, timezone
 import importlib.util
 import io
 import json
@@ -28,6 +29,9 @@ SHAPER = (
 ).read_text(encoding="utf-8")
 SAMPLER = (
     ROOT / "perf-test" / "meltdown" / "harness" / "sample-endpoint.sh"
+).read_text(encoding="utf-8")
+TIMED_IMPAIRMENT = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "timed-impairment.py"
 ).read_text(encoding="utf-8")
 TCP_EVENTS = (
     ROOT / "perf-test" / "meltdown" / "harness" / "tcp-events.bt"
@@ -56,6 +60,9 @@ BURST_TRANSPORT_QUALIFIED_MATRIX = (
 )
 BURST_BREADTH_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-mechanism-burst-breadth.csv"
+)
+BOUNDARY_SMOKE_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-boundary-smoke.csv"
 )
 
 
@@ -893,6 +900,278 @@ class MeltdownAnalysisTest(unittest.TestCase):
                     "right_censored": True,
                 },
             ],
+        )
+
+    def test_dynamic_episode_metrics_measure_recovery_and_deficit(self) -> None:
+        measurement_start_ns = 1_000_000_000
+        impairment_start_ns = measurement_start_ns + 15_000_000_000
+        impairment_stop_ns = impairment_start_ns + 2_000_000_000
+        recovery_start_ns = impairment_stop_ns
+        values = (
+            [40_000_000.0] * 150
+            + [0.0] * 20
+            + [10_000_000.0] * 30
+            + [40_000_000.0] * 570
+        )
+        events = [
+            {
+                "timestamp_ns": impairment_start_ns + 500_000_000,
+                "event": "retrans",
+                "layer": "outer",
+            }
+        ]
+
+        metrics, issues = ANALYZE.dynamic_episode_metrics(
+            values,
+            measurement_start_ns,
+            measurement_start_ns + 77_000_000_000,
+            impairment_start_ns,
+            impairment_stop_ns,
+            recovery_start_ns,
+            events,
+            "tcp",
+        )
+
+        self.assertEqual(issues, [])
+        self.assertEqual(metrics["pre_median_mbps"], 40.0)
+        self.assertEqual(metrics["impairment_mean_mbps"], 0.0)
+        self.assertEqual(metrics["episode_longest_stall_ms"], 2000)
+        self.assertEqual(metrics["episode_min_5s_mbps"], 6.0)
+        self.assertEqual(metrics["recovery_90_ms"], 2400.0)
+        self.assertFalse(metrics["recovery_90_right_censored"])
+        self.assertTrue(metrics["mechanism_observed"])
+        self.assertTrue(metrics["user_visible_disruption"])
+        self.assertTrue(metrics["episode_below_half_pre"])
+        self.assertAlmostEqual(metrics["bandwidth_deficit_mbit"], 170.0)
+
+    def test_timed_impairment_evidence_validates_schedule_and_epoch_counters(
+        self,
+    ) -> None:
+        scheduled_start_ns = 20_000_000_000
+        scheduled_stop_ns = 22_000_000_000
+
+        def netem(
+            packets: int,
+            drops: int,
+            impaired: bool,
+        ) -> dict[str, object]:
+            options: dict[str, object] = {
+                "limit": 100000,
+                "delay": {
+                    "delay": 0.1,
+                    "jitter": 0,
+                    "correlation": 0,
+                },
+                "ecn": False,
+                "gap": 0,
+            }
+            if impaired:
+                options["loss-gemodel"] = {
+                    "p": 0.01,
+                    "r": 0.25,
+                    "1-h": 0.90,
+                    "1-k": 0.01,
+                }
+            return {
+                "kind": "netem",
+                "handle": "40:",
+                "packets": packets,
+                "drops": drops,
+                "options": options,
+            }
+
+        def iso(timestamp_ns: int) -> str:
+            return datetime.fromtimestamp(
+                timestamp_ns / 1_000_000_000,
+                timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cell = Path(temporary)
+            endpoint_times = {
+                "client": (20_005_000_000, 20_010_000_000, 22_002_000_000, 22_010_000_000),
+                "server": (20_006_000_000, 20_015_000_000, 22_003_000_000, 22_015_000_000),
+            }
+            for endpoint_name, (
+                start_command,
+                start_applied,
+                stop_command,
+                stop_applied,
+            ) in endpoint_times.items():
+                endpoint = cell / endpoint_name
+                endpoint.mkdir()
+                (endpoint / "impairment-ready").touch()
+                (endpoint / "impairment-done").touch()
+                events = [
+                    {
+                        "event": "loss_start",
+                        "requested_ns": scheduled_start_ns,
+                        "command_start_ns": start_command,
+                        "command_end_ns": start_applied + 2_000_000,
+                        "change_start_ns": start_applied - 3_000_000,
+                        "change_end_ns": start_applied,
+                        "applied_ns": start_applied,
+                        "clock_offset_ns": 100_000,
+                        "clock_error_bound_ns": 1_000_000,
+                        "success": True,
+                        "loss_model": "gemodel",
+                        "qdisc": [netem(100, 0, True)],
+                    },
+                    {
+                        "event": "loss_stop",
+                        "requested_ns": scheduled_stop_ns,
+                        "command_start_ns": stop_command - 1_000_000,
+                        "command_end_ns": stop_applied + 2_000_000,
+                        "change_start_ns": stop_command,
+                        "change_end_ns": stop_applied,
+                        "applied_ns": stop_applied,
+                        "clock_offset_ns": 100_000,
+                        "clock_error_bound_ns": 1_000_000,
+                        "success": True,
+                        "loss_model": "none",
+                        "qdisc": [netem(2100, 80, False)],
+                    },
+                ]
+                (endpoint / "impairment-events.jsonl").write_text(
+                    "".join(json.dumps(event) + "\n" for event in events),
+                    encoding="utf-8",
+                )
+                samples = []
+                for index, timestamp in enumerate(
+                    range(4_990_000_000, 83_000_000_000, 100_000_000)
+                ):
+                    impaired = 20_020_000_000 <= timestamp < 22_010_000_000
+                    drops = (
+                        min(
+                            80,
+                            round(
+                                (timestamp - 20_000_000_000)
+                                / 2_000_000_000
+                                * 80
+                            ),
+                        )
+                        if impaired
+                        else (80 if timestamp >= 22_010_000_000 else 0)
+                    )
+                    samples.append(
+                        (timestamp, netem(index * 100, drops, impaired))
+                    )
+                (endpoint / "ifb-qdisc-series.jsonl").write_text(
+                    "".join(
+                        json.dumps(
+                            {
+                                "timestamp": iso(timestamp + 5_000_000),
+                                "query_start_ns": timestamp,
+                                "query_end_ns": timestamp + 5_000_000,
+                                "qdisc": [qdisc],
+                            }
+                        )
+                        + "\n"
+                        for timestamp, qdisc in samples
+                    ),
+                    encoding="utf-8",
+                )
+
+            axes = {
+                "scheduled_loss_start_ns": str(scheduled_start_ns),
+                "scheduled_loss_stop_ns": str(scheduled_stop_ns),
+                "loss_epoch_ms": "2000",
+                "loss_epoch_start_s": "15",
+                "loss_model": "gemodel",
+                "loss_pct": "0",
+                "burst_p": "1",
+                "burst_r": "25",
+                "burst_h": "90",
+                "burst_k": "1",
+                "rtt_ms": "200",
+                "tunnel": "tcp",
+                "impairment_validation": "transport_aware",
+            }
+            metrics, endpoints, issues = ANALYZE.timed_impairment_evidence(
+                cell,
+                axes,
+                5_000_000_000,
+                83_000_000_000,
+            )
+
+            self.assertEqual(issues, [])
+            self.assertTrue(metrics["timed_impairment_valid"])
+            self.assertEqual(metrics["impairment_start_skew_ms"], 10.0)
+            self.assertEqual(metrics["impairment_stop_skew_ms"], 15.0)
+            self.assertEqual(metrics["transition_clock_error_bound_ms"], 2.0)
+            self.assertEqual(metrics["actual_loss_epoch_ms"], 1987.0)
+            self.assertEqual(endpoints["client"]["packets"], 2000)
+            self.assertEqual(endpoints["client"]["drops"], 80)
+
+            client_series = cell / "client" / "ifb-qdisc-series.jsonl"
+            rows = [
+                json.loads(line)
+                for line in client_series.read_text(encoding="utf-8").splitlines()
+            ]
+            rows[-1]["qdisc"][0]["drops"] = 81
+            client_series.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            _, _, dirty_recovery_issues = ANALYZE.timed_impairment_evidence(
+                cell,
+                axes,
+                5_000_000_000,
+                83_000_000_000,
+            )
+            self.assertIn("impairment_clean_window", dirty_recovery_issues)
+
+    def test_qdisc_phase_coverage_rejects_sparse_samples(self) -> None:
+        qdisc = {"kind": "netem"}
+        self.assertFalse(
+            ANALYZE.qdisc_phase_coverage_valid(
+                [
+                    (1_000_000_000, 1_010_000_000, qdisc),
+                    (2_000_000_000, 2_010_000_000, qdisc),
+                ],
+                1_000_000_000,
+                2_010_000_000,
+            )
+        )
+        self.assertTrue(
+            ANALYZE.qdisc_phase_coverage_valid(
+                [
+                    (1_000_000_000, 1_010_000_000, qdisc),
+                    (1_200_000_000, 1_210_000_000, qdisc),
+                    (1_400_000_000, 1_410_000_000, qdisc),
+                ],
+                950_000_000,
+                1_450_000_000,
+            )
+        )
+
+    def test_timed_netem_signature_rejects_unexpected_impairment_options(
+        self,
+    ) -> None:
+        netem = {
+            "options": {
+                "limit": 100000,
+                "delay": {
+                    "delay": 0.1,
+                    "jitter": 0,
+                    "correlation": 0,
+                },
+                "loss-gemodel": {
+                    "p": 0.01,
+                    "r": 0.25,
+                    "1-h": 0.90,
+                    "1-k": 0.01,
+                },
+                "ecn": False,
+                "gap": 0,
+                "duplicate": {"probability": 0.5},
+            }
+        }
+        axes = {"rtt_ms": "200", "loss_model": "gemodel"}
+
+        self.assertEqual(
+            ANALYZE.netem_base_configuration_issues(netem, axes),
+            ["netem_base_parameters"],
         )
 
     def test_missing_completion_policy_preserves_strict_exit_rule(self) -> None:
@@ -1860,6 +2139,43 @@ class MeltdownAnalysisTest(unittest.TestCase):
         )
         self.assertTrue(docs[0]["conditions"]["below_half_udp_control"])
 
+    def test_quasi_meltdown_requires_a_full_second_stall(self) -> None:
+        docs = [
+            {
+                "cell_id": "boundary-reference-tcp-r1",
+                "valid": True,
+                "classification": "degraded",
+                "axes": {"impairment_schedule": "timed"},
+                "metrics": {
+                    "goodput_mbps": 10.0,
+                    "episode_min_5s_mbps": 4.0,
+                    "episode_below_half_pre": True,
+                    "mechanism_observed": True,
+                    "user_visible_disruption": True,
+                    "episode_longest_stall_ms": 900,
+                },
+                "conditions": {},
+            },
+            {
+                "cell_id": "boundary-reference-udp-r1",
+                "valid": True,
+                "classification": "stable",
+                "axes": {"impairment_schedule": "timed"},
+                "metrics": {
+                    "goodput_mbps": 40.0,
+                    "episode_min_5s_mbps": 20.0,
+                },
+                "conditions": {},
+            },
+        ]
+
+        ANALYZE.apply_udp_control_comparison(docs)
+        self.assertFalse(docs[0]["metrics"]["quasi_meltdown_episode"])
+
+        docs[0]["metrics"]["episode_longest_stall_ms"] = 1000
+        ANALYZE.apply_udp_control_comparison(docs)
+        self.assertTrue(docs[0]["metrics"]["quasi_meltdown_episode"])
+
     def test_orchestrator_publishes_cells_only_after_cleanup(self) -> None:
         finally_index = ORCHESTRATOR.index("    } finally {")
         publish_index = ORCHESTRATOR.index(
@@ -1913,15 +2229,23 @@ class MeltdownAnalysisTest(unittest.TestCase):
             ORCHESTRATOR,
         )
         self.assertIn(
-            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA',
+            "[string] $ExpectedHostA = \"wgtcp-amp-b\"",
             ORCHESTRATOR,
         )
         self.assertIn(
-            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-a" $PrivateIpB',
+            "[string] $ExpectedHostB = \"wgtcp-amp-a\"",
             ORCHESTRATOR,
         )
-        self.assertIn('$expectedPrivateIpA = "10.20.1.6"', ORCHESTRATOR)
-        self.assertIn('$expectedPrivateIpB = "10.20.1.7"', ORCHESTRATOR)
+        self.assertIn(
+            "Get-EndpointIdentityVerificationCommand $ExpectedHostA $PrivateIpA",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "Get-EndpointIdentityVerificationCommand $ExpectedHostB $PrivateIpB",
+            ORCHESTRATOR,
+        )
+        self.assertNotIn("$expectedPrivateIpA", ORCHESTRATOR)
+        self.assertNotIn("$expectedPrivateIpB", ORCHESTRATOR)
         self.assertIn("Get-TopologyVerificationCommand", ORCHESTRATOR)
         self.assertIn(
             '$PrivateIpA "10.99.1.1" "10.99.1.2" "10.99.0.1" "10.99.0.2"',
@@ -1943,7 +2267,7 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn("matrix_expected_cells", ORCHESTRATOR)
         self.assertIn("qualifying_complete", ORCHESTRATOR)
         self.assertIn(
-            "$sampleDuration = [int]$Row.duration_s + [int]$Row.warmup_s + 30",
+            "$sampleDuration = [int]$workloadDuration + [int]$Row.warmup_s + 30",
             ORCHESTRATOR,
         )
         self.assertIn("[string[]] $Cell = @()", ORCHESTRATOR)
@@ -1961,7 +2285,7 @@ class MeltdownAnalysisTest(unittest.TestCase):
         runtime_index = ORCHESTRATOR.index("$loadedSrcA = @(")
         self.assertLess(topology_index, runtime_index)
         identity_index = ORCHESTRATOR.index(
-            'Get-EndpointIdentityVerificationCommand "wgtcp-amp-b" $PrivateIpA'
+            "Get-EndpointIdentityVerificationCommand $ExpectedHostA $PrivateIpA"
         )
         package_index = ORCHESTRATOR.index(
             '$archive = Join-Path $env:TEMP "wgtcp-meltdown-$PID.tar.gz"'
@@ -1978,6 +2302,93 @@ class MeltdownAnalysisTest(unittest.TestCase):
             """printf '{"timestamp":"%s","qdisc":%s}\\n'""",
             SAMPLER,
         )
+        self.assertIn('> "$OUT/ifb-qdisc-series.jsonl"', SAMPLER)
+        self.assertIn('tc -s -j qdisc show dev "$IFB"', SAMPLER)
+        self.assertIn('"query_start_ns":%s,"query_end_ns":%s', SAMPLER)
+
+    def test_timed_impairment_runner_uses_absolute_synchronized_schedule(self) -> None:
+        self.assertIn(
+            '$impairmentSchedule = Get-MatrixValue $Row "impairment_schedule" "static"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            'Wait-RemoteNonemptyFile $HostB $PortB '
+            '"$remoteCellB/client/first-inner-data.txt" 10',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "[decimal]$firstDataText * 1000000000",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '$workloadDuration = Get-MatrixValue $Row "workload_duration_s"',
+            ORCHESTRATOR,
+        )
+        self.assertIn("-t $workloadDuration", ORCHESTRATOR)
+        self.assertIn('"workload_duration_s=$workloadDuration"', ORCHESTRATOR)
+        self.assertIn("--start-ns $scheduledLossStartNs", ORCHESTRATOR)
+        self.assertIn(
+            'Wait-RemoteFiles "$remoteCellA/impairment-done" '
+            '"$remoteCellB/client/impairment-done" $transitionTimeout',
+            ORCHESTRATOR,
+        )
+        done_index = ORCHESTRATOR.index(
+            'Wait-RemoteFiles "$remoteCellA/impairment-done"'
+        )
+        workload_index = ORCHESTRATOR.index(
+            'Wait-RemoteFile $HostB $PortB "$remoteCellB/workload.rc"'
+        )
+        self.assertLess(done_index, workload_index)
+        self.assertIn(
+            '"safety timed impairment failed: $($_.Exception.Message)"',
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            '$safetyStopReasons = @("timed_impairment")',
+            ORCHESTRATOR,
+        )
+        self.assertIn("timed_impairment", ORCHESTRATOR)
+
+    def test_timed_impairment_changes_only_active_netem_loss(self) -> None:
+        self.assertIn("change-loss)", SHAPER)
+        self.assertIn('[[ -e "$MARKER" ]]', SHAPER)
+        self.assertIn('tc qdisc change dev "$IFB" root handle 40: netem', SHAPER)
+        self.assertIn('"loss_start"', TIMED_IMPAIRMENT)
+        self.assertIn('"loss_stop"', TIMED_IMPAIRMENT)
+        self.assertIn('"requested_ns"', TIMED_IMPAIRMENT)
+        self.assertIn('"applied_ns"', TIMED_IMPAIRMENT)
+        self.assertIn('"change_start_ns"', TIMED_IMPAIRMENT)
+        self.assertIn('"change_end_ns"', TIMED_IMPAIRMENT)
+        self.assertIn('"clock_error_bound_ns"', TIMED_IMPAIRMENT)
+        self.assertIn("Root delay", TIMED_IMPAIRMENT)
+        self.assertIn("requested_ns - 1_000_000_000", TIMED_IMPAIRMENT)
+        self.assertIn('"event": "failsafe_clear"', TIMED_IMPAIRMENT)
+
+    def test_endpoint_pair_is_bound_into_campaign_fingerprint(self) -> None:
+        self.assertIn('$entries += "expected_host_a=$ExpectedHostA"', ORCHESTRATOR)
+        self.assertIn('$entries += "expected_host_b=$ExpectedHostB"', ORCHESTRATOR)
+        self.assertIn('$entries += "private_ip_a=$PrivateIpA"', ORCHESTRATOR)
+        self.assertIn('$entries += "private_ip_b=$PrivateIpB"', ORCHESTRATOR)
+
+    def test_boundary_smoke_matrix_is_exactly_four_timed_executions(self) -> None:
+        with BOUNDARY_SMOKE_MATRIX.open(newline="", encoding="utf-8-sig") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(int(row["repetitions"]) for row in rows), 4)
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["impairment_schedule"] for row in rows}, {"timed"})
+        self.assertEqual({row["loss_epoch_start_s"] for row in rows}, {"15"})
+        self.assertEqual({row["loss_epoch_ms"] for row in rows}, {"2000"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"77"})
+        self.assertEqual({row["workload_duration_s"] for row in rows}, {"78"})
+        self.assertEqual({row["warmup_s"] for row in rows}, {"10"})
+        for field in (
+            "impairment_schedule",
+            "loss_epoch_start_s",
+            "loss_epoch_ms",
+            "workload_duration_s",
+        ):
+            self.assertIn(field, ANALYZE.CSV_FIELDS)
 
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')
