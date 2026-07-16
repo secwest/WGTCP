@@ -1,0 +1,271 @@
+# TCP Meltdown Boundary Strategy and Results
+
+## Executive summary
+
+WireguardTCP can show severe TCP-over-TCP degradation under deliberately harsh
+laboratory conditions, but the completed evidence does not show a valid formal
+meltdown and does not establish that these conditions are common on modern
+networks.
+
+The historical post-repair audit contains 162 raw executions:
+
+- 122 valid: 92 stable, 17 degraded, and 13 near-meltdown;
+- zero valid formal-meltdown executions; and
+- 40 evidence-invalid executions that are retained but never promoted.
+
+The new boundary campaign is designed to locate the onset region rather than
+assume one. Its first timed smoke stage is complete: all four matched TCP/UDP
+executions were valid and stable. A two-second correlated-loss epoch caused
+0.2-0.4-second TCP delivery stalls and 9.85-14.05-second sustained recovery to
+90% of baseline, compared with no stall and 4.15-4.75-second recovery for the
+matched UDP controls. No smoke execution met the quasi-meltdown or formal
+meltdown endpoint.
+
+The smoke proves that the timed harness can measure a transient TCP-over-TCP
+recovery penalty. It is not an onset estimate. Packet correlation, adverse
+epoch duration, stream count, carrier rate, and offered load still need to be
+mapped prospectively.
+
+## Questions the campaign will answer
+
+1. How correlated must packet loss be before a disruptive TCP-over-TCP episode
+   becomes likely?
+2. How long must that adverse loss regime persist?
+3. What is the minimum inner TCP stream count associated with onset?
+4. What carrier capacity and achieved offered load are associated with onset?
+5. How much bandwidth is lost during the episode?
+6. How long does delivery take to recover after loss is removed?
+7. Can a narrowly selected Linux TCP or queue control reduce the impact without
+   harming clean-path performance?
+8. After the laboratory boundary is frozen, how often do qualified LTE traces
+   actually enter that region?
+
+Because loss recovery is stochastic, the intended result is a probability
+bracket, not a single universal threshold. The campaign will report the highest
+tested low-probability point, the lowest tested high-probability point, Wilson
+95% intervals, and the exact environment to which those results apply.
+
+## Outcome definitions
+
+Historical classifications remain unchanged:
+
+| Outcome | Rule |
+|---|---|
+| Formal meltdown | At least 20% zero-delivery 100 ms bins, at least a 20% significant fitted decline with slope t-statistic at most -2, and at least one inner RTO per flow-minute. |
+| Near-meltdown | Two of the three formal-meltdown conditions. |
+| Degraded | Exactly one formal condition, or TCP goodput below 50% of its exact matched UDP control. |
+| Stable | Valid evidence without the degraded, near-meltdown, or meltdown conditions. |
+
+Timed clean-loss-clean cells also publish episode-level endpoints:
+
+| Endpoint | Rule |
+|---|---|
+| `mechanism_observed` | At least one outer retransmission or RTO during impairment or recovery. |
+| `user_visible_disruption` | A continuous delivery stall of at least one second, or sustained recovery to 90% of baseline taking at least five seconds. |
+| `quasi_meltdown_episode` | Outer recovery is observed, at least one continuous one-second stall occurs, and the minimum rolling five-second TCP delivery is at most 50% of both its own baseline and its valid matched UDP control. |
+| `recovery_90_ms` | Time from actual loss clear to the first qualifying five-second window at least 90% of baseline with at most 5% stalled bins, provided the following five seconds also qualify. |
+
+These episode labels supplement the formal whole-run classification; they do
+not rescore historical evidence.
+
+## Experimental design
+
+### Matched topology
+
+- Two private-only ARM VM pairs are available:
+  `wgtcp-amp-b/a` and `wgtcp-boundary-b/a`.
+- Both pairs use `Standard_D4ps_v5` hosts and kernel `6.8.0-1062-azure`.
+- Both pairs run the same proven campaign runtime:
+  - traffic-runtime source commit `2b9513f`;
+  - timed-harness source commit `a46fa40`;
+  - module srcversion `01DA86291E0FBD2CD3C940C`;
+  - module SHA-256
+    `771057ae270ae379e90bc9c31f8f8777e54556d8acbb71b8717e6a950dca275e`;
+  - WireGuard tool SHA-256
+    `80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3`;
+  - iperf SHA-256
+    `626565d9571f0ebb9148a36944beeaafa9b7581884f11c11b7fd1cf4218f5ad4`.
+- Every profile uses the same inner TCP workload over both TCP and UDP
+  WireGuard outer transports.
+- A matched TCP/UDP repetition stays on the same VM pair. The second pair
+  increases throughput without mixing different hardware into one matched
+  comparison.
+
+### Reference condition
+
+Unless a stage varies one of these axes, the campaign holds constant:
+
+| Axis | Reference |
+|---|---|
+| Carrier rate | 50 Mb/s |
+| RTT | 200 ms |
+| Queue | 1x-BDP `bfifo` |
+| Inner workload | Saturated reverse-direction CUBIC |
+| Inner streams | 16 |
+| Loss process | netem Gilbert-Elliott `P=1%`, `R=25%`, `1-H=90%`, `1-K=1%` |
+| Nominal stationary loss | 4.42% per impaired direction |
+| Mean bad-state residence | 4 packets |
+
+This is an intentionally adverse synthetic condition. It combines sustained
+load, high RTT, a finite queue, and correlated loss. It establishes a mechanism
+boundary; it does not by itself establish prevalence on LTE or any other field
+network.
+
+### Timed cell
+
+Each dynamic execution uses:
+
+```text
+iperf omitted warm-up:       10 s
+clean measured baseline:     15 s
+impaired epoch:               D s
+clean recovery observation:  60 s
+unscored command guard:        1 s
+```
+
+Both endpoints receive a common absolute transition time. Analysis uses the
+recorded qdisc-change intervals, not the requested times.
+
+### Fail-closed evidence
+
+An execution is invalid if any required identity, workload, timing, impairment,
+telemetry, or restoration evidence is missing or inconsistent. Important gates
+include:
+
+- transition completion within 100 ms of the requested time;
+- conservative inter-endpoint transition skew no greater than 20 ms;
+- healthy clocks and recorded conservative clock-error bounds;
+- dense qdisc evidence before, during, and after the loss epoch;
+- exact netem configuration and advancing loss counters during impairment;
+- no advancing loss counter after clear beyond the fixed race allowance;
+- complete receiver delivery, socket, interface, queue, and BPF coverage;
+- two unchanged TCP carrier tuples throughout the execution; and
+- exact restoration of baseline qdiscs with no IFB or impairment-marker residue.
+
+Evidence-invalid executions remain visible and receive only the bounded exact
+rerun allowed by the prospective plan.
+
+## Staged strategy
+
+| Stage | Purpose | Design | State |
+|---|---|---|---|
+| 0. Host requalification | Establish identical, clean test pairs. | Runtime identity, clocks, qdiscs, carriers, and clean 1/16-flow TCP/UDP controls. | Complete |
+| 1. Transition smoke | Qualify absolute timing and clean-loss-clean evidence. | Two TCP and two UDP repetitions with a two-second reference epoch. | Complete and passed |
+| 2. Packet correlation | Find the least correlated loss process that can produce a quasi-meltdown episode. | Mean bad-state residence of 1, 2, 4, 8, and 16 packets; 16-second epoch; three paired repetitions per point. | Predeclared; next to run |
+| 3. Epoch duration | Bracket how long the adverse regime must persist. | 0, 0.25, 0.5, 1, 2, 4, 8, and 16 seconds, then prospective midpoint refinement. | Not run |
+| 4. Stream count | Find the minimum tested inner-stream count meeting the high-probability rule. | 1, 2, 4, 8, 12, 16, 24, and 32 streams, with integer refinement if needed. | Not run |
+| 5A. Carrier rate | Separate absolute packet-rate effects from BDP-scaled behavior. | 5, 10, 20, 35, 50, 75, and 100 Mb/s with a 1x-BDP queue. | Not run |
+| 5B. Offered load | Find the achieved load ratio associated with onset. | 25%, 50%, 75%, 90%, 100%, and 120% of a 50 Mb/s carrier, gated on pacing calibration. | Not run |
+| 6. Interactions | Check whether one-factor boundaries move when combined. | No more than eight prospectively committed corner profiles. | Not run |
+| 7. Confirmation | Estimate outcome probability at the final negative and positive brackets. | Five valid pairs per point, extended to at most ten only for mixed outcomes. | Not run |
+| Mitigation | Measure selected TCP/sysctl/qdisc controls after the boundary is frozen. | Default-versus-candidate matched runs with clean-path regression limits. | Not run |
+| LTE qualification/replay | Evaluate field relevance without extrapolating from synthetic loss. | Qualified sub-second traces or controlled modem captures, then matched TCP/UDP replay. | Not run |
+
+Low probability is predeclared as at most 20% episode-positive valid TCP runs;
+high probability is at least 80%. Mixed results remain a transition region
+rather than being forced into a threshold.
+
+## Results so far
+
+### Historical campaign
+
+The complete post-repair audit contains:
+
+| Inventory | Total | Valid | Stable | Degraded | Near-meltdown | Meltdown | Invalid |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| All post-repair raw executions | 162 | 122 | 92 | 17 | 13 | 0 | 40 |
+
+Clean finite-queue controls were stable. The lowest demonstrated severe
+reference was 50 Mb/s, 200 ms RTT, a 1x-BDP FIFO, 16 reverse CUBIC streams, and
+the `1/25/90/1` Gilbert-Elliott process. Across nine valid logical TCP breadth
+cells, longest continuous zero-delivery runs ranged from 0.7 to 40.2 seconds
+with a 6.3-second median. No valid execution simultaneously met the stall,
+declining-goodput, and inner-RTO requirements for formal meltdown.
+
+These results establish that severe degradation is possible in a deliberately
+extreme corner. They do not yet identify the lower onset boundary or show how
+often real networks enter it.
+
+### Stage 0: host requalification
+
+Both VM pairs reproduced the same runtime hashes and module srcversion. They
+were clean, synchronized, free of IFB/impairment residue, and maintained two
+TCP carriers per endpoint.
+
+Unshaped clean-path sanity checks were closely matched:
+
+| Outer transport | Inner flows | Original pair | Secondary pair |
+|---|---:|---:|---:|
+| TCP | 1 | 2,151 Mb/s | 2,197 Mb/s |
+| TCP | 16 | 2,926 Mb/s | 3,064 Mb/s |
+| UDP | 1 | 4,232 Mb/s | 4,251 Mb/s |
+| UDP | 16 | 3,713 Mb/s | 3,824 Mb/s |
+
+These are host-capacity checks, not shaped boundary results. Both pairs have
+ample headroom above the 50 Mb/s test carrier.
+
+### Stage 1: timed transition smoke
+
+All four executions were valid/stable:
+
+| Execution | Pair | Impaired mean | Longest stall | Recovery to 90% | Deficit | Outer recovery | Episode result |
+|---|---|---:|---:|---:|---:|---:|---|
+| TCP r1 | Original | 31.400 Mb/s | 0.4 s | 14.049 s | 520.605 Mbit | 26 | mechanism and user-visible recovery delay; no quasi-meltdown |
+| UDP r1 | Original | 42.392 Mb/s | 0 s | 4.148 s | 122.839 Mbit | 0 | no disruption endpoint |
+| TCP r2 | Secondary | 44.784 Mb/s | 0.2 s | 9.848 s | 175.833 Mbit | 32 | mechanism and user-visible recovery delay; no quasi-meltdown |
+| UDP r2 | Secondary | 41.035 Mb/s | 0 s | 4.748 s | 154.911 Mbit | 0 | no disruption endpoint |
+
+Other smoke gates:
+
+- actual loss epochs were 1.990-1.996 seconds;
+- maximum transition skew was 9.564 ms;
+- maximum conservative clock-error bound was 0.032 ms;
+- delivery coverage was complete;
+- both TCP carriers remained present with unchanged tuples; and
+- all four hosts restored their baseline `mq`/`fq_codel` state.
+
+The TCP executions recovered 2.07-3.39 times more slowly than their matched UDP
+controls. That is a measurable transient TCP-over-TCP penalty, but neither TCP
+execution had the required one-second stall, and neither was a quasi-meltdown
+or formal meltdown.
+
+Compact smoke evidence is in
+[`results/2026-07-16-boundary-stage1-smoke/`](results/2026-07-16-boundary-stage1-smoke/).
+
+## Immediate next step
+
+Stage 2 is predeclared in
+[`matrix-boundary-correlation.csv`](matrix-boundary-correlation.csv). It contains
+30 executions: five correlation levels, matched TCP/UDP controls, and three
+repetitions per point.
+
+Before release:
+
+1. validate the full repository contract suite;
+2. commit and push the Stage 1 summary and exact Stage 2 matrix;
+3. assign every matched TCP/UDP repetition to one VM pair and balance the 15
+   paired profiles 8/7 across the two pairs; and
+4. recheck runtime identity, clocks, qdiscs, dual carriers, and clean host state.
+
+The campaign stops on any safety, identity, transition, evidence, or restoration
+failure. Stage 3 duration work is released only after Stage 2 identifies the
+least severe correlation point producing a quasi-meltdown episode in at least
+two of three valid TCP repetitions.
+
+## Interpretation limits
+
+- The Stage 1 sample is deliberately small and qualifies the harness; it does
+  not estimate event probability.
+- Synthetic netem loss establishes mechanism boundaries, not network
+  prevalence.
+- The reference profile is intentionally harsh and should not be described as
+  representative LTE behavior without qualified field traces.
+- No claim about LTE prevalence will be made from one carrier, modem, location,
+  outage, or public trace.
+- Invalid evidence is never converted into a positive or negative result.
+- The final boundary applies only to the recorded kernel, runtime, topology,
+  workload, RTT, queue, loss model, and carrier configuration.
+
+The authoritative prospective rules remain in
+[`BOUNDARY_TESTPLAN.md`](BOUNDARY_TESTPLAN.md). Historical interpretation and
+replication guidance are in [`../../docs/TCP_MELTDOWN.md`](../../docs/TCP_MELTDOWN.md).

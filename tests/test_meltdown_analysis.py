@@ -64,6 +64,9 @@ BURST_BREADTH_MATRIX = (
 BOUNDARY_SMOKE_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-boundary-smoke.csv"
 )
+BOUNDARY_CORRELATION_MATRIX = (
+    ROOT / "perf-test" / "meltdown" / "matrix-boundary-correlation.csv"
+)
 
 
 def workload_document(
@@ -2389,6 +2392,45 @@ class MeltdownAnalysisTest(unittest.TestCase):
             "workload_duration_s",
         ):
             self.assertIn(field, ANALYZE.CSV_FIELDS)
+
+    def test_boundary_correlation_matrix_is_exactly_predeclared(self) -> None:
+        with BOUNDARY_CORRELATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            rows = list(csv.DictReader(stream))
+
+        expected_points = {
+            "ge-res1-d16-r200-q1-16f": ("4", "100"),
+            "ge-res2-d16-r200-q1-16f": ("2", "50"),
+            "ge-res4-d16-r200-q1-16f": ("1", "25"),
+            "ge-res8-d16-r200-q1-16f": ("0.5", "12.5"),
+            "ge-res16-d16-r200-q1-16f": ("0.25", "6.25"),
+        }
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(sum(int(row["repetitions"]) for row in rows), 30)
+        self.assertEqual({row["name"] for row in rows}, set(expected_points))
+        self.assertEqual({row["tunnel"] for row in rows}, {"tcp", "udp"})
+        self.assertEqual({row["impairment_schedule"] for row in rows}, {"timed"})
+        self.assertEqual({row["loss_epoch_start_s"] for row in rows}, {"15"})
+        self.assertEqual({row["loss_epoch_ms"] for row in rows}, {"16000"})
+        self.assertEqual({row["duration_s"] for row in rows}, {"91"})
+        self.assertEqual({row["workload_duration_s"] for row in rows}, {"92"})
+        self.assertEqual({row["repetitions"] for row in rows}, {"3"})
+
+        for name, (burst_p, burst_r) in expected_points.items():
+            point_rows = [row for row in rows if row["name"] == name]
+            self.assertEqual({row["tunnel"] for row in point_rows}, {"tcp", "udp"})
+            self.assertEqual({row["burst_p"] for row in point_rows}, {burst_p})
+            self.assertEqual({row["burst_r"] for row in point_rows}, {burst_r})
+            for row in point_rows:
+                p = float(row["burst_p"])
+                r = float(row["burst_r"])
+                bad_fraction = p / (p + r)
+                stationary_loss = (
+                    bad_fraction * float(row["burst_h"]) / 100.0
+                    + (1.0 - bad_fraction) * float(row["burst_k"]) / 100.0
+                )
+                self.assertAlmostEqual(stationary_loss, 0.04423076923076923)
 
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')

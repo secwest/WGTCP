@@ -53,6 +53,9 @@ simultaneously meets the predeclared stall, declining-goodput, and inner-RTO
 conditions. See
 [`results/2026-07-14-final-audit/`](results/2026-07-14-final-audit/).
 
+The active boundary strategy and all results released so far are summarized in
+[`BOUNDARY_STATUS.md`](BOUNDARY_STATUS.md).
+
 Across the nine valid logical TCP breadth cells, longest continuous
 zero-delivery runs were 0.7-40.2 seconds (median 6.3 seconds) in 60-second
 workloads. At the lowest severe profile, repetitions stalled for at most 0.7
@@ -74,6 +77,10 @@ meltdown/
   matrix-mechanism-burst-qualified.csv
   matrix-mechanism-burst-transport-qualified.csv
   matrix-mechanism-burst-breadth.csv
+  BOUNDARY_TESTPLAN.md
+  BOUNDARY_STATUS.md
+  matrix-boundary-smoke.csv
+  matrix-boundary-correlation.csv
   harness/
     install-host.sh
     setup-tunnels.sh
@@ -99,6 +106,9 @@ meltdown/
     REPORT.md
   results/2026-07-14-final-audit/
     campaigns.csv          # raw-execution inclusion/exclusion ledger
+    README.md
+  results/2026-07-16-boundary-stage1-smoke/
+    cells.csv              # compact cross-pair smoke summary
     README.md
 ```
 

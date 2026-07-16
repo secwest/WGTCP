@@ -1,7 +1,9 @@
 # Prospective TCP Meltdown Boundary and Mitigation Plan
 
-Status: draft for review. No boundary, mitigation, or LTE-replay cell has run
-under this plan.
+Status: approved and active. Host requalification and the four-execution
+transition smoke are complete. The Stage 2 packet-correlation matrix is
+predeclared, but no Stage 2, mitigation, or LTE-replay cell had run when that
+matrix was released.
 
 This plan extends the completed campaign without changing its historical
 definitions or rescoring its evidence. It is intended to answer:
@@ -186,6 +188,14 @@ Require:
 Failure stops the boundary campaign until the harness is corrected. Smoke
 results cannot be promoted into the boundary estimate.
 
+Gate result (2026-07-16): passed. All four executions were valid/stable, all
+timing and evidence gates passed, and both VM pairs restored cleanly. The TCP
+cells showed 0.2-0.4-second maximum stalls and 9.85-14.05-second sustained
+recovery to 90%; matched UDP controls showed no stall and recovered in
+4.15-4.75 seconds. No smoke cell met the quasi-meltdown or formal-meltdown
+endpoint. See
+[`results/2026-07-16-boundary-stage1-smoke/`](results/2026-07-16-boundary-stage1-smoke/).
+
 ### Stage 2: packet-correlation boundary
 
 This stage changes mean bad-state packet residence while holding nominal
@@ -203,6 +213,8 @@ Use a 16-second impaired epoch so packet correlation, not epoch truncation, is
 the primary variable. Run three paired repetitions per point. If the transition
 occurs between two levels, test intermediate residence values only when netem
 can represent them exactly and the matrix is committed before execution.
+The released coarse matrix is
+[`matrix-boundary-correlation.csv`](matrix-boundary-correlation.csv).
 
 This answers "how long is an error burst" in packet terms. It does not yet
 answer how long the adverse regime must remain active.
