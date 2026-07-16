@@ -2179,6 +2179,10 @@ class MeltdownAnalysisTest(unittest.TestCase):
         ANALYZE.apply_udp_control_comparison(docs)
         self.assertTrue(docs[0]["metrics"]["quasi_meltdown_episode"])
 
+        docs[0]["metrics"]["episode_below_half_pre"] = "false"
+        ANALYZE.apply_udp_control_comparison(docs)
+        self.assertFalse(docs[0]["metrics"]["quasi_meltdown_episode"])
+
     def test_orchestrator_publishes_cells_only_after_cleanup(self) -> None:
         finally_index = ORCHESTRATOR.index("    } finally {")
         publish_index = ORCHESTRATOR.index(

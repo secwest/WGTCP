@@ -65,6 +65,18 @@ affects design and externally visible behavior.
 - Added a fail-closed campaign composite generator that requires complete source
   manifests, identical runtime identities and matrix axes, valid replacement
   evidence, and explicit per-cell source fingerprints.
+- Added a multi-shard campaign compositor that preserves chronological valid,
+  invalid, failed, stopped, and unrun records; permits one rerun only after
+  invalid evidence; requires exact cell and pair fingerprints plus strictly
+  newer hash-bound rerun timestamps; rejects cross-pair matched controls;
+  separates raw from matched-control-adjusted classifications; validates typed
+  result fields; rejects unmanifested cell evidence; latches analyzed and
+  unanalyzed safety stops independently from outcomes and makes them terminal;
+  rejects symlinks and special entries before hashing each source evidence tree;
+  and binds external audit bundles without promoting an incomplete selection.
+- Added compact timed-boundary evidence for the qualified transition smoke and
+  the stopped 30-cell packet-correlation matrix, including 32 attempt records,
+  23 selected valid logical cells, one unresolved control, and six unrun cells.
 - Added an opt-in prospective interval-completion policy that can qualify only
   allowlisted final-control failures with exact flow count, near-full
   continuous interval output in every active direction, and complete
@@ -160,6 +172,10 @@ affects design and externally visible behavior.
 - Reconciled performance documentation with the completed mechanistic campaign,
   separating the 106-cell released selection, 162 raw executions, and the
   non-qualifying 20-cell breadth state.
+- Froze the packet-correlation boundary at the prospective safety stop. The
+  qualified 1/2/4-packet points produced 0/3, 1/3, and 0/3 quasi-meltdown
+  episodes; the incomplete 8-packet and unrun 16-packet points do not support an
+  onset threshold or release Stage 3.
 - Removed plaintext VM passwords and private keys from legacy node
   documentation and its generated patch artifact.
 
@@ -211,6 +227,10 @@ affects design and externally visible behavior.
   and near-meltdown behavior, but no valid execution satisfies all three formal
   conditions. AQM/ECN, dynamics, workload breadth, and endurance remain before
   any general resilience claim.
+- The timed correlation study stopped after external unattended-upgrade service
+  restarts consumed 8-packet UDP r3's only exact rerun. Residence 16 and all
+  duration, stream-count, bandwidth, mitigation, and LTE replay stages remain
+  unrun; no exact onset or modern-network prevalence claim is available.
 - The latest parity/lifecycle integration passed contracts and matching ARM
   compilation but was not loaded for the recorded traffic campaign.
 - At high concurrency the bounded internal writer queue can still reject new

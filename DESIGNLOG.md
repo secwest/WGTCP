@@ -5,6 +5,33 @@ and known limitations. Update it in the same commit as every substantive design
 or behavioral change. Append a new entry when a decision changes; mark older
 entries as superseded instead of silently rewriting their history.
 
+## 2026-07-16: Correlation evidence stops at the consumed exact rerun
+
+**Decision:** Freeze the 30-cell packet-correlation matrix after 8-packet UDP
+r3's sole exact rerun safety-stopped. Do not add another retry, run the
+16-packet point, or release the duration stage. Preserve the 31 analyzable
+executions, the stopped attempt, and all unrun cells as distinct provenance
+states instead of filling the missing control after observing results.
+
+**Evidence:** The 1-, 2-, and 4-packet points qualified with 0/3, 1/3, and 0/3
+TCP quasi-meltdown episodes. Eight packets has five selected valid cells and
+only two qualified matched pairs. Ubuntu `apt-daily-upgrade` began before UDP
+r3 and restarted the active impairment helper and sampler after upgrading
+Python; the restarted helper correctly rejected its now-past absolute schedule.
+All four hosts subsequently restored baseline qdiscs, exact runtime identity,
+two carriers, synchronized clocks, and zero-loss TCP/UDP controls.
+
+**Consequence:** No correlation onset or probability bracket is reported, and
+the Stage 3 release condition is unsatisfied. `compose_campaigns.py` treats
+chronological shards as an audit: it permits a second attempt only after
+evidence-invalid execution, enforces exact cell and pair campaign fingerprints
+and the two-attempt ceiling, requires a rerun's hash-bound `updated_at` to be
+strictly newer, rejects cross-pair matched controls and unmanifested cell
+evidence, latches safety-stop events independently from analyzable outcomes,
+makes the first safety stop terminal, rejects symlinks before hashing raw
+evidence trees, and emits separate attempt and logical-cell ledgers containing
+invalid, replacement, stopped, failed, and unrun states.
+
 ## 2026-07-15: Meltdown documentation reports the measured operating envelope
 
 **Decision:** Describe the severe behavior as an extreme tested corner, not as

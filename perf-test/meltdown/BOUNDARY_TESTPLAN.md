@@ -219,6 +219,14 @@ The released coarse matrix is
 This answers "how long is an error burst" in packet terms. It does not yet
 answer how long the adverse regime must remain active.
 
+Frozen disposition (2026-07-16): the 1-, 2-, and 4-packet points qualified with
+0/3, 1/3, and 0/3 TCP quasi-meltdown episodes. The 8-packet point stopped with
+five selected valid cells after UDP r3's only exact rerun was interrupted by an
+unattended package-service restart. The 16-packet point is unrun. No additional
+retry or higher-correlation execution is permitted in this campaign, no onset
+threshold is claimed, and Stage 3 is not released. This disposition applies the
+rules above; it does not alter them.
+
 ### Stage 3: impaired-epoch duration boundary
 
 Use the least severe packet-correlation point from Stage 2 that produces a
@@ -236,6 +244,9 @@ duration bracket is no wider than 250 ms or a 1.25 ratio, whichever is larger.
 
 The 0-second profile is a dynamic-helper negative control and must produce no
 loss counter delta or transition-related delivery deficit.
+
+This stage remains unrun because Stage 2 did not produce the required qualified
+two-of-three release point.
 
 ### Stage 4: minimum inner stream count
 

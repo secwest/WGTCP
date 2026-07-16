@@ -13,18 +13,18 @@ The historical post-repair audit contains 162 raw executions:
 - zero valid formal-meltdown executions; and
 - 40 evidence-invalid executions that are retained but never promoted.
 
-The new boundary campaign is designed to locate the onset region rather than
-assume one. Its first timed smoke stage is complete: all four matched TCP/UDP
-executions were valid and stable. A two-second correlated-loss epoch caused
-0.2-0.4-second TCP delivery stalls and 9.85-14.05-second sustained recovery to
-90% of baseline, compared with no stall and 4.15-4.75-second recovery for the
-matched UDP controls. No smoke execution met the quasi-meltdown or formal
-meltdown endpoint.
+The new boundary campaign was designed to locate the onset region rather than
+assume one. Its timed smoke stage completed valid/stable and measured a clear
+TCP recovery penalty. Stage 2 then qualified the 1-, 2-, and 4-packet
+correlation points, reached the 8-packet point, and safety-stopped before that
+point could qualify. Residence 16 was not run.
 
-The smoke proves that the timed harness can measure a transient TCP-over-TCP
-recovery penalty. It is not an onset estimate. Packet correlation, adverse
-epoch duration, stream count, carrier rate, and offered load still need to be
-mapped prospectively.
+Qualified TCP quasi-meltdown counts were 0/3 at one packet, 1/3 at two packets,
+and 0/3 at four packets. Eight packets has only two valid matched pairs; its
+third UDP control consumed its one exact rerun during external package-service
+interference. The prospective two-of-three onset rule was not met at any
+qualified point. Stage 2 therefore establishes no defensible correlation onset
+threshold and does not release Stage 3.
 
 ## Questions the campaign will answer
 
@@ -151,8 +151,8 @@ rerun allowed by the prospective plan.
 |---|---|---|---|
 | 0. Host requalification | Establish identical, clean test pairs. | Runtime identity, clocks, qdiscs, carriers, and clean 1/16-flow TCP/UDP controls. | Complete |
 | 1. Transition smoke | Qualify absolute timing and clean-loss-clean evidence. | Two TCP and two UDP repetitions with a two-second reference epoch. | Complete and passed |
-| 2. Packet correlation | Find the least correlated loss process that can produce a quasi-meltdown episode. | Mean bad-state residence of 1, 2, 4, 8, and 16 packets; 16-second epoch; three paired repetitions per point. | Predeclared; next to run |
-| 3. Epoch duration | Bracket how long the adverse regime must persist. | 0, 0.25, 0.5, 1, 2, 4, 8, and 16 seconds, then prospective midpoint refinement. | Not run |
+| 2. Packet correlation | Find the least correlated loss process that can produce a quasi-meltdown episode. | Mean bad-state residence of 1, 2, 4, 8, and 16 packets; 16-second epoch; three paired repetitions per point. | Stopped incomplete at 8 packets; no onset threshold |
+| 3. Epoch duration | Bracket how long the adverse regime must persist. | 0, 0.25, 0.5, 1, 2, 4, 8, and 16 seconds, then prospective midpoint refinement. | Not released |
 | 4. Stream count | Find the minimum tested inner-stream count meeting the high-probability rule. | 1, 2, 4, 8, 12, 16, 24, and 32 streams, with integer refinement if needed. | Not run |
 | 5A. Carrier rate | Separate absolute packet-rate effects from BDP-scaled behavior. | 5, 10, 20, 35, 50, 75, and 100 Mb/s with a 1x-BDP queue. | Not run |
 | 5B. Offered load | Find the achieved load ratio associated with onset. | 25%, 50%, 75%, 90%, 100%, and 120% of a 50 Mb/s carrier, gated on pacing calibration. | Not run |
@@ -232,25 +232,58 @@ or formal meltdown.
 Compact smoke evidence is in
 [`results/2026-07-16-boundary-stage1-smoke/`](results/2026-07-16-boundary-stage1-smoke/).
 
-## Immediate next step
+### Stage 2: packet-correlation boundary
 
-Stage 2 is predeclared in
-[`matrix-boundary-correlation.csv`](matrix-boundary-correlation.csv). It contains
-30 executions: five correlation levels, matched TCP/UDP controls, and three
-repetitions per point.
+The frozen logical and raw inventories are:
 
-Before release:
+| Inventory | Planned | Reached | Selected valid | Invalid raw | Stopped | Unrun |
+|---|---:|---:|---:|---:|---:|---:|
+| Stage 2 | 30 | 24 | 23 | 8 | 1 | 6 |
 
-1. validate the full repository contract suite;
-2. commit and push the Stage 1 summary and exact Stage 2 matrix;
-3. assign every matched TCP/UDP repetition to one VM pair and balance the 15
-   paired profiles 8/7 across the two pairs; and
-4. recheck runtime identity, clocks, qdiscs, dual carriers, and clean host state.
+There were 31 analyzable executions: 23 valid and eight invalid. Seven invalid
+cells received one successful exact rerun. The eighth, 8-packet UDP r3,
+safety-stopped during its sole exact rerun and remains unresolved.
 
-The campaign stops on any safety, identity, transition, evidence, or restoration
-failure. Stage 3 duration work is released only after Stage 2 identifies the
-least severe correlation point producing a quasi-meltdown episode in at least
-two of three valid TCP repetitions.
+| Mean bad-state residence | Selected valid | Matched pairs | Qualified TCP quasi episodes | Formal meltdown | State |
+|---:|---:|---:|---:|---:|---|
+| 1 packet | 6/6 | 3/3 | 0/3 | 0 | Qualified |
+| 2 packets | 6/6 | 3/3 | 1/3 | 0 | Qualified; below onset rule |
+| 4 packets | 6/6 | 3/3 | 0/3 | 0 | Qualified |
+| 8 packets | 5/6 | 2/3 | 0/2 | 0 | Incomplete |
+| 16 packets | 0/6 | 0/3 | N/A | 0 | Unrun |
+
+The sole episode-positive execution was 2-packet TCP r2: a 1.8-second stall,
+0.139 Mb/s minimum five-second delivery versus 4.605 Mb/s for UDP, 162 outer
+recovery events, and 11.551-second recovery to 90%. The other TCP stalls were:
+
+- 0.2-0.3 seconds at one packet;
+- 0.3 and 0.8 seconds in the other two-packet repetitions;
+- 0.3-0.7 seconds at four packets; and
+- 0.4/0.7 seconds in the two qualified eight-packet pairs.
+
+The valid eight-packet TCP r3 replacement stalled for 1.4 seconds, reached a
+1.996 Mb/s minimum five-second delivery rate, recorded 126 outer-recovery
+events, and recovered in 12.451 seconds. Its matched UDP r3 control is
+unresolved, so it cannot receive a qualified quasi-meltdown label.
+
+The safety stop was caused by Ubuntu `apt-daily-upgrade`, which began at
+06:59:59 UTC and restarted the active Python impairment helper and sampler at
+07:01:12 UTC after upgrading Python. The helper correctly rejected its
+now-past absolute schedule. Partial endpoint evidence, systemd/package journals,
+and the post-stop four-host validation are hash-bound in the compact provenance.
+All four hosts then passed exact runtime and cleanup checks, retained two
+carriers each, and delivered 40/40 TCP plus 40/40 UDP probes without loss.
+
+Compact evidence is in
+[`results/2026-07-16-boundary-stage2-correlation/`](results/2026-07-16-boundary-stage2-correlation/).
+
+## Frozen disposition
+
+The prospective retry budget is exhausted for UDP r3. No additional retry,
+8-packet repair, 16-packet execution, or Stage 3 duration work may be added to
+this frozen selection. A future independent replication would require a new
+prospective plan and package-maintenance isolation; it cannot retroactively
+repair or extend this Stage 2 estimate.
 
 ## Interpretation limits
 
@@ -263,6 +296,8 @@ two of three valid TCP repetitions.
 - No claim about LTE prevalence will be made from one carrier, modem, location,
   outage, or public trace.
 - Invalid evidence is never converted into a positive or negative result.
+- The incomplete 8-packet point and unrun 16-packet point prevent a correlation
+  onset or probability bracket from being claimed.
 - The final boundary applies only to the recorded kernel, runtime, topology,
   workload, RTT, queue, loss model, and carrier configuration.
 

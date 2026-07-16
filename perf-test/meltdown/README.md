@@ -56,6 +56,14 @@ conditions. See
 The active boundary strategy and all results released so far are summarized in
 [`BOUNDARY_STATUS.md`](BOUNDARY_STATUS.md).
 
+The timed packet-correlation stage is now frozen incomplete. It selected 23
+valid logical cells across the 1-, 2-, 4-, and partial 8-packet residence
+points, retained eight invalid originals, and safety-stopped one exact rerun
+during external package-service interference. Residence 16 is unrun, no
+correlation onset threshold is claimed, and Stage 3 is not released. Compact
+attempt, logical-cell, profile, source-manifest, and audit provenance is in
+[`results/2026-07-16-boundary-stage2-correlation/`](results/2026-07-16-boundary-stage2-correlation/).
+
 Across the nine valid logical TCP breadth cells, longest continuous
 zero-delivery runs were 0.7-40.2 seconds (median 6.3 seconds) in 60-second
 workloads. At the lowest severe profile, repetitions stalled for at most 0.7
@@ -88,6 +96,7 @@ meltdown/
     sample-endpoint.sh
     tcp-events.bt
     analyze.py              # cell/campaign analysis and raw stall timelines
+    compose_campaigns.py    # sharded/stopped campaign audit composition
   orchestrator/
     run-campaign.ps1
   results/<campaign>/
@@ -109,6 +118,11 @@ meltdown/
     README.md
   results/2026-07-16-boundary-stage1-smoke/
     cells.csv              # compact cross-pair smoke summary
+    README.md
+  results/2026-07-16-boundary-stage2-correlation/
+    attempts.csv           # every valid, invalid, failed, or stopped attempt
+    logical-cells.csv      # selected, unresolved, and unrun matrix state
+    profiles.csv           # correlation-point release summary
     README.md
 ```
 
@@ -266,3 +280,31 @@ prospectively recorded iperf versions and executable
 hashes, or matrix axes. It retains both source campaign fingerprints and writes
 the selected fingerprint and analyzed `cell.json` SHA-256 for every cell to
 `provenance.csv`.
+
+For a matrix split across many pair-specific shards, or one that stops before a
+fully valid selection exists, compose a chronological audit instead:
+
+```powershell
+python .\harness\compose_campaigns.py `
+  --matrix .\matrix-boundary-correlation.csv `
+  --campaign <first-shard> `
+  --campaign <next-shard-or-exact-rerun> `
+  --audit-evidence stopped-cell=<preserved-audit-directory> `
+  --output .\results\<stopped-composition>
+```
+
+Campaign arguments declare chronological attempt order. For every repeated
+cell, the compositor requires the later shard's hash-bound `updated_at` to be
+strictly newer; disjoint shard order must still be reconciled with the campaign
+audit timeline before publication. The compositor requires every shard to bind
+the exact full matrix, enforces identical runtime identity and matrix axes,
+permits a rerun only after evidence-invalid execution, requires exact cell and
+pair campaign fingerprints, and permits at most two attempts per logical cell.
+Matched TCP/UDP controls must also share that pair fingerprint. It emits
+separate ledgers for all attempts and all matrix cells, so invalid originals,
+valid replacements, failed or stopped attempts, and unrun cells remain visible
+rather than being copied over. Safety-stop events are latched independently
+from analyzable attempt outcomes, and unmanifested on-disk cell evidence is
+rejected. The stop cell must be the final manifested attempt and no later shard
+may add evidence. Timed endpoint metrics and conditions also require their exact
+numeric or boolean types before matched-control scoring.

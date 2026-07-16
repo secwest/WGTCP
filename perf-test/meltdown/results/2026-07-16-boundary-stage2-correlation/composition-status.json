@@ -1,0 +1,67 @@
+{
+  "status": "stopped-incomplete-selection",
+  "created_at": "2026-07-16T09:15:04.628586+00:00",
+  "matrix_sha256": "b95a85d0a9df2ad4ef757be665b0512f631de1dbac96513c04870aa47be79d7e",
+  "matrix_cells": 30,
+  "attempts": 32,
+  "analyzable_attempts": 31,
+  "safety_stops": 1,
+  "attempt_outcomes": {
+    "invalid": 8,
+    "stopped": 1,
+    "valid": 23
+  },
+  "logical_states": {
+    "selected_valid": 23,
+    "stopped": 1,
+    "unrun": 6
+  },
+  "selected_classifications": {
+    "stable": 23
+  },
+  "runtime_identity": {
+    "module_srcversion": "01DA86291E0FBD2CD3C940C",
+    "module_sha256": "771057ae270ae379e90bc9c31f8f8777e54556d8acbb71b8717e6a950dca275e",
+    "tool_sha256": "80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3",
+    "iperf_version": "iperf 3.16",
+    "iperf_sha256": "626565d9571f0ebb9148a36944beeaafa9b7581884f11c11b7fd1cf4218f5ad4"
+  },
+  "source_campaigns": [
+    "boundary-stage2-res1-primary-20260716",
+    "boundary-stage2-res1-secondary-20260716",
+    "boundary-stage2-res1-rerun1-primary-20260716",
+    "boundary-stage2-res1-rerun1-secondary-20260716",
+    "boundary-stage2-res2-primary-20260716",
+    "boundary-stage2-res2-secondary-20260716",
+    "boundary-stage2-res2-rerun1-primary-20260716",
+    "boundary-stage2-res2-rerun1-secondary-20260716",
+    "boundary-stage2-res4-primary-20260716",
+    "boundary-stage2-res4-secondary-20260716",
+    "boundary-stage2-res8-primary-20260716",
+    "boundary-stage2-res8-secondary-20260716",
+    "boundary-stage2-res8-rerun1-primary-20260716",
+    "boundary-stage2-res8-rerun1-secondary-20260716"
+  ],
+  "audit_evidence": [
+    {
+      "name": "stopped-udp-r3",
+      "source_directory": "boundary-stage2-res8-rerun1-secondary-partial-remote-20260716",
+      "file_count": 97,
+      "tree_sha256": "9d39d0f143d857922b87d48854ff72fd4960bc34214d4d068adeb59205a240db"
+    },
+    {
+      "name": "post-stop-validation",
+      "source_directory": "boundary-stage2-post-stop-validation-20260716",
+      "file_count": 6,
+      "tree_sha256": "c798e8a60468163bff28eb0d212e2f62b700c38122255c5527bb1fbc5e19d2d4"
+    }
+  ],
+  "files": {
+    "attempts": "attempts.csv",
+    "logical_cells": "logical-cells.csv",
+    "selected_cells": "selected-cells.csv",
+    "profiles": "profiles.csv",
+    "source_campaigns": "source-campaigns.csv",
+    "audit_evidence": "audit-evidence.csv"
+  }
+}

@@ -76,6 +76,15 @@ planned 0.3% random-loss onset row remained disabled and was never executed.
 The campaign therefore bounds the transition only between stable no-loss
 controls and the 4.42%-nominal burst profile.
 
+A later timed study held nominal stationary loss at 4.42% and varied mean
+bad-state residence. The 1-, 2-, and 4-packet points qualified with 0/3, 1/3,
+and 0/3 quasi-meltdown TCP episodes. The 8-packet point remained incomplete
+after an unattended package restart consumed one control's exact rerun, and the
+16-packet point was not run. These results do not establish a monotonic
+correlation threshold; the lower onset remains unknown. See
+[`../perf-test/meltdown/BOUNDARY_STATUS.md`](../perf-test/meltdown/BOUNDARY_STATUS.md)
+for the frozen inventory and provenance.
+
 ## Stall persistence
 
 A stall is a 100 ms receiver interval with exactly zero delivered inner bytes.

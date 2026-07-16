@@ -2993,9 +2993,9 @@ def apply_udp_control_comparison(docs: list[dict[str, Any]]) -> None:
         )
         doc.setdefault("metrics", {})["udp_control_goodput_ratio"] = ratio
         below_half = bool(
-            doc.get("valid")
+            doc.get("valid") is True
             and udp
-            and udp.get("valid")
+            and udp.get("valid") is True
             and ratio is not None
             and ratio < 0.50
         )
@@ -3015,17 +3015,17 @@ def apply_udp_control_comparison(docs: list[dict[str, Any]]) -> None:
                 else None
             )
             below_half_episode_control = bool(
-                doc.get("valid")
+                doc.get("valid") is True
                 and udp
-                and udp.get("valid")
+                and udp.get("valid") is True
                 and episode_ratio is not None
                 and episode_ratio <= 0.50
             )
             quasi_meltdown = bool(
                 below_half_episode_control
-                and metrics.get("episode_below_half_pre")
-                and metrics.get("mechanism_observed")
-                and metrics.get("user_visible_disruption")
+                and metrics.get("episode_below_half_pre") is True
+                and metrics.get("mechanism_observed") is True
+                and metrics.get("user_visible_disruption") is True
                 and as_int(metrics.get("episode_longest_stall_ms")) >= 1000
             )
             metrics["udp_control_episode_min_5s_ratio"] = episode_ratio

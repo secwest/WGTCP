@@ -7,6 +7,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -31,6 +32,13 @@ QUALIFICATION_FIELDS = (
     "targeted_selection",
     "qualifying_complete",
 )
+CLASSIFICATIONS = {
+    "stable",
+    "degraded",
+    "near-meltdown",
+    "meltdown",
+    "invalid",
+}
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,7 @@ def validate_qualification_metadata(
     path: Path,
     status: dict[str, Any],
     order: list[str],
+    complete: bool,
 ) -> bool:
     present = [field in status for field in QUALIFICATION_FIELDS]
     if not any(present):
@@ -80,16 +89,87 @@ def validate_qualification_metadata(
     targeted = set(order) != set(matrix_cells)
     if status["targeted_selection"] is not targeted:
         raise ValueError(f"{path.name}: targeted selection metadata is invalid")
-    if status["qualifying_complete"] is not (not targeted):
+    if status["qualifying_complete"] is not (complete and not targeted):
         raise ValueError(f"{path.name}: qualifying completion metadata is invalid")
     return True
 
 
-def load_campaign(path: Path) -> Campaign:
+def validate_result_document(path: Path, cell_id: str, doc: dict[str, Any]) -> None:
+    valid = doc.get("valid")
+    classification = doc.get("classification")
+    conditions = doc.get("conditions")
+    invalid_reasons = doc.get("invalid_reasons")
+    axes = doc.get("axes")
+    metrics = doc.get("metrics")
+    if type(valid) is not bool:
+        raise ValueError(f"{path.name}/{cell_id}: valid is not boolean")
+    if classification not in CLASSIFICATIONS:
+        raise ValueError(f"{path.name}/{cell_id}: classification is invalid")
+    if valid != (classification != "invalid"):
+        raise ValueError(
+            f"{path.name}/{cell_id}: validity and classification disagree"
+        )
+    if not isinstance(conditions, dict) or not all(
+        type(value) is bool for value in conditions.values()
+    ):
+        raise ValueError(f"{path.name}/{cell_id}: conditions are not boolean")
+    if not isinstance(axes, dict) or not isinstance(metrics, dict):
+        raise ValueError(f"{path.name}/{cell_id}: axes or metrics are invalid")
+    if (
+        not isinstance(invalid_reasons, list)
+        or not all(
+            isinstance(reason, str) and reason for reason in invalid_reasons
+        )
+        or (valid and invalid_reasons)
+        or (not valid and not invalid_reasons)
+    ):
+        raise ValueError(f"{path.name}/{cell_id}: invalid reasons disagree")
+    if valid:
+        goodput = metrics.get("goodput_mbps")
+        if (
+            not isinstance(goodput, (int, float))
+            or isinstance(goodput, bool)
+            or not math.isfinite(goodput)
+            or goodput < 0
+        ):
+            raise ValueError(f"{path.name}/{cell_id}: goodput metric is invalid")
+    if valid and axes.get("impairment_schedule") == "timed":
+        for name in (
+            "episode_below_half_pre",
+            "mechanism_observed",
+            "user_visible_disruption",
+        ):
+            if type(metrics.get(name)) is not bool:
+                raise ValueError(
+                    f"{path.name}/{cell_id}: timed metric {name} is not boolean"
+                )
+        for name in ("episode_min_5s_mbps", "episode_longest_stall_ms"):
+            value = metrics.get(name)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"{path.name}/{cell_id}: timed metric {name} is invalid"
+                )
+        for name in ("formal_meltdown", "quasi_meltdown_episode"):
+            if type(conditions.get(name)) is not bool:
+                raise ValueError(
+                    f"{path.name}/{cell_id}: timed condition {name} is missing"
+                )
+
+
+def load_campaign(path: Path, *, allow_incomplete: bool = False) -> Campaign:
     status_path = path / "campaign-status.json"
     status = json.loads(status_path.read_text(encoding="utf-8-sig"))
-    if status.get("status") != "complete":
+    status_name = str(status.get("status", ""))
+    complete = status_name == "complete"
+    if not complete and not allow_incomplete:
         raise ValueError(f"{path.name}: campaign status is not complete")
+    if status_name not in {"complete", "incomplete", "safety_stopped"}:
+        raise ValueError(f"{path.name}: unsupported campaign status {status_name!r}")
 
     order = [str(cell) for cell in status.get("expected_cells", [])]
     expected = set(order)
@@ -101,10 +181,18 @@ def load_campaign(path: Path) -> Campaign:
     }
     if not order or len(order) != len(expected):
         raise ValueError(f"{path.name}: expected cell list is empty or duplicated")
-    current_format = validate_qualification_metadata(path, status, order)
-    if expected != completed or failed:
+    current_format = validate_qualification_metadata(path, status, order, complete)
+    if complete and (expected != completed or failed):
         raise ValueError(f"{path.name}: completed/failed cell sets do not match")
-    if set(fingerprints) != expected:
+    if not complete and (
+        not completed <= expected
+        or not failed <= expected
+        or completed & failed
+    ):
+        raise ValueError(f"{path.name}: partial completed/failed cell sets are invalid")
+    if set(fingerprints) != expected or not all(
+        HEX64.fullmatch(value) for value in fingerprints.values()
+    ):
         raise ValueError(f"{path.name}: fingerprint manifest does not match cells")
 
     campaign_fingerprint = str(status.get("campaign_fingerprint", ""))
@@ -114,6 +202,8 @@ def load_campaign(path: Path) -> Campaign:
     result_hashes: dict[str, str] = {}
     identities: set[tuple[str, ...]] = set()
     for cell_id in order:
+        if cell_id not in completed:
+            continue
         cell = path / "cells" / cell_id
         required = (
             cell / "cell.complete",
@@ -141,6 +231,7 @@ def load_campaign(path: Path) -> Campaign:
             raise ValueError(f"{path.name}/{cell_id}: campaign fingerprint mismatch")
         if doc.get("cell_id") != cell_id:
             raise ValueError(f"{path.name}/{cell_id}: cell document identity mismatch")
+        validate_result_document(path, cell_id, doc)
         for key, value in doc.get("axes", {}).items():
             if env.get(key) != str(value):
                 raise ValueError(f"{path.name}/{cell_id}: cell axis {key} mismatch")
@@ -168,9 +259,9 @@ def load_campaign(path: Path) -> Campaign:
         docs[cell_id] = doc
         result_hashes[cell_id] = hashlib.sha256(doc_bytes).hexdigest()
 
-    if len(identities) != 1:
+    if len(identities) > 1 or (complete and len(identities) != 1):
         raise ValueError(f"{path.name}: runtime identity changes between cells")
-    identity_tuple = identities.pop()
+    identity_tuple = identities.pop() if identities else ()
     return Campaign(
         path=path,
         status=status,
@@ -202,7 +293,11 @@ def require_qualifying_base(campaign: Campaign) -> None:
         )
 
 
-def write_composite(base: Campaign, replacement: Campaign, output: Path) -> dict[str, Any]:
+def write_composite(
+    base: Campaign,
+    replacement: Campaign,
+    output: Path,
+) -> dict[str, Any]:
     require_qualifying_base(base)
     if base.identity != replacement.identity:
         raise ValueError("base and replacement runtime identities differ")
