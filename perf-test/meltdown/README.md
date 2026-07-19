@@ -64,6 +64,12 @@ correlation onset threshold is claimed, and Stage 3 is not released. Compact
 attempt, logical-cell, profile, source-manifest, and audit provenance is in
 [`results/2026-07-16-boundary-stage2-correlation/`](results/2026-07-16-boundary-stage2-correlation/).
 
+The 2026-07-19 continuation is a new independent replication rather than a
+repair of that frozen selection. Its immutable protocol is in
+[`BOUNDARY_REPLICATION_TESTPLAN.md`](BOUNDARY_REPLICATION_TESTPLAN.md), and its
+fresh 30-cell stage identity is defined by
+[`matrix-boundary-correlation-replication.csv`](matrix-boundary-correlation-replication.csv).
+
 Across the nine valid logical TCP breadth cells, longest continuous
 zero-delivery runs were 0.7-40.2 seconds (median 6.3 seconds) in 60-second
 workloads. At the lowest severe profile, repetitions stalled for at most 0.7
@@ -86,9 +92,11 @@ meltdown/
   matrix-mechanism-burst-transport-qualified.csv
   matrix-mechanism-burst-breadth.csv
   BOUNDARY_TESTPLAN.md
+  BOUNDARY_REPLICATION_TESTPLAN.md
   BOUNDARY_STATUS.md
   matrix-boundary-smoke.csv
   matrix-boundary-correlation.csv
+  matrix-boundary-correlation-replication.csv
   harness/
     install-host.sh
     setup-tunnels.sh

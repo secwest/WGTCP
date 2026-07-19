@@ -9,6 +9,10 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a prospectively isolated 30-cell packet-correlation replication with a
+  fresh stage identity, fixed pair assignment, runtime-only package-maintenance
+  isolation, terminal safety stops, and no reuse of frozen Stage 2 evidence.
+
 - Added a dedicated `perf-test/meltdown/` campaign for mechanistic
   TCP-over-TCP meltdown testing.
 - Added selective HTB plus finite-queue bottleneck construction, with IFB/netem

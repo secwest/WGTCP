@@ -5,6 +5,23 @@ and known limitations. Update it in the same commit as every substantive design
 or behavioral change. Append a new entry when a decision changes; mark older
 entries as superseded instead of silently rewriting their history.
 
+## 2026-07-19: Continue with an independent full correlation replication
+
+**Decision:** Keep the 2026-07-16 Stage 2 result frozen and run a new 30-cell
+replication under a distinct stage identity. Do not fill only the unresolved
+control or reuse any prior valid cell. Isolate package-maintenance triggers for
+the bounded campaign window and retain the original validity, retry, safety,
+matched-control, and Stage 3 release rules.
+
+**Rationale:** Adding a second UDP r3 retry or the missing 16-packet cells to the
+observed campaign would violate its prospective retry and stopping rules. A
+fresh complete matrix answers the user's request while preserving the original
+result as an independent incomplete observation.
+
+**Consequence:** Only the replication's own three matched repetitions per point
+may release Stage 3. A terminal safety stop or failure to find a two-of-three
+quasi-meltdown point completes the replication without an onset bracket.
+
 ## 2026-07-16: Correlation evidence stops at the consumed exact rerun
 
 **Decision:** Freeze the 30-cell packet-correlation matrix after 8-packet UDP

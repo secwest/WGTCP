@@ -285,6 +285,19 @@ this frozen selection. A future independent replication would require a new
 prospective plan and package-maintenance isolation; it cannot retroactively
 repair or extend this Stage 2 estimate.
 
+## Independent replication
+
+On 2026-07-19 the four matched ARM endpoints were reallocated to complete a
+fresh correlation study. The frozen result above remains unchanged. The new
+campaign uses a distinct stage identity and a complete 30-cell matrix, disables
+package-maintenance triggers for the bounded test window, and starts from no
+historical cell evidence. Its prospective rules and exact matrix are:
+
+- [`BOUNDARY_REPLICATION_TESTPLAN.md`](BOUNDARY_REPLICATION_TESTPLAN.md)
+- [`matrix-boundary-correlation-replication.csv`](matrix-boundary-correlation-replication.csv)
+
+The replication must qualify independently before it can release Stage 3.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

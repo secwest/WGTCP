@@ -248,6 +248,11 @@ loss counter delta or transition-related delivery deficit.
 This stage remains unrun because Stage 2 did not produce the required qualified
 two-of-three release point.
 
+Independent continuation (2026-07-19): the frozen Stage 2 selection remains
+closed. A fresh full-matrix replication is prospectively defined in
+[`BOUNDARY_REPLICATION_TESTPLAN.md`](BOUNDARY_REPLICATION_TESTPLAN.md). Only
+that independently qualified selection may release this stage.
+
 ### Stage 4: minimum inner stream count
 
 Hold the Stage 3 duration at the lowest high-probability point and sweep:

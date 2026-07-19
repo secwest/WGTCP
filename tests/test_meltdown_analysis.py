@@ -67,6 +67,12 @@ BOUNDARY_SMOKE_MATRIX = (
 BOUNDARY_CORRELATION_MATRIX = (
     ROOT / "perf-test" / "meltdown" / "matrix-boundary-correlation.csv"
 )
+BOUNDARY_CORRELATION_REPLICATION_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-boundary-correlation-replication.csv"
+)
 
 
 def workload_document(
@@ -2435,6 +2441,36 @@ class MeltdownAnalysisTest(unittest.TestCase):
                     + (1.0 - bad_fraction) * float(row["burst_k"]) / 100.0
                 )
                 self.assertAlmostEqual(stationary_loss, 0.04423076923076923)
+
+    def test_boundary_correlation_replication_is_independent_and_exact(self) -> None:
+        with BOUNDARY_CORRELATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            frozen = list(csv.DictReader(stream))
+        with BOUNDARY_CORRELATION_REPLICATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            replication = list(csv.DictReader(stream))
+
+        self.assertEqual(len(replication), 10)
+        self.assertEqual(
+            sum(int(row["repetitions"]) for row in replication),
+            30,
+        )
+        self.assertEqual(
+            {row["stage"] for row in replication},
+            {"boundary-correlation-replication"},
+        )
+        for frozen_row, replication_row in zip(frozen, replication, strict=True):
+            self.assertEqual(frozen_row["stage"], "boundary-correlation")
+            self.assertEqual(
+                {key: value for key, value in frozen_row.items() if key != "stage"},
+                {
+                    key: value
+                    for key, value in replication_row.items()
+                    if key != "stage"
+                },
+            )
 
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')
