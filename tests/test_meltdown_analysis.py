@@ -33,6 +33,9 @@ SAMPLER = (
 TIMED_IMPAIRMENT = (
     ROOT / "perf-test" / "meltdown" / "harness" / "timed-impairment.py"
 ).read_text(encoding="utf-8")
+SYNCHRONIZED_SETUP = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "synchronized-setup.sh"
+).read_text(encoding="utf-8")
 TCP_EVENTS = (
     ROOT / "perf-test" / "meltdown" / "harness" / "tcp-events.bt"
 ).read_text(encoding="utf-8")
@@ -2361,6 +2364,22 @@ class MeltdownAnalysisTest(unittest.TestCase):
             ORCHESTRATOR,
         )
         self.assertIn("timed_impairment", ORCHESTRATOR)
+
+    def test_synchronized_setup_rejects_late_release_and_drives_both_peers(
+        self,
+    ) -> None:
+        self.assertIn("if now >= target:", SYNCHRONIZED_SETUP)
+        self.assertIn("if lateness > 100_000_000:", SYNCHRONIZED_SETUP)
+        self.assertIn("--tcp-role active", SYNCHRONIZED_SETUP)
+        self.assertIn("for _ in $(seq 1 50); do", SYNCHRONIZED_SETUP)
+        self.assertIn(
+            "ping -q -I wg-mt-tcp -c 1 -W 1",
+            SYNCHRONIZED_SETUP,
+        )
+        self.assertIn(
+            'printf \'%s\\n\' "$rc" > "$state_prefix.done"',
+            SYNCHRONIZED_SETUP,
+        )
 
     def test_timed_impairment_changes_only_active_netem_loss(self) -> None:
         self.assertIn("change-loss)", SHAPER)
