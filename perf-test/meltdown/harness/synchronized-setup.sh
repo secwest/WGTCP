@@ -22,22 +22,6 @@ finish() {
 }
 trap finish EXIT
 
-python3 -c '
-import sys
-import time
-
-target = int(sys.argv[1])
-now = time.time_ns()
-if now >= target:
-    raise SystemExit("synchronized setup target already passed")
-time.sleep((target - now) / 1e9)
-lateness = time.time_ns() - target
-print(f"setup_release_lateness_ns={lateness}", flush=True)
-if lateness > 100_000_000:
-    raise SystemExit("synchronized setup released over 100 ms late")
-' "$target_ns"
-
-printf 'setup_started_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
 sudo /opt/wgtcp-meltdown/harness/setup-tunnels.sh up \
 	--peer-pub "$peer_pub" \
 	--peer-phys "$peer_phys" \
@@ -45,7 +29,37 @@ sudo /opt/wgtcp-meltdown/harness/setup-tunnels.sh up \
 	--peer-udp-ip "$peer_udp" \
 	--local-tcp-ip "$local_tcp" \
 	--peer-tcp-ip "$peer_tcp" \
-	--tcp-role active >/dev/null
+	--tcp-role passive >/dev/null
+
+if ss -Htn state established |
+	awk -v peer="$peer_phys" \
+		'($3 ~ /:51821$/ || $4 ~ /:51821$/) &&
+		 (index($3, peer ":") || index($4, peer ":")) {found=1}
+		 END {exit !found}'; then
+	echo "TCP carrier exists before synchronized activation" >&2
+	exit 1
+fi
+printf 'passive_ready_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+
+python3 -c '
+import sys
+import time
+
+target = int(sys.argv[1])
+now = time.time_ns()
+if target - now < 1_000_000_000:
+    raise SystemExit("less than one second remains before activation target")
+time.sleep((target - now) / 1e9)
+lateness = time.time_ns() - target
+print(f"activation_release_lateness_ns={lateness}", flush=True)
+if lateness > 100_000_000:
+    raise SystemExit("synchronized activation released over 100 ms late")
+' "$target_ns"
+
+sudo /opt/wgtcp-meltdown/bin/wg set wg-mt-tcp \
+	peer "$peer_pub" \
+	endpoint "$peer_phys:51821" \
+	persistent-keepalive 5
 
 delivered=0
 for _ in $(seq 1 50); do
@@ -59,5 +73,5 @@ done
 	exit 1
 }
 
-printf 'setup_completed_utc=%s\nstatus=ready\n' \
+printf 'activation_completed_utc=%s\nstatus=ready\n' \
 	"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"

@@ -82,13 +82,18 @@ Before the first impairment cell:
    `apt-daily-upgrade.service`, `apt-daily.timer`, and
    `apt-daily-upgrade.timer` on all four endpoints.
 4. Confirm no package process or lock remains after masking.
-5. Recreate each pair with an absolute-time synchronized active setup and
-   concurrent bidirectional tunnel traffic. Reject either endpoint when setup
-   releases more than 100 ms after the common target.
-6. Verify exact runtime identities, synchronized clocks, baseline qdiscs,
-   absence of IFB/marker/transient residue, zero-loss TCP/UDP controls, and two
-   unchanged TCP carriers per endpoint after at least 35 seconds. This retention
-   gate exceeds the kernel's 30-second provisional-carrier lifetime.
+5. Recreate both interfaces without a TCP endpoint, then activate both TCP
+   endpoints at one absolute-time target while driving concurrent bidirectional
+   tunnel traffic. Reject either endpoint when activation releases more than
+   100 ms after the common target.
+6. After a bounded pre-scoring settlement, verify exact runtime identities,
+   synchronized clocks, baseline qdiscs, absence of
+   IFB/marker/transient residue, zero-loss TCP/UDP controls, and two unchanged
+   TCP carriers per endpoint in every 500 ms sample for at least 40 seconds.
+   A missing or changed tuple restarts the complete 40-second window; failure
+   to obtain that window within 120 seconds rejects the launch. No impairment
+   begins during settlement. The retention gate exceeds the kernel's
+   30-second provisional-carrier lifetime.
 
 Runtime masks remain in place through Stage 2 replication and are removed
 during campaign closeout. A package operation, service restart, runtime

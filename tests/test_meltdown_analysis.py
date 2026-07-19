@@ -36,6 +36,9 @@ TIMED_IMPAIRMENT = (
 SYNCHRONIZED_SETUP = (
     ROOT / "perf-test" / "meltdown" / "harness" / "synchronized-setup.sh"
 ).read_text(encoding="utf-8")
+QUALIFY_CARRIERS = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "qualify-carriers.sh"
+).read_text(encoding="utf-8")
 TCP_EVENTS = (
     ROOT / "perf-test" / "meltdown" / "harness" / "tcp-events.bt"
 ).read_text(encoding="utf-8")
@@ -2368,14 +2371,24 @@ class MeltdownAnalysisTest(unittest.TestCase):
     def test_synchronized_setup_rejects_late_release_and_drives_both_peers(
         self,
     ) -> None:
-        self.assertIn("if now >= target:", SYNCHRONIZED_SETUP)
+        self.assertIn("--tcp-role passive", SYNCHRONIZED_SETUP)
+        self.assertIn("target - now < 1_000_000_000", SYNCHRONIZED_SETUP)
         self.assertIn("if lateness > 100_000_000:", SYNCHRONIZED_SETUP)
-        self.assertIn("--tcp-role active", SYNCHRONIZED_SETUP)
+        self.assertIn("endpoint \"$peer_phys:51821\"", SYNCHRONIZED_SETUP)
         self.assertIn("for _ in $(seq 1 50); do", SYNCHRONIZED_SETUP)
         self.assertIn(
             "ping -q -I wg-mt-tcp -c 1 -W 1",
             SYNCHRONIZED_SETUP,
         )
+        self.assertIn("required_samples=${2:-80}", QUALIFY_CARRIERS)
+        self.assertIn("max_samples=${4:-240}", QUALIFY_CARRIERS)
+        self.assertIn("stable_samples=0", QUALIFY_CARRIERS)
+        self.assertIn(
+            '($3 ~ /:51821$/ || $4 ~ /:51821$/)',
+            QUALIFY_CARRIERS,
+        )
+        self.assertIn('[[ -z $baseline || $tuples != "$baseline" ]]', QUALIFY_CARRIERS)
+        self.assertIn("stable_samples >= required_samples", QUALIFY_CARRIERS)
         self.assertIn(
             'printf \'%s\\n\' "$rc" > "$state_prefix.done"',
             SYNCHRONIZED_SETUP,
