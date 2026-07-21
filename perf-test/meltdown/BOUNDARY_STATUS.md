@@ -317,6 +317,20 @@ Its prospective protocol and matrix are:
 - [`BOUNDARY_RT_REPLICATION_TESTPLAN.md`](BOUNDARY_RT_REPLICATION_TESTPLAN.md)
 - [`matrix-boundary-correlation-replication-rt.csv`](matrix-boundary-correlation-replication-rt.csv)
 
+That replication safety-stopped during preflight before any workload or impairment
+cell ran. The secondary pair met all runtime, maintenance, tunnel, clock, qdisc,
+carrier, and priority-50 `SCHED_FIFO` qualifications. The primary pair retained
+two carriers but one carrier's source tuple reconnected about every 30 seconds,
+preventing the required 80 consecutive unchanged 500 ms samples within the
+120-second qualification window. The original FIFO probe's shell-PID quoting
+defect and an immediately post-install `apt-get` observation were retained as
+invalid preflight attempts; neither is used to relax the fixed gate. After the
+corrected probe, all four endpoints demonstrated priority-50 `SCHED_FIFO`;
+the primary carrier tuple failure is the terminal safety latch. No third-
+replication cell evidence exists, all four endpoints were restored to baseline
+qdiscs and deallocated, and any future execution requires another independent
+prospectively predeclared replication.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
