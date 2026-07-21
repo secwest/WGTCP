@@ -624,6 +624,10 @@ function Invoke-Cell {
     $clientWorkloadUnit = "wgtcp-workload-$safeId"
     $serverImpairmentUnit = "wgtcp-impairment-$safeId-a"
     $clientImpairmentUnit = "wgtcp-impairment-$safeId-b"
+    $timedSchedulingProperties = @(
+        "--property=CPUSchedulingPolicy=fifo",
+        "--property=CPUSchedulingPriority=50"
+    ) -join " "
     # bpftrace attachment takes 10-15 seconds on the ARM hosts. Keep the qdisc,
     # interface, and socket samplers alive beyond that startup interval.
     $sampleDuration = [int]$workloadDuration + [int]$Row.warmup_s + 30
@@ -813,13 +817,15 @@ function Invoke-Cell {
                 ) -join " "
                 Invoke-Remote $HostA $PortA (
                 "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $serverImpairmentUnit) --collect --quiet " +
-                "$timedArguments --event-log $(ConvertTo-ShellQuoted "$remoteCellA/impairment-events.jsonl") " +
+                "$timedSchedulingProperties $timedArguments " +
+                "--event-log $(ConvertTo-ShellQuoted "$remoteCellA/impairment-events.jsonl") " +
                 "--ready-file $(ConvertTo-ShellQuoted "$remoteCellA/impairment-ready") " +
                 "--done-file $(ConvertTo-ShellQuoted "$remoteCellA/impairment-done")"
                 ) | Out-Null
                 Invoke-Remote $HostB $PortB (
                 "sudo systemd-run --unit=$(ConvertTo-ShellQuoted $clientImpairmentUnit) --collect --quiet " +
-                "$timedArguments --event-log $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-events.jsonl") " +
+                "$timedSchedulingProperties $timedArguments " +
+                "--event-log $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-events.jsonl") " +
                 "--ready-file $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-ready") " +
                 "--done-file $(ConvertTo-ShellQuoted "$remoteCellB/client/impairment-done")"
                 ) | Out-Null

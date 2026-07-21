@@ -285,7 +285,7 @@ this frozen selection. A future independent replication would require a new
 prospective plan and package-maintenance isolation; it cannot retroactively
 repair or extend this Stage 2 estimate.
 
-## Independent replication
+## Independent replications
 
 On 2026-07-19 the four matched ARM endpoints were reallocated to complete a
 fresh correlation study. The frozen result above remains unchanged. The new
@@ -297,6 +297,25 @@ historical cell evidence. Its prospective rules and exact matrix are:
 - [`matrix-boundary-correlation-replication.csv`](matrix-boundary-correlation-replication.csv)
 
 The replication must qualify independently before it can release Stage 3.
+
+That replication separately safety-stopped on 2026-07-20 during its
+eight-packet UDP r3 cell. The cell's workload, carrier, loss, delivery, and
+recovery evidence completed, but its conservative impairment-start skew was
+44.49 ms, above the fixed 20 ms maximum. Its 23 selected valid/stable cells,
+six interval-duration-invalid attempts, and stopped raw cell are retained
+without pooling into the earlier frozen selection. Residence 16 was not run;
+the replication does not establish an onset threshold or release Stage 3.
+
+On 2026-07-21, a third, independently predeclared full replication was
+authorized. It uses a new stage identity while preserving the 30-cell matrix,
+all outcome definitions, the 20 ms transition bound, and terminal safety-stop
+rule. The time-critical impairment process now uses an absolute
+`clock_nanosleep` deadline and a short-lived `SCHED_FIFO` priority-50 systemd
+unit; this strengthens deadline delivery without weakening timing evidence.
+Its prospective protocol and matrix are:
+
+- [`BOUNDARY_RT_REPLICATION_TESTPLAN.md`](BOUNDARY_RT_REPLICATION_TESTPLAN.md)
+- [`matrix-boundary-correlation-replication-rt.csv`](matrix-boundary-correlation-replication-rt.csv)
 
 ## Interpretation limits
 

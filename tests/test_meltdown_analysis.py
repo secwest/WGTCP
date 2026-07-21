@@ -79,6 +79,12 @@ BOUNDARY_CORRELATION_REPLICATION_MATRIX = (
     / "meltdown"
     / "matrix-boundary-correlation-replication.csv"
 )
+BOUNDARY_CORRELATION_RT_REPLICATION_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-boundary-correlation-replication-rt.csv"
+)
 
 
 def workload_document(
@@ -2407,6 +2413,16 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn('"clock_error_bound_ns"', TIMED_IMPAIRMENT)
         self.assertIn("Root delay", TIMED_IMPAIRMENT)
         self.assertIn("requested_ns - 1_000_000_000", TIMED_IMPAIRMENT)
+        self.assertIn("clock_nanosleep", TIMED_IMPAIRMENT)
+        self.assertIn("_TIMER_ABSTIME", TIMED_IMPAIRMENT)
+        self.assertIn(
+            "--property=CPUSchedulingPolicy=fifo",
+            ORCHESTRATOR,
+        )
+        self.assertIn(
+            "--property=CPUSchedulingPriority=50",
+            ORCHESTRATOR,
+        )
         self.assertIn('"event": "failsafe_clear"', TIMED_IMPAIRMENT)
 
     def test_endpoint_pair_is_bound_into_campaign_fingerprint(self) -> None:
@@ -2500,6 +2516,37 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 {
                     key: value
                     for key, value in replication_row.items()
+                    if key != "stage"
+                },
+            )
+
+    def test_realtime_correlation_replication_is_independent_and_exact(self) -> None:
+        with BOUNDARY_CORRELATION_REPLICATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            prior_replication = list(csv.DictReader(stream))
+        with BOUNDARY_CORRELATION_RT_REPLICATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            realtime_replication = list(csv.DictReader(stream))
+
+        self.assertEqual(len(realtime_replication), 10)
+        self.assertEqual(
+            sum(int(row["repetitions"]) for row in realtime_replication),
+            30,
+        )
+        self.assertEqual(
+            {row["stage"] for row in realtime_replication},
+            {"boundary-correlation-replication-rt"},
+        )
+        for prior_row, realtime_row in zip(
+            prior_replication, realtime_replication, strict=True
+        ):
+            self.assertEqual(
+                {key: value for key, value in prior_row.items() if key != "stage"},
+                {
+                    key: value
+                    for key, value in realtime_row.items()
                     if key != "stage"
                 },
             )

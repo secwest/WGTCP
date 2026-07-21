@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import ctypes
+import errno
 import json
 import math
 import os
@@ -17,13 +19,40 @@ TRANSITION_ERRORS = (
     ValueError,
 )
 
+_CLOCK_REALTIME = 0
+_TIMER_ABSTIME = 1
+
+
+class Timespec(ctypes.Structure):
+    _fields_ = (("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long))
+
+
+_clock_nanosleep = ctypes.CDLL(None, use_errno=True).clock_nanosleep
+_clock_nanosleep.argtypes = (
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(Timespec),
+    ctypes.c_void_p,
+)
+_clock_nanosleep.restype = ctypes.c_int
+
 
 def wait_until(timestamp_ns: int) -> None:
+    deadline = Timespec(
+        timestamp_ns // 1_000_000_000,
+        timestamp_ns % 1_000_000_000,
+    )
     while True:
-        remaining_ns = timestamp_ns - time.time_ns()
-        if remaining_ns <= 0:
+        result = _clock_nanosleep(
+            _CLOCK_REALTIME,
+            _TIMER_ABSTIME,
+            ctypes.byref(deadline),
+            None,
+        )
+        if result == 0:
             return
-        time.sleep(min(remaining_ns / 1_000_000_000, 0.25))
+        if result != errno.EINTR:
+            raise OSError(result, os.strerror(result))
 
 
 def append_event(path: Path, event: dict[str, Any]) -> None:
