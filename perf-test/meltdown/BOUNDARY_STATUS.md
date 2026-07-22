@@ -345,6 +345,8 @@ listeners before concurrent endpoint activation, sets keepalive to five seconds
 on both peers, and checks the exact two-carrier set continuously for 40 seconds.
 It passed once on each primary ARM endpoint under the exact qualified runtime;
 the temporary test namespaces were removed before the hosts were deallocated.
+The strengthened asymmetric `carrier-lifetime` regression, which now performs
+the same continuous exact-two-carrier check, also passed once on each endpoint.
 
 ## Interpretation limits
 
