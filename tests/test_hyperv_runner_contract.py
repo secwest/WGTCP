@@ -131,6 +131,7 @@ class HyperVRunnerContractTests(unittest.TestCase):
             "tcp-source-address-uplink-change",
             "tcp-ipv6-dual-stack",
             "tcp-authenticated-carrier-lifetime",
+            "tcp-symmetric-passive-carrier-lifetime",
             "tcp-nat44-dual-reachable",
             "tcp-debug-hostile-stream",
         ]

@@ -50,6 +50,10 @@ affects design and externally visible behavior.
 - Added lifecycle, roaming, and stream contracts for accepted-connection
   provenance, admission accounting, listener handoff, and buffered record
   draining.
+- Added a Hyper-V-selectable symmetric passive TCP-carrier lifetime regression:
+  both listeners are configured before concurrent endpoint activation, both use
+  five-second keepalives, and exactly two authenticated carrier tuples must
+  remain unchanged throughout 40 seconds.
 - Added the investigation report and design decision log.
 - Added compact reviewable evidence for the 14-cell clean calibration, 68-cell
   initial finite-queue/RTT screening, seven-cell qualification rerun, and final

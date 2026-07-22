@@ -521,7 +521,8 @@ tcp-parity-netns)
 	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
 	[[ $mode == fwmark || $mode == route || $mode == source-uplink || \
 	   $mode == ipv6 || $mode == ipv6-link-local || \
-	   $mode == carrier-lifetime || $mode == config-roundtrip || \
+	   $mode == carrier-lifetime || $mode == symmetric-carrier-lifetime || \
+	   $mode == config-roundtrip || \
 	   $mode == fault-injection ]] || \
 		die "invalid TCP parity mode: $mode"
 	[[ -f $source_root/tests/tcp-parity-netns.sh ]] || die "TCP parity netns test not found"

@@ -30,6 +30,8 @@ class TcpLifecycleContract(unittest.TestCase):
         cls.peer_header = source("kernel/peer.h")
         cls.device = source("kernel/device.c")
         cls.device_header = source("kernel/device.h")
+        cls.tcp_parity = source("tests/tcp-parity-netns.sh")
+        cls.hyperv_guest = source("tests/hyperv/guest-node.sh")
 
     def test_pending_connections_have_a_locked_hard_cap(self) -> None:
         add = final_section(
@@ -93,6 +95,35 @@ class TcpLifecycleContract(unittest.TestCase):
         self.assertIn("entry->authenticated ||", claim)
         self.assertIn("WG_TCP_AUTH_MAX_LIFETIME_MS", claim)
         self.assertIn("wg_tcp_release_admission_locked(wg, entry);", mark)
+
+    def test_symmetric_passive_carriers_are_held_beyond_pre_auth_deadline(self) -> None:
+        setup = section(
+            self.tcp_parity,
+            "setup_ipv4_pair() {",
+            "\ncreate_topology",
+        )
+        stability = section(
+            self.tcp_parity,
+            "assert_bidirectional_carrier_stability() {",
+            "\nlistener_present",
+        )
+        symmetric_case = section(
+            self.tcp_parity,
+            "symmetric-carrier-lifetime)",
+            "\nconfig-roundtrip)",
+        )
+
+        self.assertIn("symmetric-carrier-lifetime", self.hyperv_guest)
+        self.assertIn("symmetric-passive", setup)
+        self.assertEqual(setup.count("persistent-keepalive 5"), 2)
+        self.assertIn("activation_a=$!", setup)
+        self.assertIn("activation_b=$!", setup)
+        self.assertIn("second <= duration", stability)
+        self.assertIn('after_a=$(tcp_tuple_set "$ns_a" 4)', stability)
+        self.assertIn('after_b=$(tcp_tuple_set "$ns_b" 4)', stability)
+        self.assertEqual(stability.count("assert_unchanged_two_tuple_set"), 4)
+        self.assertIn("assert_bidirectional_carrier_stability 40", symmetric_case)
+        self.assertIn("symmetric_passive_activation=pass", symmetric_case)
 
     def test_authenticated_streams_release_pre_auth_capacity_once(self) -> None:
         pending_from_source = section(

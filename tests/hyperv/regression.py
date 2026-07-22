@@ -950,6 +950,10 @@ class Suite:
                     lambda: self.tcp_parity_netns_case("carrier-lifetime"),
                 ),
                 (
+                    "tcp-symmetric-passive-carrier-lifetime",
+                    lambda: self.tcp_parity_netns_case("symmetric-carrier-lifetime"),
+                ),
+                (
                     "tcp-nat44-dual-reachable",
                     lambda: self.tcp_nat_netns_case("dual-reachable"),
                 ),

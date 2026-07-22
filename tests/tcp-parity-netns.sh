@@ -5,9 +5,9 @@ set -Eeuo pipefail
 
 MODE=${1:-}
 case "$MODE" in
-fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|config-roundtrip|fault-injection) ;;
+fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|symmetric-carrier-lifetime|config-roundtrip|fault-injection) ;;
 *)
-	printf 'usage: %s {fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|config-roundtrip|fault-injection}\n' "$0" >&2
+	printf 'usage: %s {fwmark|route|source-uplink|ipv6|ipv6-link-local|carrier-lifetime|symmetric-carrier-lifetime|config-roundtrip|fault-injection}\n' "$0" >&2
 	exit 1
 	;;
 esac
@@ -244,6 +244,37 @@ wait_tcp_tuple_set() {
 	return 1
 }
 
+assert_unchanged_two_tuple_set() {
+	local label=$1 expected=$2 observed=$3
+	local -a tuples=()
+
+	mapfile -t tuples <<<"$observed"
+	[[ -n $observed && ${#tuples[@]} -eq 2 && $observed == "$expected" ]] && return
+
+	printf '%s TCP tuples were not exactly the authenticated pair:\nexpected:\n%s\nobserved:\n%s\n' \
+		"$label" "$expected" "$observed" >&2
+	return 1
+}
+
+assert_bidirectional_carrier_stability() {
+	local duration=$1 before_a before_b after_a after_b second
+
+	before_a=$(wait_tcp_tuple_set "$ns_a" 4 2)
+	before_b=$(wait_tcp_tuple_set "$ns_b" 4 2)
+	assert_unchanged_two_tuple_set "namespace A initial" "$before_a" "$before_a"
+	assert_unchanged_two_tuple_set "namespace B initial" "$before_b" "$before_b"
+
+	for (( second = 0; second <= duration; ++second )); do
+		run "$ns_a" ping -4 -I wga -c 1 -W 2 10.210.0.2 >/dev/null
+		run "$ns_b" ping -4 -I wgb -c 1 -W 2 10.210.0.1 >/dev/null
+		after_a=$(tcp_tuple_set "$ns_a" 4)
+		after_b=$(tcp_tuple_set "$ns_b" 4)
+		assert_unchanged_two_tuple_set "namespace A at ${second}s" "$before_a" "$after_a"
+		assert_unchanged_two_tuple_set "namespace B at ${second}s" "$before_b" "$after_b"
+		(( second == duration )) || sleep 1
+	done
+}
+
 listener_present() {
 	local namespace=$1 protocol=$2 family=$3 port=$4
 	[[ -n $(run "$namespace" ss -H -ln"$protocol""$family" "sport = :$port") ]]
@@ -299,8 +330,15 @@ create_topology() {
 }
 
 setup_ipv4_pair() {
-	local port=$1 mark=${2:-off}
+	local port=$1 mark=${2:-off} activation=${3:-asymmetric}
 	local -a set_a
+	case "$activation" in
+	asymmetric|symmetric-passive) ;;
+	*)
+		echo "unknown IPv4 TCP activation mode: $activation" >&2
+		return 1
+		;;
+	esac
 	run "$ns_b" ip addr add 203.0.113.2/32 dev lo
 	run "$ns_a" ip route add 203.0.113.2/32 via 192.0.2.2 dev "$p0a" metric 10
 
@@ -317,10 +355,35 @@ setup_ipv4_pair() {
 	run "$ns_b" ip link set wgb up
 	run "$ns_a" ip route add 10.210.0.2/32 dev wga
 	run "$ns_b" ip route add 10.210.0.1/32 dev wgb
+	if [[ $activation == asymmetric ]]; then
+		assert_quiet run "$ns_a" "$WG_FORK" set wga peer "$b_pub" \
+			allowed-ips 0.0.0.0/0 endpoint 203.0.113.2:"$port" persistent-keepalive 1
+		assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
+			allowed-ips 10.210.0.1/32 endpoint 192.0.2.1:"$port"
+		return
+	fi
+
 	assert_quiet run "$ns_a" "$WG_FORK" set wga peer "$b_pub" \
-		allowed-ips 0.0.0.0/0 endpoint 203.0.113.2:"$port" persistent-keepalive 1
+		allowed-ips 0.0.0.0/0 persistent-keepalive 5
 	assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
-		allowed-ips 10.210.0.1/32 endpoint 192.0.2.1:"$port"
+		allowed-ips 10.210.0.1/32 persistent-keepalive 5
+
+	# Both peers are listeners until these concurrent endpoint updates release them.
+	run "$ns_a" "$WG_FORK" set wga peer "$b_pub" endpoint 203.0.113.2:"$port" \
+		>"$tmpdir/a-activation.log" 2>&1 &
+	activation_a=$!
+	run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" endpoint 192.0.2.1:"$port" \
+		>"$tmpdir/b-activation.log" 2>&1 &
+	activation_b=$!
+	activation_status_a=0
+	activation_status_b=0
+	wait "$activation_a" || activation_status_a=$?
+	wait "$activation_b" || activation_status_b=$?
+	if (( activation_status_a != 0 || activation_status_b != 0 )) ||
+		[[ -s $tmpdir/a-activation.log || -s $tmpdir/b-activation.log ]]; then
+		cat "$tmpdir/a-activation.log" "$tmpdir/b-activation.log" >&2
+		return 1
+	fi
 }
 
 create_topology
@@ -417,26 +480,16 @@ carrier-lifetime)
 	setup_ipv4_pair "$port"
 	wait_ping "$ns_a" wga 10.210.0.2
 	wait_ping "$ns_b" wgb 10.210.0.1
-	before_a=$(wait_tcp_tuple_set "$ns_a" 4 2)
-	before_b=$(wait_tcp_tuple_set "$ns_b" 4 2)
-	for (( second = 0; second < 40; ++second )); do
-		run "$ns_a" ping -4 -I wga -c 1 -W 2 10.210.0.2 >/dev/null
-		run "$ns_b" ping -4 -I wgb -c 1 -W 2 10.210.0.1 >/dev/null
-		sleep 1
-	done
-	after_a=$(wait_tcp_tuple_set "$ns_a" 4 2)
-	after_b=$(wait_tcp_tuple_set "$ns_b" 4 2)
-	[[ $after_a == "$before_a" ]] || {
-		printf 'namespace A TCP tuples changed across authenticated lifetime:\nbefore:\n%s\nafter:\n%s\n' \
-			"$before_a" "$after_a" >&2
-		exit 1
-	}
-	[[ $after_b == "$before_b" ]] || {
-		printf 'namespace B TCP tuples changed across authenticated lifetime:\nbefore:\n%s\nafter:\n%s\n' \
-			"$before_b" "$after_b" >&2
-		exit 1
-	}
+	assert_bidirectional_carrier_stability 40
 	printf 'mode=carrier-lifetime\nauthenticated_lifetime=pass\nduration_seconds=40\n'
+	;;
+symmetric-carrier-lifetime)
+	port=52205
+	setup_ipv4_pair "$port" off symmetric-passive
+	wait_ping "$ns_a" wga 10.210.0.2
+	wait_ping "$ns_b" wgb 10.210.0.1
+	assert_bidirectional_carrier_stability 40
+	printf 'mode=symmetric-carrier-lifetime\nsymmetric_passive_activation=pass\nauthenticated_lifetime=pass\nduration_seconds=40\n'
 	;;
 config-roundtrip)
 	port=52204

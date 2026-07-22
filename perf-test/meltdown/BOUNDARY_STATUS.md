@@ -331,6 +331,21 @@ replication cell evidence exists, all four endpoints were restored to baseline
 qdiscs and deallocated, and any future execution requires another independent
 prospectively predeclared replication.
 
+On 2026-07-22, a separate no-netem primary-pair diagnostic repeated passive,
+synchronized two-carrier activation four times. Every endpoint recording reached
+the full 80 unchanged 500 ms samples (40 seconds) with exactly two carriers;
+no WireGuard kernel warning or error was recorded. This shows that the earlier
+tuple churn is intermittent rather than a reproducible 30-second timeout. It
+does not reopen or repair the terminal third replication, and it does not
+justify changing the unauthenticated-carrier lifetime bound. The primary
+endpoints and forwarding gateway were deallocated after the capture.
+
+A matching namespace regression, `symmetric-carrier-lifetime`, configures both
+listeners before concurrent endpoint activation, sets keepalive to five seconds
+on both peers, and checks the exact two-carrier set continuously for 40 seconds.
+It passed once on each primary ARM endpoint under the exact qualified runtime;
+the temporary test namespaces were removed before the hosts were deallocated.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
