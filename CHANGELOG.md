@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added bounded artifact-collection retries to the campaign runner: failed SCP
+  downloads now receive three attempts with one- and two-second delays, and the
+  final collection output is retained for a fail-closed error report.
 - Added a fourth, independently identified real-time 30-cell correlation
   replication matrix and prospective protocol. It preserves the timing,
   carrier, matched-control, and terminal-stop rules while retaining every prior

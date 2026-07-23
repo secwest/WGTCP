@@ -211,10 +211,20 @@ function Copy-FromRemote {
         [Parameter(Mandatory)] [string] $Destination
     )
     $null = New-Item -ItemType Directory -Force -Path $Destination
-    & scp @commonSsh -P $Port -r "${AdminUser}@${HostName}:$Source" $Destination
-    if ($LASTEXITCODE -ne 0) {
-        throw "scp download failed on port $Port"
+    $lastOutput = ""
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $output = @(
+            & scp @commonSsh -P $Port -r "${AdminUser}@${HostName}:$Source" $Destination 2>&1
+        )
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        $lastOutput = ($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ($attempt -lt 3) {
+            Start-Sleep -Seconds $attempt
+        }
     }
+    throw "scp download failed on port $Port after 3 attempts: $lastOutput"
 }
 
 function Write-CampaignLog {

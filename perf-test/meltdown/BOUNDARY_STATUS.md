@@ -356,7 +356,29 @@ gate, and terminal-stop policy:
 - [`BOUNDARY_RT2_REPLICATION_TESTPLAN.md`](BOUNDARY_RT2_REPLICATION_TESTPLAN.md)
 - [`matrix-boundary-correlation-replication-rt2.csv`](matrix-boundary-correlation-replication-rt2.csv)
 
-No fourth-replication qualification or matrix cell has run at publication time.
+Both pairs subsequently passed the exact runtime, package-maintenance
+isolation, clean TCP/UDP control, baseline qdisc, and 80-sample unchanged
+carrier qualifications, including the priority-50 FIFO proof. The campaign
+then terminally safety-stopped in its first residence-1 TCP wave. Secondary
+TCP r2 (`boundary-correlation-replication-rt2-ge-res1-d16-r200-q1-16f-tcp-r2`)
+could not retrieve its pre-impairment ping artifact through the port-2233 SCP
+path. This is a `baseline_preflight` safety stop: no impaired result from that
+cell qualifies and no fourth-replication matrix cell may be retried or added.
+
+The independently scheduled primary TCP r1 workload completed with
+`workload.rc = 0`, but its later full raw-tree collection through port 2223 also
+failed. Immediate manual SCP recovery of the immutable remote client and server
+trees succeeded, confirming a transient collection-path failure rather than a
+measured transport result. That partial shard remains incomplete and
+unclassified; it cannot be promoted from recovered raw files. No fourth UDP
+cell or later residence was run. The preserved fourth campaign therefore
+contributes no selected valid cell, quasi-meltdown outcome, formal meltdown
+outcome, or onset inference.
+
+The runner now performs three bounded SCP download attempts with one- and
+two-second delays and retains the final error output. This hardening applies
+only to a future independently predeclared campaign; it does not reopen,
+repair, or extend the stopped fourth campaign.
 
 ## Interpretation limits
 

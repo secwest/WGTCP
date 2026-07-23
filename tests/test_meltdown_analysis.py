@@ -2588,6 +2588,11 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 },
             )
 
+    def test_raw_collection_retries_transient_scp_failures(self) -> None:
+        self.assertIn("for ($attempt = 1; $attempt -le 3; $attempt++)", ORCHESTRATOR)
+        self.assertIn("Start-Sleep -Seconds $attempt", ORCHESTRATOR)
+        self.assertIn("scp download failed on port $Port after 3 attempts", ORCHESTRATOR)
+
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')
         release_index = SHAPER.index("trap - EXIT", status_index)
