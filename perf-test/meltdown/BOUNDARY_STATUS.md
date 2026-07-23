@@ -421,6 +421,31 @@ a short local raw root to pass the pre-workload collection-path gate:
 - [`BOUNDARY_RT4_REPLICATION_TESTPLAN.md`](BOUNDARY_RT4_REPLICATION_TESTPLAN.md)
 - [`matrix-boundary-correlation-replication-rt4.csv`](matrix-boundary-correlation-replication-rt4.csv)
 
+The sixth campaign passed its initial four-host qualification and completed 25
+raw attempts. Three workload-interval-duration-invalid attempts received their
+single permitted exact reruns, yielding 22 selected valid cells; every selected
+cell is stable, with no formal-meltdown or quasi-meltdown episode. Residences
+1, 2, and 4 each qualified all three matched pairs with 0/3 TCP quasi episodes.
+Residence 8 qualified r1 and r2, also with 0/2 TCP quasi episodes.
+
+Before residence-8 TCP r3 could start, both secondary endpoints failed their
+mandatory 80-sample unchanged-carrier gate. The last stable run reached only 47
+samples after a carrier tuple reset during the 240-sample settlement window.
+No r3 workload or raw cell tree was created, its UDP counterpart was not run,
+and residence 16 is unrun. This preflight failure occurs before the runner can
+write a cell-level safety-stop record, so the compositor records zero runner
+safety stops; nevertheless, the prospective carrier gate closes the campaign
+without a complete selection. It establishes no onset boundary and does not
+release Stage 3.
+
+The compact, hash-bound ledger is in
+[`results/2026-07-23-boundary-rt4-correlation/`](results/2026-07-23-boundary-rt4-correlation/).
+It contains the full 25-attempt inventory, selected logical cells, profile
+summary, source shard hashes, and a 372-file qualification audit binding. All
+four endpoints were restored to baseline qdiscs with no tunnel, helper, or
+failed-unit residue; the forwarding gateway and endpoint fleet were then
+deallocated.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

@@ -1,0 +1,6 @@
+profile,mean_bad_state_residence_packets,planned_cells,selected_valid_cells,selected_valid_tcp,selected_valid_udp,qualified_matched_pairs,qualified_tcp_quasi_meltdowns,selected_formal_meltdowns,unresolved_cells,unrun_cells,onset_rule_met,state
+boundary-correlation-replication-rt4-ge-res1-d16-r200-q1-16f,1,6,6,3,3,3,0,0,0,0,false,qualified
+boundary-correlation-replication-rt4-ge-res2-d16-r200-q1-16f,2,6,6,3,3,3,0,0,0,0,false,qualified
+boundary-correlation-replication-rt4-ge-res4-d16-r200-q1-16f,4,6,6,3,3,3,0,0,0,0,false,qualified
+boundary-correlation-replication-rt4-ge-res8-d16-r200-q1-16f,8,6,4,2,2,2,0,0,0,2,false,incomplete
+boundary-correlation-replication-rt4-ge-res16-d16-r200-q1-16f,16,6,0,0,0,0,0,0,0,6,false,unrun

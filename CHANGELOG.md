@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added compact, hash-bound evidence for the sixth real-time correlation
+  replication: 25 attempts, three selected exact reruns, 22 valid/stable cells,
+  and the terminal 8-packet carrier-qualification disposition.
 - Added a sixth independent real-time 30-cell correlation matrix and prospective
   protocol, including a pre-workload short local raw-root requirement.
 - Added a Windows-specific local artifact-path guard that rejects a collection
