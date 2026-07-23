@@ -103,6 +103,15 @@ BOUNDARY_CORRELATION_RT4_REPLICATION_MATRIX = (
     / "meltdown"
     / "matrix-boundary-correlation-replication-rt4.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct1.csv"
+)
+CARRIER_STABILITY_DIAGNOSTIC = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "diagnose-carrier-stability.sh"
+).read_text(encoding="utf-8")
 
 
 def workload_document(
@@ -2661,6 +2670,69 @@ class MeltdownAnalysisTest(unittest.TestCase):
                     if key != "stage"
                 },
             )
+
+    def test_carrier_stability_diagnostic_is_predeclared_and_exact(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in rows},
+            {"carrier-stability-diagnostic-ct1"},
+        )
+        self.assertEqual(
+            {
+                (
+                    row["pair"],
+                    row["arm"],
+                    row["activation"],
+                    row["keepalive_s"],
+                    row["expected_carriers"],
+                    row["observation_s"],
+                    row["interval_s"],
+                    row["repetition"],
+                )
+                for row in rows
+            },
+            {
+                (
+                    pair,
+                    arm,
+                    activation,
+                    keepalive,
+                    "2",
+                    "120",
+                    "0.5",
+                    repetition,
+                )
+                for pair in ("primary", "secondary")
+                for arm, activation, keepalive in (
+                    ("sync-k5", "synchronous", "5"),
+                    ("sync-k0", "synchronous", "0"),
+                    ("sync-k1", "synchronous", "1"),
+                    ("staggered-k5", "staggered", "5"),
+                )
+                for repetition in ("1", "2", "3")
+            },
+        )
+        self.assertIn(
+            "ss -Htn state established",
+            CARRIER_STABILITY_DIAGNOSTIC,
+        )
+        self.assertIn(
+            "ss -tin state established '( sport = :51821 or dport = :51821 )'",
+            CARRIER_STABILITY_DIAGNOSTIC,
+        )
+        self.assertIn(
+            "dmesg --color=never | tail -n 80",
+            CARRIER_STABILITY_DIAGNOSTIC,
+        )
+        self.assertIn(
+            "carrier_diagnostic=failed",
+            CARRIER_STABILITY_DIAGNOSTIC,
+        )
 
     def test_raw_collection_retries_transient_scp_failures(self) -> None:
         self.assertIn("for ($attempt = 1; $attempt -le 3; $attempt++)", ORCHESTRATOR)

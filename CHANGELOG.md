@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a prospective, no-impairment carrier-stability diagnostic matrix that
+  compares keepalive cadence and dual-carrier activation while retaining tuple
+  transitions and TCP FIN/RST evidence.
 - Added compact, hash-bound evidence for the sixth real-time correlation
   replication: 25 attempts, three selected exact reruns, 22 valid/stable cells,
   and the terminal 8-packet carrier-qualification disposition.

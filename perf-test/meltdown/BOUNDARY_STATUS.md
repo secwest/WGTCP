@@ -446,6 +446,20 @@ four endpoints were restored to baseline qdiscs with no tunnel, helper, or
 failed-unit residue; the forwarding gateway and endpoint fleet were then
 deallocated.
 
+### Carrier stability diagnostic
+
+RT4's carrier gate exposed synchronized replacement of otherwise established
+two-carrier tuples, so a new diagnostic must precede any seventh correlation
+campaign. CT1 is a separate no-impairment, 24-observation study across both
+pairs. It compares the RT4-equivalent five-second keepalive and synchronous
+activation with no keepalive, one-second keepalive, and staggered activation.
+Every observation holds two exact tuples for 120 seconds while retaining
+transition snapshots and FIN/RST captures. It cannot change RT4's result or
+release Stage 3:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT1.md`](CARRIER_STABILITY_DIAGNOSTIC_CT1.md)
+- [`matrix-carrier-stability-diagnostic-ct1.csv`](matrix-carrier-stability-diagnostic-ct1.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
