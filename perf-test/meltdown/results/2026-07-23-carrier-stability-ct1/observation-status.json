@@ -1,0 +1,16 @@
+{
+  "stage": "carrier-stability-diagnostic-ct1",
+  "pair": "primary",
+  "arm": "sync-k5",
+  "repetition": 1,
+  "activation": "synchronous",
+  "keepalive_s": 5,
+  "expected_carriers": 2,
+  "observation_s": 120,
+  "interval_s": "0.5",
+  "started_utc": "2026-07-23T14:13:22.6574956Z",
+  "outcome": "invalid",
+  "error": "ssh failed on port 2222: ssh: connect to host 20.104.82.148 port 2222: Connection timed out",
+  "completed_utc": "2026-07-23T14:13:37.7544460Z",
+  "cleanup_error": "ssh failed on port 2223: ssh: connect to host 20.104.82.148 port 2223: Connection timed out"
+}

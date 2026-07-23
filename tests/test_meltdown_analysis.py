@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import csv
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import io
 import json
@@ -112,6 +113,13 @@ CARRIER_STABILITY_DIAGNOSTIC_MATRIX = (
 CARRIER_STABILITY_DIAGNOSTIC = (
     ROOT / "perf-test" / "meltdown" / "harness" / "diagnose-carrier-stability.sh"
 ).read_text(encoding="utf-8")
+CARRIER_STABILITY_DIAGNOSTIC_RESULT = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "results"
+    / "2026-07-23-carrier-stability-ct1"
+)
 
 
 def workload_document(
@@ -2742,6 +2750,119 @@ class MeltdownAnalysisTest(unittest.TestCase):
             "persistent_keepalive_s=%s",
             SYNCHRONIZED_SETUP,
         )
+
+    def test_carrier_stability_terminal_disposition_is_complete(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            matrix_rows = list(csv.DictReader(stream))
+        with (
+            CARRIER_STABILITY_DIAGNOSTIC_RESULT / "logical-observations.csv"
+        ).open(newline="", encoding="utf-8-sig") as stream:
+            logical_rows = list(csv.DictReader(stream))
+        with (
+            CARRIER_STABILITY_DIAGNOSTIC_RESULT / "attempts.csv"
+        ).open(newline="", encoding="utf-8-sig") as stream:
+            attempt_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(logical_rows), len(matrix_rows))
+        self.assertEqual(
+            {
+                (
+                    row["pair"],
+                    row["arm"],
+                    row["activation"],
+                    row["keepalive_s"],
+                    row["repetition"],
+                )
+                for row in logical_rows
+            },
+            {
+                (
+                    row["pair"],
+                    row["arm"],
+                    row["activation"],
+                    row["keepalive_s"],
+                    row["repetition"],
+                )
+                for row in matrix_rows
+            },
+        )
+        self.assertEqual(
+            [row["status"] for row in logical_rows].count("invalid"),
+            1,
+        )
+        self.assertEqual(
+            [row["status"] for row in logical_rows].count("unrun"),
+            23,
+        )
+        self.assertEqual(
+            attempt_rows,
+            [
+                {
+                    "sequence": "1",
+                    "pair": "primary",
+                    "arm": "sync-k5",
+                    "repetition": "1",
+                    "activation": "synchronous",
+                    "keepalive_s": "5",
+                    "status": "invalid",
+                    "reason": "ssh_connect_timeout_before_host_qualification",
+                    "source_status_sha256": (
+                        "384111528fd15515bec6232a120ec7412bc478ebf1e61fd9f9d9ac1e6ea9109e"
+                    ),
+                }
+            ],
+        )
+
+        status = json.loads(
+            (
+                CARRIER_STABILITY_DIAGNOSTIC_RESULT / "observation-status.json"
+            ).read_text(encoding="utf-8")
+        )
+        composition = json.loads(
+            (
+                CARRIER_STABILITY_DIAGNOSTIC_RESULT / "composition-status.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(status["outcome"], "invalid")
+        self.assertIn("Connection timed out", status["error"])
+        self.assertEqual(composition["outcome"], "terminal_incomplete")
+        self.assertEqual(composition["attempted_observations"], 1)
+        self.assertEqual(composition["valid_observations"], 0)
+        self.assertEqual(composition["invalid_observations"], 1)
+        self.assertEqual(composition["unrun_observations"], 23)
+        self.assertEqual(composition["tuple_samples_retained"], 0)
+        self.assertEqual(composition["packet_captures_retained"], 0)
+        self.assertEqual(
+            composition["session_source_status_sha256"],
+            attempt_rows[0]["source_status_sha256"],
+        )
+        self.assertTrue(composition["fleet_deallocated"])
+
+        manifest = {
+            name: sha256
+            for sha256, name in (
+                line.split("  ", maxsplit=1)
+                for line in (
+                    CARRIER_STABILITY_DIAGNOSTIC_RESULT / "sha256-manifest.txt"
+                ).read_text(encoding="utf-8").splitlines()
+            )
+        }
+        self.assertEqual(
+            set(manifest),
+            {
+                "attempts.csv",
+                "composition-status.json",
+                "logical-observations.csv",
+                "observation-status.json",
+            },
+        )
+        for name, expected_hash in manifest.items():
+            payload = (
+                CARRIER_STABILITY_DIAGNOSTIC_RESULT / name
+            ).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_hash)
 
     def test_raw_collection_retries_transient_scp_failures(self) -> None:
         self.assertIn("for ($attempt = 1; $attempt -le 3; $attempt++)", ORCHESTRATOR)

@@ -1,0 +1,21 @@
+{
+  "stage": "carrier-stability-diagnostic-ct1",
+  "matrix_sha256": "cfa393ecb821c6eaef14056c998e4c79a5eac1bb1f78251abad2b24894f732fd",
+  "outcome": "terminal_incomplete",
+  "stop_reason": "first_observation_missing_host_qualification",
+  "attempted_observations": 1,
+  "valid_observations": 0,
+  "invalid_observations": 1,
+  "unrun_observations": 23,
+  "tuple_samples_retained": 0,
+  "packet_captures_retained": 0,
+  "session_source_status_sha256": "384111528fd15515bec6232a120ec7412bc478ebf1e61fd9f9d9ac1e6ea9109e",
+  "post_stop_host_check": {
+    "endpoints": 4,
+    "baseline_qdisc": true,
+    "inner_iperf_service_inactive": true,
+    "maintenance_enabled": true,
+    "tcp_carriers": 0
+  },
+  "fleet_deallocated": true
+}

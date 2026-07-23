@@ -449,16 +449,23 @@ deallocated.
 ### Carrier stability diagnostic
 
 RT4's carrier gate exposed synchronized replacement of otherwise established
-two-carrier tuples, so a new diagnostic must precede any seventh correlation
-campaign. CT1 is a separate no-impairment, 24-observation study across both
-pairs. It compares the RT4-equivalent five-second keepalive and synchronous
-activation with no keepalive, one-second keepalive, and staggered activation.
-Every observation holds two exact tuples for 120 seconds while retaining
-transition snapshots and FIN/RST captures. It cannot change RT4's result or
-release Stage 3:
+two-carrier tuples, so CT1 was predeclared as a separate no-impairment,
+24-observation study across both pairs. CT1 terminally stopped before its first
+120-second carrier observation when the named primary `sync-k5` repetition 1
+invocation timed out on pinned SSH while the fleet was deallocated. No remote
+host qualification, setup, warm-up, capture, or tuple sample occurred. The
+missing qualification evidence makes that named observation invalid; the
+remaining 23 observations are unrun and may not be retried.
+
+CT1 therefore establishes neither a stable candidate nor a carrier-churn result
+for any arm. It does not change RT4, release a seventh correlation campaign, or
+release Stage 3. The post-stop endpoint check found baseline qdiscs, zero TCP
+carriers, inactive inner services, and enabled maintenance; the gateway and all
+four endpoints were deallocated. The protocol and immutable matrix remain:
 
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT1.md`](CARRIER_STABILITY_DIAGNOSTIC_CT1.md)
 - [`matrix-carrier-stability-diagnostic-ct1.csv`](matrix-carrier-stability-diagnostic-ct1.csv)
+- [`results/2026-07-23-carrier-stability-ct1/`](results/2026-07-23-carrier-stability-ct1/)
 
 ## Interpretation limits
 

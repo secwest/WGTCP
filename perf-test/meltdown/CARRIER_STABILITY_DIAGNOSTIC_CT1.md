@@ -98,3 +98,21 @@ After CT1:
 
 Closeout restores the baseline qdiscs and tunnel state, removes maintenance
 masks and temporary capture processes, and deallocates idle VMs.
+
+## Terminal disposition
+
+CT1 stopped before its first 120-second carrier observation. The named primary
+`sync-k5` repetition 1 invocation encountered a pinned-SSH connection timeout
+while the fleet was deallocated, before host qualification, remote setup,
+warm-up, capture, or tuple sampling. The retained status is invalid for missing
+host qualification; the remaining 23 matrix observations are unrun.
+
+The protocol's no-retry rule applies. This record establishes neither carrier
+stability nor carrier churn for any CT1 arm, does not change RT4, and cannot
+release a seventh correlation campaign or Stage 3. After the invalid result,
+all four endpoints were verified at baseline qdiscs with no TCP carriers,
+inactive inner iperf service, and enabled maintenance; the gateway and all
+endpoints were deallocated.
+
+The compact manifest-bound disposition is in
+[`results/2026-07-23-carrier-stability-ct1/`](results/2026-07-23-carrier-stability-ct1/).

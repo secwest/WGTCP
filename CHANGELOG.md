@@ -9,6 +9,10 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added the terminal CT1 carrier-stability disposition: one prequalification
+  SSH-timeout invalid observation, 23 unrun observations, and compact
+  manifest-bound evidence. It makes no transport, carrier-stability, or
+  TCP-meltdown claim.
 - Added a prospective, no-impairment carrier-stability diagnostic matrix that
   compares keepalive cadence and dual-carrier activation while retaining tuple
   transitions and TCP FIN/RST evidence.

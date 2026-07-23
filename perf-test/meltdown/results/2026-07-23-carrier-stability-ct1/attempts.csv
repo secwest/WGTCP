@@ -1,0 +1,2 @@
+sequence,pair,arm,repetition,activation,keepalive_s,status,reason,source_status_sha256
+1,primary,sync-k5,1,synchronous,5,invalid,ssh_connect_timeout_before_host_qualification,384111528fd15515bec6232a120ec7412bc478ebf1e61fd9f9d9ac1e6ea9109e
