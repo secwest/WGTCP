@@ -2733,6 +2733,15 @@ class MeltdownAnalysisTest(unittest.TestCase):
             "carrier_diagnostic=failed",
             CARRIER_STABILITY_DIAGNOSTIC,
         )
+        self.assertIn("keepalive_s=${10:-5}", SYNCHRONIZED_SETUP)
+        self.assertIn(
+            'persistent-keepalive "$keepalive_s"',
+            SYNCHRONIZED_SETUP,
+        )
+        self.assertIn(
+            "persistent_keepalive_s=%s",
+            SYNCHRONIZED_SETUP,
+        )
 
     def test_raw_collection_retries_transient_scp_failures(self) -> None:
         self.assertIn("for ($attempt = 1; $attempt -le 3; $attempt++)", ORCHESTRATOR)

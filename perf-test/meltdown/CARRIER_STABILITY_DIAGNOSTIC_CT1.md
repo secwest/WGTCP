@@ -24,6 +24,10 @@ release Stage 3.
   [`harness/diagnose-carrier-stability.sh`](harness/diagnose-carrier-stability.sh)
 - Diagnostic sampler SHA-256:
   `39c8db3a11a53abbce7aca681ce0608e14d1464fc2f221660cc6686deb8ffc94`
+- Activation helper:
+  [`harness/synchronized-setup.sh`](harness/synchronized-setup.sh)
+- Activation helper SHA-256:
+  `76b6cacd4177301ff90e34f83c6debcf7a8184f8b540feb9d1e9471bdfba20d8`
 - Runtime source: `2b9513f`
 - Kernel: `6.8.0-1062-azure`
 - Module srcversion: `01DA86291E0FBD2CD3C940C`
@@ -48,8 +52,9 @@ warm-up, and a 120-second observation at 500 ms cadence.
 | `staggered-k5` | Passive interfaces receive one endpoint update, then the other after a fixed five-second delay. | 5 s | Does synchronous dual activation drive churn? |
 
 No inner workload, qdisc impairment, or source/module change occurs after
-warm-up. The `sync-k0` and `sync-k1` peer updates change only the keepalive
-interval; the configured address and TCP listen port remain unchanged.
+warm-up. The bound activation helper applies each arm's keepalive interval with
+its initial endpoint update; the configured address and TCP listen port remain
+unchanged.
 
 ## Qualification and evidence
 

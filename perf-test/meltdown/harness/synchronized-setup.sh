@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# != 9 )); then
-	echo "usage: $0 TARGET_NS PEER_PUB PEER_PHYS LOCAL_UDP PEER_UDP LOCAL_TCP PEER_TCP PEER_TUNNEL_TCP STATE_PREFIX" >&2
+if (( $# < 9 || $# > 10 )); then
+	echo "usage: $0 TARGET_NS PEER_PUB PEER_PHYS LOCAL_UDP PEER_UDP LOCAL_TCP PEER_TCP PEER_TUNNEL_TCP STATE_PREFIX [KEEPALIVE_S]" >&2
 	exit 2
 fi
 
@@ -15,6 +15,13 @@ local_tcp=$6
 peer_tcp=$7
 peer_tunnel_tcp=$8
 state_prefix=$9
+keepalive_s=${10:-5}
+
+if ! [[ $keepalive_s =~ ^(0|[1-9][0-9]*)$ ]] ||
+	(( keepalive_s > 65535 )); then
+	echo "KEEPALIVE_S must be an integer from 0 to 65535" >&2
+	exit 2
+fi
 
 finish() {
 	rc=$?
@@ -59,7 +66,7 @@ if lateness > 100_000_000:
 sudo /opt/wgtcp-meltdown/bin/wg set wg-mt-tcp \
 	peer "$peer_pub" \
 	endpoint "$peer_phys:51821" \
-	persistent-keepalive 5
+	persistent-keepalive "$keepalive_s"
 
 delivered=0
 for _ in $(seq 1 50); do
@@ -73,5 +80,5 @@ done
 	exit 1
 }
 
-printf 'activation_completed_utc=%s\nstatus=ready\n' \
-	"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+printf 'activation_completed_utc=%s\npersistent_keepalive_s=%s\nstatus=ready\n' \
+	"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$keepalive_s"
