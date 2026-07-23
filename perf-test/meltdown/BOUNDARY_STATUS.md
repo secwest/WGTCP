@@ -348,6 +348,16 @@ the temporary test namespaces were removed before the hosts were deallocated.
 The strengthened asymmetric `carrier-lifetime` regression, which now performs
 the same continuous exact-two-carrier check, also passed once on each endpoint.
 
+On 2026-07-22, a fourth independent correlation replication was authorized. It
+has a distinct stage identity and immutable 30-cell matrix while retaining the
+unchanged 20 ms timing bound, priority-50 FIFO prerequisite, 40-second carrier
+gate, and terminal-stop policy:
+
+- [`BOUNDARY_RT2_REPLICATION_TESTPLAN.md`](BOUNDARY_RT2_REPLICATION_TESTPLAN.md)
+- [`matrix-boundary-correlation-replication-rt2.csv`](matrix-boundary-correlation-replication-rt2.csv)
+
+No fourth-replication qualification or matrix cell has run at publication time.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

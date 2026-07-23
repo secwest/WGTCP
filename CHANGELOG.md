@@ -9,6 +9,10 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a fourth, independently identified real-time 30-cell correlation
+  replication matrix and prospective protocol. It preserves the timing,
+  carrier, matched-control, and terminal-stop rules while retaining every prior
+  frozen campaign as independent evidence.
 - Added a prospectively isolated 30-cell packet-correlation replication with a
   fresh stage identity, fixed pair assignment, runtime-only package-maintenance
   isolation, terminal safety stops, and no reuse of frozen Stage 2 evidence.
