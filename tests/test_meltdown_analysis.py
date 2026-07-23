@@ -2630,6 +2630,18 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn("Start-Sleep -Seconds $attempt", ORCHESTRATOR)
         self.assertIn("scp download failed on port $Port after 3 attempts", ORCHESTRATOR)
 
+    def test_raw_collection_rejects_windows_path_overflow_before_workload(self) -> None:
+        self.assertIn("function Assert-LocalArtifactCollectionPath", ORCHESTRATOR)
+        self.assertIn(
+            'Join-Path $LocalCell "client\\impairment-events.jsonl"', ORCHESTRATOR
+        )
+        self.assertIn("use a shorter ResultsDir before starting the cell", ORCHESTRATOR)
+        guard_index = ORCHESTRATOR.index("Assert-LocalArtifactCollectionPath $localCell")
+        cell_index = ORCHESTRATOR.index("$localCell =")
+        remote_cell_index = ORCHESTRATOR.index("$remoteCellA =", cell_index)
+        self.assertGreater(guard_index, cell_index)
+        self.assertLess(guard_index, remote_cell_index)
+
     def test_shaper_keeps_cleanup_trap_through_status_capture(self) -> None:
         status_index = SHAPER.rindex('tc -s -j qdisc show dev "$IFB"')
         release_index = SHAPER.index("trap - EXIT", status_index)

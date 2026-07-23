@@ -203,6 +203,18 @@ function Copy-ToRemote {
     }
 }
 
+function Assert-LocalArtifactCollectionPath {
+    param([Parameter(Mandatory)] [string] $LocalCell)
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        return
+    }
+    $probe = Join-Path $LocalCell "client\impairment-events.jsonl"
+    if ($probe.Length -ge 260) {
+        throw "local artifact destination path is $($probe.Length) characters; use a shorter ResultsDir before starting the cell"
+    }
+}
+
 function Copy-FromRemote {
     param(
         [Parameter(Mandatory)] [string] $HostName,
@@ -625,6 +637,7 @@ function Invoke-Cell {
 
     $cellId = "$($Row.stage)-$($Row.name)-$($Row.tunnel)-r$Repetition"
     $localCell = Join-Path (Join-Path $ResultsDir "cells") $cellId
+    Assert-LocalArtifactCollectionPath $localCell
     $remoteCellA = "$RemoteResultsDir/server/$cellId"
     $remoteCellB = "$RemoteResultsDir/cells/$cellId"
     $safeId = $cellId -replace "[^A-Za-z0-9_.-]", "-"

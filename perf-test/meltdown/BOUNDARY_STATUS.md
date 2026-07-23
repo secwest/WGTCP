@@ -393,6 +393,22 @@ check:
 - [`BOUNDARY_RT3_REPLICATION_TESTPLAN.md`](BOUNDARY_RT3_REPLICATION_TESTPLAN.md)
 - [`matrix-boundary-correlation-replication-rt3.csv`](matrix-boundary-correlation-replication-rt3.csv)
 
+The fifth campaign's first primary TCP cell completed its workload but failed
+during final raw-tree collection. The resulting destination for a client
+artifact was exactly 260 characters long, exceeding the Windows OpenSSH path
+boundary; this was a local evidence-path failure, not a transport outcome.
+The remote client and server trees were immediately recovered to a short local
+root and are bound by recovery manifest SHA-256
+`621fd98adfc45f314cad9976867dd73de0d4e1f7ee063e2db49ef92fe1f41151`.
+The failed logical cell cannot be rerun, so a complete three-repetition
+selection is no longer possible. No later fifth-campaign cell was run, and the
+campaign contributes no selected valid result or onset inference.
+
+The runner now rejects a Windows collection path at or beyond 260 characters
+before starting a workload. This prevention and the short local raw root apply
+only to a future independently predeclared campaign; they do not repair,
+reclassify, or extend the fifth campaign.
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
