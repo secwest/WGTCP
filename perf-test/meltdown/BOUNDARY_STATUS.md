@@ -380,6 +380,19 @@ two-second delays and retains the final error output. This hardening applies
 only to a future independently predeclared campaign; it does not reopen,
 repair, or extend the stopped fourth campaign.
 
+On 2026-07-23, a fifth independent correlation replication was prospectively
+predeclared. Its immutable 30-cell scientific matrix uses a new stage identity
+and a SHA-256 of
+`d3a91e81fa997407d8d0ab66e662378bc26bfb06bf7c4283ece678c0e87b1bbc`;
+it cannot pool or repair the prior stopped campaign. The fifth plan preserves
+all timing, carrier, maintenance, matched-control, and terminal-stop rules,
+binds the hardened runner hash, and serializes cell dispatch until each prior
+cell has fully collected, analyzed, restored, and passed its safety-latch
+check:
+
+- [`BOUNDARY_RT3_REPLICATION_TESTPLAN.md`](BOUNDARY_RT3_REPLICATION_TESTPLAN.md)
+- [`matrix-boundary-correlation-replication-rt3.csv`](matrix-boundary-correlation-replication-rt3.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

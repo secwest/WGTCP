@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a fifth independent real-time 30-cell correlation matrix and prospective
+  protocol. It retains the fixed scientific design and all safety gates while
+  serializing cell dispatch behind complete raw-artifact collection.
 - Added bounded artifact-collection retries to the campaign runner: failed SCP
   downloads now receive three attempts with one- and two-second delays, and the
   final collection output is retained for a fail-closed error report.

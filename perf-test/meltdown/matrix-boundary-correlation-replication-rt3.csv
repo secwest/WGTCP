@@ -1,0 +1,11 @@
+stage,enabled,name,tunnel,rate_mbps,rtt_ms,queue_bdp,queue_kind,loss_model,loss_pct,burst_p,burst_r,burst_h,burst_k,flows,duration_s,workload_duration_s,warmup_s,workload_completion,impairment_validation,impairment_schedule,loss_epoch_start_s,loss_epoch_ms,inner_cc,direction,competitor,repetitions
+boundary-correlation-replication-rt3,1,ge-res1-d16-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,4,100,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res1-d16-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,4,100,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res2-d16-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,2,50,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res2-d16-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,2,50,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res4-d16-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,1,25,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res4-d16-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,1,25,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res8-d16-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,0.5,12.5,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res8-d16-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,0.5,12.5,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res16-d16-r200-q1-16f,tcp,50,200,1,bfifo,gemodel,0,0.25,6.25,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
+boundary-correlation-replication-rt3,1,ge-res16-d16-r200-q1-16f,udp,50,200,1,bfifo,gemodel,0,0.25,6.25,90,1,16,91,92,10,interval_complete,transport_aware,timed,15,16000,cubic,reverse,0,3
