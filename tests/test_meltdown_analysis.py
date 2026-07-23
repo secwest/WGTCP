@@ -97,6 +97,12 @@ BOUNDARY_CORRELATION_RT3_REPLICATION_MATRIX = (
     / "meltdown"
     / "matrix-boundary-correlation-replication-rt3.csv"
 )
+BOUNDARY_CORRELATION_RT4_REPLICATION_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-boundary-correlation-replication-rt4.csv"
+)
 
 
 def workload_document(
@@ -2621,6 +2627,37 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 {
                     key: value
                     for key, value in fifth_row.items()
+                    if key != "stage"
+                },
+            )
+
+    def test_sixth_correlation_replication_is_independent_and_exact(self) -> None:
+        with BOUNDARY_CORRELATION_RT3_REPLICATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            prior_replication = list(csv.DictReader(stream))
+        with BOUNDARY_CORRELATION_RT4_REPLICATION_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            sixth_replication = list(csv.DictReader(stream))
+
+        self.assertEqual(len(sixth_replication), 10)
+        self.assertEqual(
+            sum(int(row["repetitions"]) for row in sixth_replication),
+            30,
+        )
+        self.assertEqual(
+            {row["stage"] for row in sixth_replication},
+            {"boundary-correlation-replication-rt4"},
+        )
+        for prior_row, sixth_row in zip(
+            prior_replication, sixth_replication, strict=True
+        ):
+            self.assertEqual(
+                {key: value for key, value in prior_row.items() if key != "stage"},
+                {
+                    key: value
+                    for key, value in sixth_row.items()
                     if key != "stage"
                 },
             )

@@ -9,6 +9,8 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a sixth independent real-time 30-cell correlation matrix and prospective
+  protocol, including a pre-workload short local raw-root requirement.
 - Added a Windows-specific local artifact-path guard that rejects a collection
   destination at the OpenSSH 260-character boundary before a workload begins.
 - Added a fifth independent real-time 30-cell correlation matrix and prospective

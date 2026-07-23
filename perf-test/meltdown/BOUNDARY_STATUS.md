@@ -409,6 +409,18 @@ before starting a workload. This prevention and the short local raw root apply
 only to a future independently predeclared campaign; they do not repair,
 reclassify, or extend the fifth campaign.
 
+On 2026-07-23, a sixth independent correlation replication was prospectively
+predeclared. Its immutable 30-cell scientific matrix has a new stage identity
+and SHA-256
+`dd82a6f5c93a5d70cae594b967eb7d019945ef68329875fcb9db1bbd7dff4f03`;
+it cannot pool or repair either stopped 2026-07-23 campaign. The sixth plan
+preserves all timing, carrier, maintenance, matched-control, and terminal-stop
+rules; binds the path-guard runner hash; serializes cell dispatch; and requires
+a short local raw root to pass the pre-workload collection-path gate:
+
+- [`BOUNDARY_RT4_REPLICATION_TESTPLAN.md`](BOUNDARY_RT4_REPLICATION_TESTPLAN.md)
+- [`matrix-boundary-correlation-replication-rt4.csv`](matrix-boundary-correlation-replication-rt4.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
