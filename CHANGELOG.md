@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added CT3's terminal carrier-diagnostic disposition: one valid primary stable
+  trace, one invalid secondary setup, 22 unrun rows, and compact hash-bound
+  evidence with no cross-pair carrier conclusion.
 - Added independent CT3 carrier-stability predeclaration with passive
   four-endpoint package/lock eligibility and enforced temporary-service,
   capture, carrier, qdisc, and maintenance closeout verification.

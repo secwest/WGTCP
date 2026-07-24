@@ -1,0 +1,17 @@
+{
+  "stage": "carrier-stability-diagnostic-ct3",
+  "pair": "secondary",
+  "arm": "sync-k5",
+  "repetition": 1,
+  "activation": "synchronous",
+  "keepalive_s": 5,
+  "expected_carriers": 2,
+  "observation_s": 120,
+  "interval_s": "0.5",
+  "started_utc": "2026-07-24T04:02:58.5315735Z",
+  "host_qualification": "valid",
+  "outcome": "invalid",
+  "error": "CT3 setup failed: server=1 client=1",
+  "completed_utc": "2026-07-24T04:05:13.5260935Z",
+  "restoration": "valid"
+}

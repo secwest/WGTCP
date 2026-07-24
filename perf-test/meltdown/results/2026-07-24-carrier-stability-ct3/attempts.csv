@@ -1,0 +1,3 @@
+sequence,pair,arm,repetition,activation,keepalive_s,status,reason,source_status_sha256
+1,primary,sync-k5,1,synchronous,5,stable,unchanged_two_tuples_for_240_samples,4c6a1807397f3912fc293d8097c748853d0929d44f99c0514439ae7b98cf90bf
+2,secondary,sync-k5,1,synchronous,5,invalid,carrier_exists_before_synchronized_activation_and_tunnel_control_failed,955a0c02aa0f9aa5f61f32364ff1a6d5900b33d6627a9e3685c91906b151d2e7

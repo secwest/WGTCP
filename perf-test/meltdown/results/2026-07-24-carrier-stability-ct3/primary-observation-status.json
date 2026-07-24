@@ -1,0 +1,19 @@
+{
+  "stage": "carrier-stability-diagnostic-ct3",
+  "pair": "primary",
+  "arm": "sync-k5",
+  "repetition": 1,
+  "activation": "synchronous",
+  "keepalive_s": 5,
+  "expected_carriers": 2,
+  "observation_s": 120,
+  "interval_s": "0.5",
+  "started_utc": "2026-07-24T04:02:57.5214726Z",
+  "host_qualification": "valid",
+  "setup": "valid",
+  "outcome": "stable",
+  "server_exit_code": 0,
+  "client_exit_code": 0,
+  "completed_utc": "2026-07-24T04:07:39.8992715Z",
+  "restoration": "valid"
+}

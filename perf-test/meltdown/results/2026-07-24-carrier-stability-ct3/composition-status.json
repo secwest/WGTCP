@@ -1,0 +1,30 @@
+{
+  "stage": "carrier-stability-diagnostic-ct3",
+  "matrix_sha256": "3ba54e36831a86fbf32a0b805ff8718c41474e83673724c1a53fcf704b65464a",
+  "outcome": "terminal_incomplete",
+  "stop_reason": "secondary_carrier_exists_before_synchronized_activation_and_tunnel_control_failed",
+  "attempted_observations": 2,
+  "valid_observations": 1,
+  "invalid_observations": 1,
+  "unrun_observations": 22,
+  "launch_eligibility_source_sha256": "5edf7d3710de23e04589c055be1c24b67f308697abc603db2c5288338eaca179",
+  "primary_source_manifest_sha256": "fcb46a3e5575cf0e2b6556c09831b3adb54505523c3a06649143f7f94d6d0969",
+  "secondary_source_manifest_sha256": "abb03c0a600060cd1182b6e0372c395d51616598b5efd0b3d525ce334c1640c9",
+  "primary_valid_tuple_trace": {
+    "server_samples": 240,
+    "server_tuple_changes": 0,
+    "server_wrong_count_samples": 0,
+    "client_samples": 240,
+    "client_tuple_changes": 0,
+    "client_wrong_count_samples": 0
+  },
+  "post_stop_host_check": {
+    "endpoints": 4,
+    "baseline_qdisc": true,
+    "temporary_services_inactive": true,
+    "tcpdump_processes": 0,
+    "tcp_carriers": 0,
+    "maintenance_enabled": true
+  },
+  "fleet_deallocated": true
+}

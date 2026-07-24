@@ -485,14 +485,22 @@ four endpoints passed post-stop baseline checks and the fleet was deallocated:
 - [`matrix-carrier-stability-diagnostic-ct2.csv`](matrix-carrier-stability-diagnostic-ct2.csv)
 - [`results/2026-07-24-carrier-stability-ct2/`](results/2026-07-24-carrier-stability-ct2/)
 
-CT3 is independently predeclared after CT2. It retains the same 24 arms and
-runtime but must pass a passive all-four-endpoint package/lock gate before
-creating a name. Its runner also verifies that all temporary services, captures,
-carriers, shaping, and maintenance masks are restored at closeout. CT3 neither
-reopens nor repairs RT4, CT1, or CT2:
+CT3's all-four-endpoint package/lock launch gate passed. Its runner's enforced
+closeout repair also passed: all temporary services, captures, carriers,
+shaping, and maintenance masks were restored. CT3 nevertheless stopped during
+the first paired `sync-k5` row. Primary r1 is a valid stable 240-sample trace,
+but secondary r1 found a carrier before synchronized activation and then failed
+the synchronized TCP tunnel control. The secondary is invalid, the other 22
+observations are unrun, and the one primary result cannot qualify an arm across
+both pairs.
+
+CT3 establishes no cross-pair carrier-stability conclusion and neither reopens
+nor repairs RT4, CT1, or CT2. It cannot identify a candidate for a seventh
+correlation campaign or release Stage 3. The fleet is deallocated:
 
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT3.md`](CARRIER_STABILITY_DIAGNOSTIC_CT3.md)
 - [`matrix-carrier-stability-diagnostic-ct3.csv`](matrix-carrier-stability-diagnostic-ct3.csv)
+- [`results/2026-07-24-carrier-stability-ct3/`](results/2026-07-24-carrier-stability-ct3/)
 
 ## Interpretation limits
 

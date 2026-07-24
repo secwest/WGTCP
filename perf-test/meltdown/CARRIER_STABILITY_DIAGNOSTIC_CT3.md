@@ -95,3 +95,27 @@ After CT3:
    further correlation, duration, mitigation, or LTE work on this runtime.
 
 Closeout deallocates the gateway and endpoints after restoration.
+
+## Terminal disposition
+
+CT3's all-four-endpoint package/lock and pinned-SSH launch gate passed. Its
+first paired `sync-k5` repetition produced one valid stable primary observation
+and one invalid secondary observation:
+
+- Primary r1 passed qualification, setup, and closeout. Both endpoints retained
+  exactly two unchanged carrier tuples across all 240 samples.
+- Secondary r1 passed host qualification but its server detected a TCP carrier
+  before synchronized activation; the subsequent synchronized TCP tunnel
+  control failed on both endpoints. It retained no carrier sample. Its enforced
+  closeout nevertheless completed validly.
+
+One valid primary observation cannot qualify an arm without its matched
+secondary observation and the two remaining repetitions. The secondary invalid
+result terminally stops CT3; its remaining 22 observations are unrun and no
+named observation is retried. CT3 establishes no cross-pair carrier-stability
+conclusion, does not alter RT4, CT1, or CT2, and cannot release a seventh
+correlation campaign or Stage 3. All endpoints passed the post-stop restoration
+check and the fleet was deallocated.
+
+The compact manifest-bound disposition is in
+[`results/2026-07-24-carrier-stability-ct3/`](results/2026-07-24-carrier-stability-ct3/).
