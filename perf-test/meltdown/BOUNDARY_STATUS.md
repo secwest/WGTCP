@@ -467,6 +467,16 @@ four endpoints were deallocated. The protocol and immutable matrix remain:
 - [`matrix-carrier-stability-diagnostic-ct1.csv`](matrix-carrier-stability-diagnostic-ct1.csv)
 - [`results/2026-07-23-carrier-stability-ct1/`](results/2026-07-23-carrier-stability-ct1/)
 
+CT2 is independently predeclared after CT1's prequalification-only terminal
+stop. It retains the same 24 no-impairment arms and exact runtime, but adds an
+all-four-endpoint pinned-SSH launch gate and requires each pair runner's
+explicit execution switch before a named observation directory can exist. This
+does not reopen CT1 or RT4; it may only identify a clean candidate for a future
+seventh correlation campaign:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT2.md`](CARRIER_STABILITY_DIAGNOSTIC_CT2.md)
+- [`matrix-carrier-stability-diagnostic-ct2.csv`](matrix-carrier-stability-diagnostic-ct2.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

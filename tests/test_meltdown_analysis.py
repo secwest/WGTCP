@@ -110,6 +110,15 @@ CARRIER_STABILITY_DIAGNOSTIC_MATRIX = (
     / "meltdown"
     / "matrix-carrier-stability-diagnostic-ct1.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct2.csv"
+)
+CARRIER_STABILITY_DIAGNOSTIC_CT2_PROTOCOL = (
+    ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT2.md"
+).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC = (
     ROOT / "perf-test" / "meltdown" / "harness" / "diagnose-carrier-stability.sh"
 ).read_text(encoding="utf-8")
@@ -2750,6 +2759,39 @@ class MeltdownAnalysisTest(unittest.TestCase):
             "persistent_keepalive_s=%s",
             SYNCHRONIZED_SETUP,
         )
+
+    def test_ct2_carrier_stability_diagnostic_is_independent_and_exact(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct1_rows = list(csv.DictReader(stream))
+        with CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct2_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(ct2_rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in ct2_rows},
+            {"carrier-stability-diagnostic-ct2"},
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX.read_bytes()
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "8df67b25905b9b079fe89f7438cd94c89b40cfc2fcd14a89f593ff677ad4b983",
+        )
+        self.assertIn(
+            "requires an\nexplicit `-Execute` switch",
+            CARRIER_STABILITY_DIAGNOSTIC_CT2_PROTOCOL,
+        )
+        for ct1_row, ct2_row in zip(ct1_rows, ct2_rows, strict=True):
+            self.assertEqual(
+                {key: value for key, value in ct1_row.items() if key != "stage"},
+                {key: value for key, value in ct2_row.items() if key != "stage"},
+            )
 
     def test_carrier_stability_terminal_disposition_is_complete(self) -> None:
         with CARRIER_STABILITY_DIAGNOSTIC_MATRIX.open(

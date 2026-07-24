@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added independent CT2 carrier-stability predeclaration with a four-endpoint
+  pinned-SSH launch gate that prevents an unallocated or disconnected fleet
+  from consuming a named observation.
 - Added the terminal CT1 carrier-stability disposition: one prequalification
   SSH-timeout invalid observation, 23 unrun observations, and compact
   manifest-bound evidence. It makes no transport, carrier-stability, or
