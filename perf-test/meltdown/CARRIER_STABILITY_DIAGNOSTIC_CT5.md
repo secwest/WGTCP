@@ -100,3 +100,19 @@ Only an arm with three clean observations on both pairs can justify a fresh,
 independently predeclared correlation campaign. CT5 itself produces no
 TCP-meltdown result and cannot directly release Stage 3. Closeout deallocates
 the gateway and endpoints.
+
+## Terminal disposition
+
+CT5 created no named matrix observation. After a clean VM allocation, the
+initial static idle gate failed on all four endpoints because
+`/sys/module/wireguard/srcversion` was absent: the exact module was not loaded
+yet. The gate correctly refused to substitute the on-disk module's identity for
+a loaded-runtime claim. No passive setup, carrier construction, warm-up,
+capture, or tuple sample occurred.
+
+This is a CT5 launch-qualification limitation, not a carrier-stability result.
+Changing the idle helper to load and attest the module would change CT5's
+hash-bound input, so CT5 is closed rather than retried or modified. The
+preflight cleanup restored host state and the gateway plus all four endpoints
+were deallocated. CT5 neither qualifies an arm nor releases correlation
+testing or Stage 3.

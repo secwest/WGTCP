@@ -512,12 +512,13 @@ returned to baseline then deallocated:
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT4.md`](CARRIER_STABILITY_DIAGNOSTIC_CT4.md)
 - [`matrix-carrier-stability-diagnostic-ct4.csv`](matrix-carrier-stability-diagnostic-ct4.csv)
 
-CT5 is independently predeclared with the same 24 named observations and a
-static/passive qualification model. It forbids active `PrepareOnly`; any
-non-observation functional control uses synchronized passive setup, is
-concurrently normalized, and then must pass the all-port ten-sample idle gate
-before a named passive observation can exist. CT5 cannot repair or reuse CT4
-and cannot release Stage 3 without qualifying an arm on both pairs:
+CT5 terminally stopped with no named matrix observation. Its static idle gate
+correctly rejected all four endpoints because the exact module was not loaded
+after allocation, so `/sys/module/wireguard/srcversion` could not attest a
+loaded runtime. No passive setup, carrier construction, warm-up, capture, or
+tuple sample occurred. Loading the module in the gate would change CT5's
+hash-bound input, so it was not retried or modified. All hosts were restored
+and deallocated; CT5 cannot release Stage 3:
 
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT5.md`](CARRIER_STABILITY_DIAGNOSTIC_CT5.md)
 - [`matrix-carrier-stability-diagnostic-ct5.csv`](matrix-carrier-stability-diagnostic-ct5.csv)
