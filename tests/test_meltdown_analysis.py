@@ -128,6 +128,12 @@ CARRIER_STABILITY_DIAGNOSTIC_CT4_MATRIX = (
     / "meltdown"
     / "matrix-carrier-stability-diagnostic-ct4.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT5_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct5.csv"
+)
 CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT3.md"
 ).read_text(encoding="utf-8")
@@ -136,6 +142,9 @@ CARRIER_STABILITY_DIAGNOSTIC_CT2_PROTOCOL = (
 ).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC_CT4_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT4.md"
+).read_text(encoding="utf-8")
+CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL = (
+    ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT5.md"
 ).read_text(encoding="utf-8")
 NORMALIZE_IDLE_HOST = (
     ROOT / "perf-test" / "meltdown" / "harness" / "normalize-idle-host.sh"
@@ -2922,6 +2931,45 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 .replace(b"\r", b"\n")
             ).hexdigest(),
             "43fc50cae9e02c59860cb29439e2162130e050fa90cb085ac1f987c5f1627847",
+        )
+
+    def test_ct5_carrier_stability_diagnostic_uses_static_passive_preflight(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_CT4_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct4_rows = list(csv.DictReader(stream))
+        with CARRIER_STABILITY_DIAGNOSTIC_CT5_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct5_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(ct5_rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in ct5_rows},
+            {"carrier-stability-diagnostic-ct5"},
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                CARRIER_STABILITY_DIAGNOSTIC_CT5_MATRIX.read_bytes()
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "e4629ca3663eb130f5b566232812ae3e7938d210832c0aed38735f02acda967c",
+        )
+        for ct4_row, ct5_row in zip(ct4_rows, ct5_rows, strict=True):
+            self.assertEqual(
+                {key: value for key, value in ct4_row.items() if key != "stage"},
+                {key: value for key, value in ct5_row.items() if key != "stage"},
+            )
+
+        self.assertIn("No active `PrepareOnly`", CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL)
+        self.assertIn(
+            "non-observation passive functional control",
+            CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL,
+        )
+        self.assertIn(
+            "second gate is the final action before\nnamed passive activation",
+            CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL,
         )
 
     def test_carrier_stability_terminal_disposition_is_complete(self) -> None:

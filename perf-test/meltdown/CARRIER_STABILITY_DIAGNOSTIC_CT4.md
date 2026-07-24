@@ -106,3 +106,28 @@ independently predeclared correlation campaign. If no arm qualifies, publish
 the carrier-stability limitation and do not run correlation, duration,
 mitigation, or LTE work on this runtime. Closeout deallocates the gateway and
 endpoints after restoration.
+
+## Terminal disposition
+
+CT4 created no named matrix observation. Its first primary active-control
+preflight failed TCP tunnel control on the client; after baseline restoration,
+the second primary preflight failed at the same point. The initial secondary
+preflight exposed a launcher-only empty-output write defect, and its retry
+exposed a launcher-only loaded-module identity lookup defect. Both defects were
+corrected without changing a host runtime or a matrix row, but the repeated
+primary active-control failure means CT4 cannot establish all-four launch
+eligibility.
+
+The four launch receipts are retained by SHA-256:
+
+| Pair | Attempt | Outcome | Receipt SHA-256 |
+|---|---|---|---|
+| Primary | `20260724T055545Z` | TCP control failed | `529eb8a84ab18e41ebcd824be3c61f364ab79723500817b4ac2edd50346a5004` |
+| Secondary | `20260724T055546Z` | launcher write defect | `f7cf765bb23a52b00a6bddad81dbb68df7bb3d3e81d8bf4743a64d665ece44bd` |
+| Primary | `20260724T055715Z` | TCP control failed | `1efdf3127b9bcbacce7c8e88c846a820d10f978da1a354f24114f173c17681bb` |
+| Secondary | `20260724T055715Z` | launcher identity lookup defect | `fd28563a86225b4deea55d9fb5a169a4793510405b834312cbe6b8a2e64239ac` |
+
+Manual cleanup verified zero port-51821 sockets, absent TCP/UDP tunnel
+interfaces, inactive temporary services, enabled maintenance, and baseline
+state on all four endpoints before deallocation. CT4 cannot qualify a carrier
+arm, does not release correlation testing or Stage 3, and is not reopened.

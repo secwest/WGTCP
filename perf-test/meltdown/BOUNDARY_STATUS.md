@@ -502,17 +502,25 @@ correlation campaign or release Stage 3. The fleet is deallocated:
 - [`matrix-carrier-stability-diagnostic-ct3.csv`](matrix-carrier-stability-diagnostic-ct3.csv)
 - [`results/2026-07-24-carrier-stability-ct3/`](results/2026-07-24-carrier-stability-ct3/)
 
-CT4 is independently predeclared to test the same matrix without inheriting an
-active-control carrier into passive setup. It performs any active TCP/UDP
-control only as a separate, non-observation preparation; it then tears down
-both endpoints concurrently and requires ten 500 ms samples with no
-established or listening port-51821 socket of any peer before a named passive
-observation may exist. No active `PrepareOnly` may run after the final
-quiescence sample. CT4 is not a retry or repair of CT1-CT3 and remains unable
-to release Stage 3 until it qualifies an arm on both pairs:
+CT4 terminally stopped with no named matrix observation. Its primary active
+control preflight twice failed client TCP tunnel control after clean
+restoration. Its two secondary preflight attempts instead exposed and corrected
+launcher-only evidence-writing and loaded-module identity defects. No
+preflight result is a carrier-stability observation, and all endpoints were
+returned to baseline then deallocated:
 
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT4.md`](CARRIER_STABILITY_DIAGNOSTIC_CT4.md)
 - [`matrix-carrier-stability-diagnostic-ct4.csv`](matrix-carrier-stability-diagnostic-ct4.csv)
+
+CT5 is independently predeclared with the same 24 named observations and a
+static/passive qualification model. It forbids active `PrepareOnly`; any
+non-observation functional control uses synchronized passive setup, is
+concurrently normalized, and then must pass the all-port ten-sample idle gate
+before a named passive observation can exist. CT5 cannot repair or reuse CT4
+and cannot release Stage 3 without qualifying an arm on both pairs:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT5.md`](CARRIER_STABILITY_DIAGNOSTIC_CT5.md)
+- [`matrix-carrier-stability-diagnostic-ct5.csv`](matrix-carrier-stability-diagnostic-ct5.csv)
 
 ## Interpretation limits
 
