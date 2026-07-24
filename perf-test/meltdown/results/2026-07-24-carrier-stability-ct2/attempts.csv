@@ -1,0 +1,3 @@
+sequence,pair,arm,repetition,activation,keepalive_s,status,reason,source_status_sha256
+1,primary,sync-k5,1,synchronous,5,invalid,package_process_active_before_host_qualification,bdfe6e23fd62478aea37d3351b159778473549635aa6de40a8a51ee98e58fae2
+2,secondary,sync-k5,1,synchronous,5,invalid,residual_inner_iperf_service_after_runner_closeout,2811cafde415e573b4f14bfeba76f7012d356894db8b1f90716cb3f8645bab2c

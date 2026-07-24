@@ -1,0 +1,31 @@
+{
+  "stage": "carrier-stability-diagnostic-ct2",
+  "checked_utc": "2026-07-24T03:49:18.9610160Z",
+  "gateway": "20.104.82.148",
+  "results": [
+    {
+      "port": 2222,
+      "expected_host": "wgtcp-amp-b",
+      "exit_code": 0,
+      "output": "wgtcp-amp-b\n6.8.0-1062-azure"
+    },
+    {
+      "port": 2223,
+      "expected_host": "wgtcp-amp-a",
+      "exit_code": 0,
+      "output": "wgtcp-amp-a\n6.8.0-1062-azure"
+    },
+    {
+      "port": 2232,
+      "expected_host": "wgtcp-boundary-b",
+      "exit_code": 0,
+      "output": "wgtcp-boundary-b\n6.8.0-1062-azure"
+    },
+    {
+      "port": 2233,
+      "expected_host": "wgtcp-boundary-a",
+      "exit_code": 0,
+      "output": "wgtcp-boundary-a\n6.8.0-1062-azure"
+    }
+  ]
+}

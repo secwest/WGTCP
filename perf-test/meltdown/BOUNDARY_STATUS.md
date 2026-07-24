@@ -467,15 +467,23 @@ four endpoints were deallocated. The protocol and immutable matrix remain:
 - [`matrix-carrier-stability-diagnostic-ct1.csv`](matrix-carrier-stability-diagnostic-ct1.csv)
 - [`results/2026-07-23-carrier-stability-ct1/`](results/2026-07-23-carrier-stability-ct1/)
 
-CT2 is independently predeclared after CT1's prequalification-only terminal
-stop. It retains the same 24 no-impairment arms and exact runtime, but adds an
-all-four-endpoint pinned-SSH launch gate and requires each pair runner's
-explicit execution switch before a named observation directory can exist. This
-does not reopen CT1 or RT4; it may only identify a clean candidate for a future
-seventh correlation campaign:
+CT2 was independently predeclared after CT1's prequalification-only terminal
+stop. Its all-four-endpoint pinned-SSH launch gate passed, but its first paired
+`sync-k5` row terminally stopped the study. The primary runner found package
+activity before qualification; the secondary retained two complete 240-sample
+traces, each with 18 tuple replacements while maintaining count two, but left a
+temporary inner-iperf service active at closeout. The post-run restoration
+check stopped that service, but it cannot repair the named secondary
+observation. Both named observations are invalid and the other 22 are unrun.
+
+The retained secondary raw trace is not a valid carrier-stability or
+carrier-churn conclusion. CT2 does not reopen CT1 or RT4, identify a stable
+candidate, release a seventh correlation campaign, or release Stage 3. All
+four endpoints passed post-stop baseline checks and the fleet was deallocated:
 
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT2.md`](CARRIER_STABILITY_DIAGNOSTIC_CT2.md)
 - [`matrix-carrier-stability-diagnostic-ct2.csv`](matrix-carrier-stability-diagnostic-ct2.csv)
+- [`results/2026-07-24-carrier-stability-ct2/`](results/2026-07-24-carrier-stability-ct2/)
 
 ## Interpretation limits
 

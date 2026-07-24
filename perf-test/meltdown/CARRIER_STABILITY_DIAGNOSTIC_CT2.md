@@ -101,3 +101,27 @@ After CT2:
 
 Closeout restores baseline qdiscs and tunnel state, removes maintenance masks
 and temporary capture processes, then deallocates idle VMs.
+
+## Terminal disposition
+
+CT2's all-four-endpoint pinned-SSH launch gate passed. The paired `sync-k5`
+repetition 1 dispatch then produced two invalid named observations:
+
+- The primary runner found an active package process on port 2222 before host
+  qualification, so it retained no setup, warm-up, capture, or tuple sample.
+- The secondary runner passed qualification and retained complete 240-sample
+  traces on both endpoints. Each maintained a count of two, but recorded 18
+  tuple replacements. Its runner nevertheless left the temporary inner-iperf
+  service active on the secondary server at closeout. The post-run restoration
+  check detected and stopped that service, but this cannot repair the named
+  observation; it is invalid for missing restoration evidence.
+
+The secondary raw trace remains retained, but neither it nor CT2 establishes a
+valid carrier-stability or carrier-churn result. The remaining 22 observations
+are unrun and cannot be retried. CT2 does not change RT4 or CT1 and cannot
+release a seventh correlation campaign or Stage 3. All four endpoints later
+passed the baseline post-stop check and the gateway plus endpoint fleet were
+deallocated.
+
+The compact manifest-bound disposition is in
+[`results/2026-07-24-carrier-stability-ct2/`](results/2026-07-24-carrier-stability-ct2/).

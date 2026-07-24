@@ -129,6 +129,13 @@ CARRIER_STABILITY_DIAGNOSTIC_RESULT = (
     / "results"
     / "2026-07-23-carrier-stability-ct1"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "results"
+    / "2026-07-24-carrier-stability-ct2"
+)
 
 
 def workload_document(
@@ -2903,6 +2910,133 @@ class MeltdownAnalysisTest(unittest.TestCase):
         for name, expected_hash in manifest.items():
             payload = (
                 CARRIER_STABILITY_DIAGNOSTIC_RESULT / name
+            ).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_hash)
+
+    def test_ct2_carrier_stability_terminal_disposition_is_complete(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            matrix_rows = list(csv.DictReader(stream))
+        with (
+            CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT / "logical-observations.csv"
+        ).open(newline="", encoding="utf-8-sig") as stream:
+            logical_rows = list(csv.DictReader(stream))
+        with (
+            CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT / "attempts.csv"
+        ).open(newline="", encoding="utf-8-sig") as stream:
+            attempt_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(logical_rows), len(matrix_rows))
+        self.assertEqual(
+            {
+                (
+                    row["pair"],
+                    row["arm"],
+                    row["activation"],
+                    row["keepalive_s"],
+                    row["repetition"],
+                )
+                for row in logical_rows
+            },
+            {
+                (
+                    row["pair"],
+                    row["arm"],
+                    row["activation"],
+                    row["keepalive_s"],
+                    row["repetition"],
+                )
+                for row in matrix_rows
+            },
+        )
+        self.assertEqual(
+            [row["status"] for row in logical_rows].count("invalid"),
+            2,
+        )
+        self.assertEqual(
+            [row["status"] for row in logical_rows].count("unrun"),
+            22,
+        )
+        self.assertEqual(
+            [row["reason"] for row in attempt_rows],
+            [
+                "package_process_active_before_host_qualification",
+                "residual_inner_iperf_service_after_runner_closeout",
+            ],
+        )
+        composition = json.loads(
+            (
+                CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT
+                / "composition-status.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(composition["outcome"], "terminal_incomplete")
+        self.assertEqual(composition["attempted_observations"], 2)
+        self.assertEqual(composition["valid_observations"], 0)
+        self.assertEqual(composition["invalid_observations"], 2)
+        self.assertEqual(composition["unrun_observations"], 22)
+        self.assertEqual(
+            composition["secondary_raw_tuple_trace"],
+            {
+                "server_samples": 240,
+                "server_tuple_changes": 18,
+                "server_wrong_count_samples": 0,
+                "client_samples": 240,
+                "client_tuple_changes": 18,
+                "client_wrong_count_samples": 0,
+                "valid_ct2_observation": False,
+            },
+        )
+        self.assertTrue(composition["fleet_deallocated"])
+
+        primary_status = json.loads(
+            (
+                CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT
+                / "primary-observation-status.json"
+            ).read_text(encoding="utf-8")
+        )
+        secondary_status = json.loads(
+            (
+                CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT
+                / "secondary-observation-status.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(primary_status["outcome"], "invalid")
+        self.assertIn("package process is active", primary_status["error"])
+        self.assertEqual(
+            secondary_status["outcome"],
+            "tuple_or_count_change_observed",
+        )
+        self.assertEqual(secondary_status["server_exit_code"], 1)
+        self.assertEqual(secondary_status["client_exit_code"], 1)
+
+        manifest = {
+            name: sha256
+            for sha256, name in (
+                line.split("  ", maxsplit=1)
+                for line in (
+                    CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT
+                    / "sha256-manifest.txt"
+                ).read_text(encoding="utf-8").splitlines()
+            )
+        }
+        self.assertEqual(
+            set(manifest),
+            {
+                "attempts.csv",
+                "composition-status.json",
+                "launch-eligibility.json",
+                "logical-observations.csv",
+                "primary-observation-status.json",
+                "raw-carrier-summary.csv",
+                "secondary-observation-status.json",
+                "secondary-source-manifest.txt",
+            },
+        )
+        for name, expected_hash in manifest.items():
+            payload = (
+                CARRIER_STABILITY_DIAGNOSTIC_CT2_RESULT / name
             ).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_hash)
 

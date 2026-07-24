@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added CT2's terminal carrier-diagnostic disposition: two invalid named
+  observations, 22 unrun rows, retained invalid raw tuple-change evidence, and
+  a compact manifest-bound ledger with no carrier or transport conclusion.
 - Added independent CT2 carrier-stability predeclaration with a four-endpoint
   pinned-SSH launch gate that prevents an unallocated or disconnected fleet
   from consuming a named observation.

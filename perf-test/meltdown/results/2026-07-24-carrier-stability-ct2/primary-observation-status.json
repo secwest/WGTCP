@@ -1,0 +1,15 @@
+{
+  "stage": "carrier-stability-diagnostic-ct2",
+  "pair": "primary",
+  "arm": "sync-k5",
+  "repetition": 1,
+  "activation": "synchronous",
+  "keepalive_s": 5,
+  "expected_carriers": 2,
+  "observation_s": 120,
+  "interval_s": "0.5",
+  "started_utc": "2026-07-24T03:49:32.6699847Z",
+  "outcome": "invalid",
+  "error": "ssh failed on port 2222: package process is active",
+  "completed_utc": "2026-07-24T03:49:33.9855046Z"
+}

@@ -1,0 +1,33 @@
+{
+  "stage": "carrier-stability-diagnostic-ct2",
+  "matrix_sha256": "8df67b25905b9b079fe89f7438cd94c89b40cfc2fcd14a89f593ff677ad4b983",
+  "outcome": "terminal_incomplete",
+  "stop_reason": [
+    "primary_package_process_active_before_host_qualification",
+    "secondary_residual_inner_iperf_service_after_runner_closeout"
+  ],
+  "attempted_observations": 2,
+  "valid_observations": 0,
+  "invalid_observations": 2,
+  "unrun_observations": 22,
+  "launch_eligibility_source_sha256": "c872c21b385f5cadf290a1fc8971e9617944a20858b35334ab47174f54587a37",
+  "secondary_source_manifest_sha256": "2512f62b675885a9088976b46c2dbc494692eaa5e1cc912855d37f44ce4af5a9",
+  "secondary_raw_tuple_trace": {
+    "server_samples": 240,
+    "server_tuple_changes": 18,
+    "server_wrong_count_samples": 0,
+    "client_samples": 240,
+    "client_tuple_changes": 18,
+    "client_wrong_count_samples": 0,
+    "valid_ct2_observation": false
+  },
+  "post_stop_host_check": {
+    "endpoints": 4,
+    "baseline_qdisc": true,
+    "temporary_services_inactive": true,
+    "tcpdump_processes": 0,
+    "tcp_carriers": 0,
+    "maintenance_enabled": true
+  },
+  "fleet_deallocated": true
+}
