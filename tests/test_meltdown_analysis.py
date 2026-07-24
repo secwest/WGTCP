@@ -122,11 +122,26 @@ CARRIER_STABILITY_DIAGNOSTIC_CT3_MATRIX = (
     / "meltdown"
     / "matrix-carrier-stability-diagnostic-ct3.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT4_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct4.csv"
+)
 CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT3.md"
 ).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC_CT2_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT2.md"
+).read_text(encoding="utf-8")
+CARRIER_STABILITY_DIAGNOSTIC_CT4_PROTOCOL = (
+    ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT4.md"
+).read_text(encoding="utf-8")
+NORMALIZE_IDLE_HOST = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "normalize-idle-host.sh"
+).read_text(encoding="utf-8")
+QUALIFY_IDLE_HOST = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "qualify-idle-host.sh"
 ).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC = (
     ROOT / "perf-test" / "meltdown" / "harness" / "diagnose-carrier-stability.sh"
@@ -2852,6 +2867,62 @@ class MeltdownAnalysisTest(unittest.TestCase):
                 {key: value for key, value in ct2_row.items() if key != "stage"},
                 {key: value for key, value in ct3_row.items() if key != "stage"},
             )
+
+    def test_ct4_carrier_stability_diagnostic_requires_idle_quiescence(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_CT3_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct3_rows = list(csv.DictReader(stream))
+        with CARRIER_STABILITY_DIAGNOSTIC_CT4_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct4_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(ct4_rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in ct4_rows},
+            {"carrier-stability-diagnostic-ct4"},
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                CARRIER_STABILITY_DIAGNOSTIC_CT4_MATRIX.read_bytes()
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "0ad1136a994ef171f6449bb356ef7b942a8f66012659821d62e0440708b7a4b9",
+        )
+        for ct3_row, ct4_row in zip(ct3_rows, ct4_rows, strict=True):
+            self.assertEqual(
+                {key: value for key, value in ct3_row.items() if key != "stage"},
+                {key: value for key, value in ct4_row.items() if key != "stage"},
+            )
+
+        self.assertIn("ten consecutive 500 ms samples", CARRIER_STABILITY_DIAGNOSTIC_CT4_PROTOCOL)
+        self.assertIn("No active `PrepareOnly`", CARRIER_STABILITY_DIAGNOSTIC_CT4_PROTOCOL)
+        self.assertIn(
+            '"$install_dir/harness/setup-tunnels.sh" down', NORMALIZE_IDLE_HOST
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                NORMALIZE_IDLE_HOST.encode("utf-8")
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "6fab5b5e6997be5eac1799038bb78d02ecb63d60b0320a513a2b5f9af9f389f5",
+        )
+        self.assertIn("samples=10", QUALIFY_IDLE_HOST)
+        self.assertIn("interval_s=0.5", QUALIFY_IDLE_HOST)
+        self.assertIn("( sport = :51821 or dport = :51821 )", QUALIFY_IDLE_HOST)
+        self.assertIn('awk \'$4 ~ /:51821$/', QUALIFY_IDLE_HOST)
+        self.assertIn('[[ ! -e "/sys/class/net/$interface" ]]', QUALIFY_IDLE_HOST)
+        self.assertEqual(
+            hashlib.sha256(
+                QUALIFY_IDLE_HOST.encode("utf-8")
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "77a4ed861bebed7b5a7b802d4b185ba7a47be8afadaf94d947fb5a13a63e7af1",
+        )
 
     def test_carrier_stability_terminal_disposition_is_complete(self) -> None:
         with CARRIER_STABILITY_DIAGNOSTIC_MATRIX.open(

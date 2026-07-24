@@ -502,6 +502,18 @@ correlation campaign or release Stage 3. The fleet is deallocated:
 - [`matrix-carrier-stability-diagnostic-ct3.csv`](matrix-carrier-stability-diagnostic-ct3.csv)
 - [`results/2026-07-24-carrier-stability-ct3/`](results/2026-07-24-carrier-stability-ct3/)
 
+CT4 is independently predeclared to test the same matrix without inheriting an
+active-control carrier into passive setup. It performs any active TCP/UDP
+control only as a separate, non-observation preparation; it then tears down
+both endpoints concurrently and requires ten 500 ms samples with no
+established or listening port-51821 socket of any peer before a named passive
+observation may exist. No active `PrepareOnly` may run after the final
+quiescence sample. CT4 is not a retry or repair of CT1-CT3 and remains unable
+to release Stage 3 until it qualifies an arm on both pairs:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT4.md`](CARRIER_STABILITY_DIAGNOSTIC_CT4.md)
+- [`matrix-carrier-stability-diagnostic-ct4.csv`](matrix-carrier-stability-diagnostic-ct4.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does
