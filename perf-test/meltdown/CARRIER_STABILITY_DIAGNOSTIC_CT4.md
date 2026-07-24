@@ -32,7 +32,7 @@ It produces no TCP-meltdown result and cannot directly release Stage 3.
 - Idle qualification helper:
   [`harness/qualify-idle-host.sh`](harness/qualify-idle-host.sh)
 - Idle qualification helper SHA-256:
-  `77a4ed861bebed7b5a7b802d4b185ba7a47be8afadaf94d947fb5a13a63e7af1`
+  `43fc50cae9e02c59860cb29439e2162130e050fa90cb085ac1f987c5f1627847`
 - Runtime source: `2b9513f`
 - Kernel: `6.8.0-1062-azure`
 - Module srcversion: `01DA86291E0FBD2CD3C940C`

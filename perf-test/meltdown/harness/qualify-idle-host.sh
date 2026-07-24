@@ -32,8 +32,10 @@ fail() {
 ip -brief address | grep -Fq "$expected_physical_ip/" || fail "physical IP missing"
 [[ -f "$module" && -x "$tool" && -x "$installed_tool" ]] ||
     fail "runtime artifacts missing"
-[[ "$(modinfo -F srcversion wireguard)" == "01DA86291E0FBD2CD3C940C" ]] ||
+[[ "$(cat /sys/module/wireguard/srcversion)" == "01DA86291E0FBD2CD3C940C" ]] ||
     fail "module srcversion mismatch"
+[[ "$(modinfo -F srcversion "$module")" == "01DA86291E0FBD2CD3C940C" ]] ||
+    fail "built module srcversion mismatch"
 [[ "$(sha256sum "$module" | awk '{print $1}')" == "771057ae270ae379e90bc9c31f8f8777e54556d8acbb71b8717e6a950dca275e" ]] ||
     fail "module hash mismatch"
 [[ "$(sha256sum "$tool" | awk '{print $1}')" == "80455e74d7dc4b5fc22cdfcfadaf5addcad603cf54a70bb298a558c6fe65c4a3" ]] ||
