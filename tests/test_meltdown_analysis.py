@@ -116,6 +116,15 @@ CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX = (
     / "meltdown"
     / "matrix-carrier-stability-diagnostic-ct2.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT3_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct3.csv"
+)
+CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL = (
+    ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT3.md"
+).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC_CT2_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT2.md"
 ).read_text(encoding="utf-8")
@@ -2798,6 +2807,43 @@ class MeltdownAnalysisTest(unittest.TestCase):
             self.assertEqual(
                 {key: value for key, value in ct1_row.items() if key != "stage"},
                 {key: value for key, value in ct2_row.items() if key != "stage"},
+            )
+
+    def test_ct3_carrier_stability_diagnostic_is_independent_and_exact(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_CT2_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct2_rows = list(csv.DictReader(stream))
+        with CARRIER_STABILITY_DIAGNOSTIC_CT3_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct3_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(ct3_rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in ct3_rows},
+            {"carrier-stability-diagnostic-ct3"},
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                CARRIER_STABILITY_DIAGNOSTIC_CT3_MATRIX.read_bytes()
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "3ba54e36831a86fbf32a0b805ff8718c41474e83673724c1a53fcf704b65464a",
+        )
+        self.assertIn(
+            "absence of active package processes or package\nlocks",
+            CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL,
+        )
+        self.assertIn(
+            "temporary services, and enabled maintenance",
+            CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL,
+        )
+        for ct2_row, ct3_row in zip(ct2_rows, ct3_rows, strict=True):
+            self.assertEqual(
+                {key: value for key, value in ct2_row.items() if key != "stage"},
+                {key: value for key, value in ct3_row.items() if key != "stage"},
             )
 
     def test_carrier_stability_terminal_disposition_is_complete(self) -> None:

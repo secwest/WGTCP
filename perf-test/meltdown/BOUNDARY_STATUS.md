@@ -485,6 +485,15 @@ four endpoints passed post-stop baseline checks and the fleet was deallocated:
 - [`matrix-carrier-stability-diagnostic-ct2.csv`](matrix-carrier-stability-diagnostic-ct2.csv)
 - [`results/2026-07-24-carrier-stability-ct2/`](results/2026-07-24-carrier-stability-ct2/)
 
+CT3 is independently predeclared after CT2. It retains the same 24 arms and
+runtime but must pass a passive all-four-endpoint package/lock gate before
+creating a name. Its runner also verifies that all temporary services, captures,
+carriers, shaping, and maintenance masks are restored at closeout. CT3 neither
+reopens nor repairs RT4, CT1, or CT2:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT3.md`](CARRIER_STABILITY_DIAGNOSTIC_CT3.md)
+- [`matrix-carrier-stability-diagnostic-ct3.csv`](matrix-carrier-stability-diagnostic-ct3.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

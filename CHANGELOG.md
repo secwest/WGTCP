@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added independent CT3 carrier-stability predeclaration with passive
+  four-endpoint package/lock eligibility and enforced temporary-service,
+  capture, carrier, qdisc, and maintenance closeout verification.
 - Added CT2's terminal carrier-diagnostic disposition: two invalid named
   observations, 22 unrun rows, retained invalid raw tuple-change evidence, and
   a compact manifest-bound ledger with no carrier or transport conclusion.
