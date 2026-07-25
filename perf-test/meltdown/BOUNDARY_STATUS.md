@@ -523,6 +523,16 @@ and deallocated; CT5 cannot release Stage 3:
 - [`CARRIER_STABILITY_DIAGNOSTIC_CT5.md`](CARRIER_STABILITY_DIAGNOSTIC_CT5.md)
 - [`matrix-carrier-stability-diagnostic-ct5.csv`](matrix-carrier-stability-diagnostic-ct5.csv)
 
+CT6 is independently predeclared to address CT5's cold-module limitation
+without changing carrier activation, the 24-row matrix, or physical topology.
+Before static idle qualification, its new hash-bound preparation helper loads
+the exact built module only after proving no WireGuard interface exists, then
+attests the loaded srcversion and rejects any newly created port-51821 socket.
+CT6 remains passive-only and holds the current-region latency constant:
+
+- [`CARRIER_STABILITY_DIAGNOSTIC_CT6.md`](CARRIER_STABILITY_DIAGNOSTIC_CT6.md)
+- [`matrix-carrier-stability-diagnostic-ct6.csv`](matrix-carrier-stability-diagnostic-ct6.csv)
+
 ## Interpretation limits
 
 - The Stage 1 sample is deliberately small and qualifies the harness; it does

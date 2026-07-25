@@ -134,6 +134,12 @@ CARRIER_STABILITY_DIAGNOSTIC_CT5_MATRIX = (
     / "meltdown"
     / "matrix-carrier-stability-diagnostic-ct5.csv"
 )
+CARRIER_STABILITY_DIAGNOSTIC_CT6_MATRIX = (
+    ROOT
+    / "perf-test"
+    / "meltdown"
+    / "matrix-carrier-stability-diagnostic-ct6.csv"
+)
 CARRIER_STABILITY_DIAGNOSTIC_CT3_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT3.md"
 ).read_text(encoding="utf-8")
@@ -146,11 +152,17 @@ CARRIER_STABILITY_DIAGNOSTIC_CT4_PROTOCOL = (
 CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL = (
     ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT5.md"
 ).read_text(encoding="utf-8")
+CARRIER_STABILITY_DIAGNOSTIC_CT6_PROTOCOL = (
+    ROOT / "perf-test" / "meltdown" / "CARRIER_STABILITY_DIAGNOSTIC_CT6.md"
+).read_text(encoding="utf-8")
 NORMALIZE_IDLE_HOST = (
     ROOT / "perf-test" / "meltdown" / "harness" / "normalize-idle-host.sh"
 ).read_text(encoding="utf-8")
 QUALIFY_IDLE_HOST = (
     ROOT / "perf-test" / "meltdown" / "harness" / "qualify-idle-host.sh"
+).read_text(encoding="utf-8")
+PREPARE_IDLE_RUNTIME = (
+    ROOT / "perf-test" / "meltdown" / "harness" / "prepare-idle-runtime.sh"
 ).read_text(encoding="utf-8")
 CARRIER_STABILITY_DIAGNOSTIC = (
     ROOT / "perf-test" / "meltdown" / "harness" / "diagnose-carrier-stability.sh"
@@ -2970,6 +2982,58 @@ class MeltdownAnalysisTest(unittest.TestCase):
         self.assertIn(
             "second gate is the final action before\nnamed passive activation",
             CARRIER_STABILITY_DIAGNOSTIC_CT5_PROTOCOL,
+        )
+
+    def test_ct6_carrier_stability_diagnostic_prepares_loaded_runtime(self) -> None:
+        with CARRIER_STABILITY_DIAGNOSTIC_CT5_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct5_rows = list(csv.DictReader(stream))
+        with CARRIER_STABILITY_DIAGNOSTIC_CT6_MATRIX.open(
+            newline="", encoding="utf-8-sig"
+        ) as stream:
+            ct6_rows = list(csv.DictReader(stream))
+
+        self.assertEqual(len(ct6_rows), 24)
+        self.assertEqual(
+            {row["stage"] for row in ct6_rows},
+            {"carrier-stability-diagnostic-ct6"},
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                CARRIER_STABILITY_DIAGNOSTIC_CT6_MATRIX.read_bytes()
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "7605a178f9c709f3c4a70982180caae2f630ef97875b2be43527ae62f0b99da4",
+        )
+        for ct5_row, ct6_row in zip(ct5_rows, ct6_rows, strict=True):
+            self.assertEqual(
+                {key: value for key, value in ct5_row.items() if key != "stage"},
+                {key: value for key, value in ct6_row.items() if key != "stage"},
+            )
+
+        self.assertIn("No active `PrepareOnly`", CARRIER_STABILITY_DIAGNOSTIC_CT6_PROTOCOL)
+        self.assertIn(
+            "regional topology mutation may occur in CT6",
+            CARRIER_STABILITY_DIAGNOSTIC_CT6_PROTOCOL,
+        )
+        self.assertIn("modprobe -r wireguard", PREPARE_IDLE_RUNTIME)
+        self.assertIn('insmod "$module"', PREPARE_IDLE_RUNTIME)
+        self.assertIn(
+            '[[ "$(cat /sys/module/wireguard/srcversion)" == "$expected_srcversion" ]]',
+            PREPARE_IDLE_RUNTIME,
+        )
+        self.assertIn(
+            "( sport = :51821 or dport = :51821 )", PREPARE_IDLE_RUNTIME
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                PREPARE_IDLE_RUNTIME.encode("utf-8")
+                .replace(b"\r\n", b"\n")
+                .replace(b"\r", b"\n")
+            ).hexdigest(),
+            "1a2ec5230cc6aecd0e7c7296cf3f78b58475eb0184da90bb4ce79a2af07de80c",
         )
 
     def test_carrier_stability_terminal_disposition_is_complete(self) -> None:
