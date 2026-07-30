@@ -239,6 +239,31 @@ through the tunnel:
 .br
     AllowedIPs = 0.0.0.0/0
 
+The following example illustrates how to use TCP as a transport:
+
+    [Interface]
+.br
+    \fBAddress = 10.192.122.1/24\fP
+.br
+    \fBAddress = 10.10.0.1/16\fP
+.br
+    \fBSaveConfig = true\fP
+.br
+    PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+.br
+    ListenPort = 51820
+.br
+    Transport = tcp
+.br
+
+.br
+    [Peer]
+.br
+    PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+.br
+    AllowedIPs = 10.192.122.3/32, 10.192.124.1/24
+.br
+
 These configuration files may be placed in any directory, putting the desired interface name
 in the filename:
 
