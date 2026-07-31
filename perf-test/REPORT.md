@@ -507,9 +507,17 @@ Cells captured per pair (full matrix per pair = 2 tunnels × 4 workloads × 8 lo
 
 **Total: 1533 / 1536 (99%).**
 
-### Known gaps
+### Coverage completion
 
-`HIGH-x64`, `HIGH-arm`, and `MAX-x64` initially failed during the TCP-Wireguard pass — most cell.json files were never written because `ssh`+`scp` to the peer kept timing out with `banner exchange: Connection to UNKNOWN port -1: Connection timed out`. Three follow-up gap-fill campaigns (`rg-wgtcpbase-p2p-gap2` for losses 0–5%, `rg-wgtcpbase-p2p-gap3` for losses 10/20%, `rg-wgtcpbase-p2p-gap4` for `HIGH-arm` 10/20%) replaced the orchestrator's `scp` fetch with a single `ssh + tar + base64` stream-back per cell and added retry-with-backoff. The 0–5% pass completed all 4 affected pairs at 100% (288/288, 0 retries). The 10/20% pass closed `HIGH-x64` and `MAX-x64` at 100%. `HIGH-arm` initially missed 6 cells: at ~195 ms RTT × 10–20% loss the unbounded `short-transfer` workload could run for 12+ minutes, and the arm64 TCP-WG kernel module wedged the VM's network stack under sustained load — the VM stayed in `running` state but became unreachable until a hard reboot. Gap-fill 4 added a 360 s wallclock ceiling to `short-transfer` so the workload can never run long enough to wedge the kernel; with that cap in place all 32/32 `HIGH-arm` TCP-WG cells captured cleanly with no retries.
+Early HIGH/MAX collection exposed unbounded workload duration and fragile
+artifact transfer rather than a gap in the final matrix. The gap-fill campaigns
+bounded each short-transfer cell to 360 seconds, replaced separate `scp`
+collection with one retryable `ssh + tar + base64` stream, and added
+exponential backoff. The 0-5% pass completed all four affected pairs at 100%
+(288/288, zero retries), the 10/20% pass closed HIGH-x64 and MAX-x64, and the
+final HIGH-arm pass captured all 32/32 TCP-WG cells cleanly with no retries.
+Later transport revisions also repaired writer wakeups, bounded the internal
+send queue, and passed focused queue-pressure and terminal-I/O recovery tests.
 
 All 8 pairs are at 100% TCP-WG and 100% UDP-WG coverage. Total final coverage: **512 / 512 unique cells (100%)**.
 

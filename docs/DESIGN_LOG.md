@@ -107,23 +107,24 @@ health, or TCP carrier stability fails validation.
 Queue overflow is reported separately. A valid run with no queue drops does not
 exercise the complete loss-driven feedback loop.
 
-### DL-008: Use the implementation's supported dual-endpoint TCP topology
+### DL-008: Use the recorded campaign's dual-endpoint TCP topology
 
-**Status:** Accepted with limitation
+**Status:** Historical campaign constraint; superseded operationally
 
-The current implementation does not promote an accepted provisional socket into
-the configured peer, so responder-only static operation is unsupported. Both
-peers receive configured endpoints, normally creating two outer TCP streams.
+The campaign source predated authenticated accepted-carrier promotion. Both
+benchmark peers therefore received configured endpoints and normally created
+two outer TCP streams.
 
 The harness records both tuples and invalidates a TCP cell if either changes or
 disappears. Results from this topology must not be generalized to a
 single-carrier TCP tunnel.
 
-This is a benchmark-topology validity rule for the recorded meltdown campaign,
-not a current deployment requirement. The later authenticated accepted-carrier
-implementation supports a single private initiator behind SNAT with no reverse
-endpoint, DNAT, or forwarded port. Performance cells retain the dual-endpoint
-shape so their historical carrier and impairment evidence remains comparable.
+This remains a benchmark-topology validity rule for the recorded meltdown
+campaign, not a current deployment requirement. The authenticated
+accepted-carrier implementation supports a single private initiator behind
+SNAT with no reverse endpoint, DNAT, or forwarded port. Performance cells
+retain the dual-endpoint shape so their historical carrier and impairment
+evidence remains comparable.
 
 ### DL-009: Authenticate accepted carriers by exact stream provenance
 
@@ -151,11 +152,13 @@ The investigation initially retained an authenticated temporary receive carrier
 with a 180-second activity-based idle deadline and no pre-authentication
 absolute cap. The later parity lifecycle replaced that policy: valid Noise
 traffic releases the exact connection's admission accounting, and the tracked
-carrier remains until socket close or device teardown. Authentication still
-does not promote or transfer the socket.
+carrier remains until socket close or device teardown. A subsequent roaming
+lifecycle completed the ownership transfer: the exact authenticated stream can
+now be promoted into the configured peer, with generation checks and retirement
+of the displaced carrier.
 
-This repairs five-second carrier rotation while preserving bounded
-pre-authentication exposure and avoiding an unsynchronized ownership transfer.
+Together, the two stages repair five-second carrier rotation, preserve bounded
+pre-authentication exposure, and provide synchronized authenticated promotion.
 
 ### DL-011: Drain complete buffered records before another socket read
 
@@ -207,8 +210,8 @@ Fresh tunnel setups can run one packet behind. BPF tracing shows:
 - the first correlated frame does not call `napi_gro_receive()`;
 - the next frame reaches GRO and immediately triggers a reply.
 
-The current evidence does not support a TCP callback or read-worker lost-wakeup
-root cause. The remaining investigation is inside
+At that investigation stage, the evidence did not support a TCP callback or
+read-worker lost-wakeup root cause. The next trace focused on
 `wg_packet_consume_data_done()` between endpoint reconstruction and GRO,
 including protocol/size validation, trimming, keepalive handling, and allowed-IP
 source lookup.

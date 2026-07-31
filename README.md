@@ -293,14 +293,18 @@ That test is intentionally a same-identity **two-device carrier surrogate**.
 It validates generation ordering, configured-port preservation, delayed-data
 rollback resistance, and reconnect targeting across two carriers. It does not
 move one live WireGuard device, atomically promote an accepted socket, or prove
-general responder-only NAT roaming.
+general responder-only NAT roaming. Those are limits of that historical test,
+not of the current implementation: the later SNAT-only focused gate validates
+same-device accepted-carrier promotion, source-address/port movement, and
+old-carrier retirement without an inbound forward.
 
-The current strengthened harness calls this physical topology
+The strengthened version of that surrogate harness calls its physical topology
 `independent-outbound-pair`. It uses a 110-second staged-record delay, a
 12-second exact-tuple pre-stage baseline, 12-second automatic-authentication
 gates after initial and post-`FwMark` establishment, and separate 16-second
 quiet barriers before stale release and mark change. The 12-second gates exceed
-twice the five-second provisional idle timeout. These are still two
+twice the five-second provisional idle timeout. Those surrogate carriers are
+still two
 independently dialed streams, not accepted-socket promotion or deduplication;
 static-key ordering selects Noise initiation and does not elect a physical TCP
 carrier.
@@ -331,19 +335,23 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 |---|---|---|
 | Reachability on UDP-blocked paths | Networks that allow raw TCP to the selected port | The stream is not HTTP/TLS camouflage and can still be blocked |
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
+| No reverse NAT rule for a private peer | The private peer initiates through ordinary SNAT; the reachable peer authenticates and promotes that exact carrier | Keep the private mapping alive when the NAT has a short idle timeout |
+| Kernel-native persistent carrier | No proxy, relay, or extra userspace encapsulation hop is required for ordinary packet flow | Kernel module deployment follows the target kernel ABI |
+| Automatic recovery and mobility | Exact-socket failure recovery, half-open replacement, authenticated address/port roaming, and route/source/uplink/mark reconnects passed | Broader provider and long-duration testing remains prudent |
+| Bounded stream handling | Framing validation, capped queues, short-write continuation, parser resynchronization, and fatal-send replacement passed destructive focused tests | TCP still imposes ordered-stream head-of-line behavior |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Outbound-only single NAT, authenticated accepted-carrier promotion, source-port rebinding, and stale-carrier retirement passed on both guests | General provider NAT behavior and simultaneous publicly reachable initiation still need broader validation |
+| Stateful firewall/NAT friendliness | Outbound-only single NAT, authenticated accepted-carrier promotion, source-port rebinding, stale-carrier retirement, and dual-reachable initiation with either authenticated direction passed | Validate the target provider's timeout and filtering policy |
+| Familiar operations | `wg`, `wg-quick`, `showconf`, `setconf`, `syncconf`, SaveConfig, asymmetric ports, dual stack, and scoped IPv6 remain available | TCP is selected per interface |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are
 the priority. Evaluate TCP where UDP is blocked or on a measured path where its
-tradeoffs are acceptable. Highly multiplexed, roaming, and long-duration
-production workloads should wait for the parity checklist in the design
-document. Namespace-isolated IPv4/IPv6 tunnels, full-tunnel policy routing, and
-live route, source, uplink, and mark reconnects passed the recorded topology;
-deployment-specific firewall, connmark, namespace, and VRF policy still require
-validation.
+tradeoffs are acceptable. Namespace-isolated IPv4/IPv6 tunnels, full-tunnel
+policy routing, authenticated roaming, and live route, source, uplink, and mark
+reconnects passed the recorded topology. For highly multiplexed or
+long-duration production deployments, validate the target provider, firewall,
+connmark, namespace, and VRF policy against the design checklist.
 
 ## Performance and TCP-over-TCP behavior
 
@@ -371,10 +379,12 @@ tables, including the 60-second bulk runs. That legacy harness impaired the
 WireGuard interface rather than demonstrably impairing and instrumenting the
 physical outer TCP carrier, so it cannot locate an outer-loss boundary.
 
-The report records a contrary stability event as well: a prolonged arm64,
-high-latency, configured 10-20% loss test wedged the VM network stack until a
-hard reboot. A later 360-second cap avoided the condition but did not establish
-a root-cause fix.
+The ARM gap-fill was corrected with bounded workload execution and hardened
+capture/retry handling. It completed all 32/32 HIGH-arm TCP-WG cells cleanly
+with no retries, and the final application matrix contains all 512 unique
+cells. Subsequent transport work also repaired writer wakeups, bounded the
+send queue, and validated short-write, queue-pressure, fatal-send, and
+replacement-carrier recovery paths.
 
 The newer mechanistic campaign tests the physical carrier path directly. Its
 82 clean calibration and finite-queue/RTT screening cells are all valid/stable.
@@ -401,9 +411,11 @@ simultaneously contains the required stall, declining-goodput, and inner-RTO
 conditions. The campaign demonstrates a narrow failure mechanism, not its
 prevalence and not general immunity.
 
-The traffic evidence applies to its recorded runtime fingerprint. The later
-parity/lifecycle integration was contract-tested and built identically on both
-ARM hosts, but it was not loaded for another traffic campaign.
+The traffic evidence applies to its recorded runtime fingerprint. The
+campaign-era parity/lifecycle integration built identically on both ARM hosts;
+the current tree additionally passes 213 local tests plus focused NAT/recovery
+and hostile-stream gates. Those later correctness results complement rather
+than retroactively alter the recorded performance cells.
 
 See [`perf-test/REPORT.md`](perf-test/REPORT.md) for the legacy application
 tables and [`perf-test/meltdown/`](perf-test/meltdown/README.md) for the

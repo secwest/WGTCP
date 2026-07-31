@@ -168,13 +168,12 @@ queue bytes = BDP bytes * queue_bdp
 Both endpoints receive half the emulated RTT. The physical same-VNet RTT is
 recorded and remains additive. Queue depths are 0.5x, 1x, and 4x BDP.
 
-For TCP, both peers have explicit static endpoints. This is the only static
-cross-host topology supported by the current implementation because
-authenticated promotion of an accepted provisional socket is deliberately
-disabled. It normally creates two established outer streams, one initiated by
-each peer. The harness records both streams and requires the count to remain
-stable during every scored cell; responder-only topology failures are
-implementation limitations, not meltdown evidence.
+For the recorded campaign, both peers have explicit static endpoints because
+its source snapshot predates authenticated accepted-carrier promotion. It
+normally creates two established outer streams, one initiated by each peer.
+The harness records both streams and requires the count to remain stable during
+every scored cell. This is a fixed campaign topology, not a limitation of the
+current single-private NAT implementation and not meltdown evidence.
 
 ## 5. Measurements
 

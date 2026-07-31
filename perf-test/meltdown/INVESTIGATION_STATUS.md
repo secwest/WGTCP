@@ -192,8 +192,8 @@ outer TCP carrier, and inner delivery, congestion control, retransmission
 timers, and recovery are measured against an exact UDP WireGuard control.
 Meltdown thresholds and validity rules were declared before impairment results.
 
-Testing exposed several WireguardTCP implementation defects before the
-mechanism could be evaluated:
+Testing exposed and resolved several WireguardTCP implementation defects before
+the mechanism could be evaluated:
 
 1. accepted TCP streams were reclaimed after five seconds because they remained
    provisional;
@@ -205,7 +205,7 @@ mechanism could be evaluated:
    `EAGAIN` and arming `SOCK_NOSPACE`;
 5. BPF read/modify/write summary counters lost concurrent events across CPUs.
 
-The local repairs have focused contract coverage and matching ARM builds. Three
+The repairs have focused contract coverage and matching ARM builds. Three
 fresh setups completed 600 bidirectional probes with zero loss and
 sub-millisecond RTT. A fresh writer-fix calibration delivered approximately
 47 Mb/s over TCP and 48.59 Mb/s over UDP, including 16-flow TCP. The former
@@ -218,11 +218,12 @@ qualifying inner-RTO rate; three pair stalls with a qualifying inner-RTO rate
 but no significant decline; four meet only the stall condition. No valid
 execution combines all three formal meltdown conditions.
 
-The latest upstream parity/lifecycle work was merged after traffic collection.
-That integrated tree passes 157 contracts and builds identically on both ARM
-hosts, but it was compiled only and was not loaded for another traffic
-campaign. Empirical conclusions remain bound to the recorded campaign
-fingerprint and runtime identity.
+Later parity/lifecycle work was merged after traffic collection. The
+campaign-era integrated tree passed 157 contracts and built identically on both
+ARM hosts. The current tree advances that work to 213 local source and contract
+tests plus focused NAT/recovery and hostile-stream gates. Empirical traffic
+conclusions remain bound to the recorded campaign fingerprint and runtime
+identity.
 
 ## 2. Objective and falsifiable definition
 
@@ -309,16 +310,18 @@ implementation defect and is not meltdown evidence.
 
 ## 5. Test topology
 
-The current upstream transport does not promote an accepted socket into the
-configured peer. A responder-only TCP topology therefore does not work
-reliably. Both peers are configured with endpoints, normally creating two
-stable outer TCP streams, one initiated by each endpoint.
+The recorded campaign source predated accepted-carrier promotion, so both peers
+were configured with endpoints and normally created two stable outer TCP
+streams, one initiated by each endpoint. The current transport supports a
+responder that authenticates and promotes the private peer's outbound carrier
+without a reverse endpoint or inbound forward.
 
 The harness samples both carrier tuples every 200 ms across each TCP workload
 and writes an independent sampler-completion record. Missing interval coverage
 or a tuple changing or disappearing invalidates the cell. The dual-carrier
-topology is an implementation constraint and is explicitly documented so that
-results are not generalized to a single outer TCP stream without further work.
+topology is a campaign constraint and is explicitly documented so that its
+results are not silently reinterpreted as measurements of the later
+single-carrier topology.
 
 Separate tunnel interfaces are used:
 
@@ -432,7 +435,7 @@ Important analysis corrections made during live testing:
 
 ## 9. Kernel defects found and local repairs
 
-### 9.1 Five-second authenticated-carrier rotation
+### 9.1 Five-second authenticated-carrier rotation (historical repair stage)
 
 Accepted streams remain attached to provisional temporary peers. Upstream
 cleanup treated them as unauthenticated forever and reclaimed them after the
@@ -440,7 +443,7 @@ five-second pre-authentication idle limit, even when the stream had carried a
 valid Noise handshake. Source ports rotated on that cadence, destroying
 goodput without any network congestion.
 
-The local repair:
+The first local repair:
 
 - assigns every accepted TCP stream a monotonic nonzero stream ID;
 - carries the ID through asynchronous receive processing;
@@ -450,12 +453,15 @@ The local repair:
   pre-authentication limits unchanged;
 - gives authenticated temporary receive carriers a 180-second activity-based
   idle deadline;
-- does not promote the temporary stream into the configured peer;
+- retained the temporary stream without promotion at that investigation stage;
 - protects listener initialization from cleanup during callback installation
   and first read scheduling.
 
-Focused lifecycle and roaming contract tests cover provenance, authentication
-ordering, deadlines, and listener ownership.
+The later roaming lifecycle supersedes that interim ownership policy by
+promoting the exact authenticated stream into the configured peer, transferring
+the process context, applying generation checks, and retiring the displaced
+carrier. Focused lifecycle and roaming contract tests cover provenance,
+authentication ordering, deadlines, promotion, and listener ownership.
 
 ### 9.2 Complete records stranded behind `EAGAIN`
 
@@ -852,12 +858,15 @@ meltdown conditions.
 - The campaign does not establish formal meltdown until one prospective valid
   execution simultaneously meets the stall, declining-goodput, and inner-RTO
   thresholds with outer-recovery attribution.
-- The current results should not be generalized from two outer streams to a
-  single-carrier or responder-only design.
+- The recorded traffic results measure the campaign's two-stream topology. The
+  current implementation supports single-carrier responder-only operation, but
+  that later topology requires its own performance fingerprint rather than a
+  relabeling of historical cells.
 - The results do not establish meltdown immunity, bounded endurance, or
   recovery after long impairment epochs.
-- Traffic results do not yet qualify the post-campaign upstream
-  parity/lifecycle integration; that candidate was compiled but not loaded.
+- Traffic results retain their campaign runtime identity; the post-campaign
+  parity/lifecycle tree has separate contract, build, NAT/recovery, and
+  hostile-stream validation.
 
 The current assessment is: **severe TCP-over-TCP degradation and
 near-meltdown behavior are established, but formal meltdown is not established

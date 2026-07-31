@@ -713,6 +713,24 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 - Updated the website test summary and source-archive checksum prefixes to
   match the current published artifacts.
 
+### Resolved-problem and advantages audit
+
+- Removed the obsolete unresolved ARM failure narrative. The performance
+  record now reports the corrected bounded workload and artifact collection,
+  32/32 clean HIGH-arm TCP-WG cells, and the complete 512-cell matrix.
+- Reclassified dual-endpoint and no-promotion language as historical campaign
+  constraints. Current documentation consistently describes authenticated
+  accepted-carrier promotion, responder-only SNAT operation, rebinding,
+  roaming, and old-carrier retirement.
+- Replaced the pre-promotion “current implementation” description in the
+  transport executive summary and lifecycle with the implemented
+  process-context ownership transfer.
+- Expanded the benefits analysis with no-forward NAT traversal, kernel-native
+  operation without a proxy or relay, authenticated mobility, exact stream
+  recovery, bounded queues, configuration persistence, and dual-stack support.
+- Retained genuine scope boundaries as validation guidance rather than
+  presenting already-corrected defects as current shortcomings.
+
 ## Maintainer update policy
 
 Add future entries chronologically. Include the date, commit hash, implemented

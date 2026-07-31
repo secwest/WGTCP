@@ -321,6 +321,24 @@ the tested Linux/nftables namespace topology: arbitrary provider behavior,
 repeated hostile races, IPv6 translation, and long-duration operation remain
 validation work.
 
+### 2026-07-31 - Resolved failures are not current limitations
+
+Documentation now separates a historical observation from the current product
+state. In particular, the early ARM performance collection problem is recorded
+by its corrected outcome: bounded short-transfer execution, hardened artifact
+collection, 32/32 clean HIGH-arm TCP-WG cells, and a complete 512-cell matrix.
+The later writer-wakeup repair, bounded queue, short-write continuation,
+parser-resynchronization, fatal-send, and replacement-carrier gates are stated
+as implemented advantages rather than an unresolved current failure.
+
+The same rule applies to transport topology. Campaigns that ran before
+accepted-carrier promotion keep their two-endpoint fingerprints, but they no
+longer define current capability. Current-facing sections lead with the
+validated single-private SNAT path, process-context promotion, roaming,
+half-open recovery, configuration persistence, dual-stack operation, and
+kernel-native carrier path. Genuine untested dimensions remain scoped as
+deployment validation work, not as regressions.
+
 ## Appendix - Detailed architecture by subsystem
 
 ## Device-wide transport selection

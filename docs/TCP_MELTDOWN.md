@@ -136,13 +136,16 @@ interval without changing the historical evidence.
 
 ## Limits
 
-- The traffic evidence belongs to its recorded campaign runtime. The later
-  integrated `main` source passed contracts and matching builds but was not
-  loaded for another traffic campaign.
+- The traffic evidence belongs to its recorded campaign runtime. The current
+  source separately passes 213 local tests plus focused NAT/recovery and
+  hostile-stream gates; those correctness results do not retroactively alter
+  the historical performance cells.
 - AQM/ECN, jitter, reordering, blackout, competing traffic, bidirectional
   traffic, alternate inner congestion controls, short-flow completion, and
   multi-hour endurance remain untested.
-- Two configured outer carriers were present. Results do not automatically
-  transfer to a future single-carrier or responder-only design.
+- Two configured outer carriers were present in this campaign. The current
+  implementation supports single-private, responder-only operation, but this
+  historical traffic result is not silently reclassified as a measurement of
+  that later topology.
 - This campaign establishes neither a production SLA nor the frequency of the
   tested impairment combination on deployed networks.

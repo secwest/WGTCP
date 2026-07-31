@@ -333,9 +333,11 @@ Focused run `wg20260714T084959Z` passed
 0 SKIP** in 238.500 seconds. Earlier run `wg20260714T070320Z` independently
 passed policy churn and half-open recovery on both guests. Its dual-router
 entry failed while the topology and queue-accounting mechanics were still
-being corrected, so that entry is excluded from product evidence. A new
-combined focused run and a full regression campaign for the final snapshot are
-still pending.
+being corrected, so that entry is excluded from product evidence. At that
+historical point a combined focused run was pending. Current run
+`wg20260731T074807Z` now supplies the green four-case NAT/recovery gate; a
+single current-source run of the entire broad registry remains a separate
+coverage goal.
 
 On a managed-pair failure the runner captures both guests before cleanup. The
 failure logs include public WireGuard state, listening and connected TCP

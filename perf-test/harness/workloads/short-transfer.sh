@@ -3,10 +3,9 @@
 # Sequential HTTPS GETs of 1KB, 64KB, 1MB objects (up to 200 each, interleaved).
 # Server: nginx on peer, port 443, serving /var/www/perf/{1k,64k,1m}.bin.
 #
-# Hard ceiling: 360s wallclock. Cells at high loss can take ~12min if
-# unbounded; if the arm64 TCP-WG kernel module wedges under sustained
-# load the VM becomes unreachable for the rest of the campaign. Cap
-# total workload time so cells either complete or fail-fast cleanly.
+# Hard ceiling: 360s wallclock. High-loss cells can otherwise take roughly
+# 12 minutes and hold up the rest of the campaign. The bound keeps collection
+# deterministic: cells either complete or fail fast with usable evidence.
 
 set -euo pipefail
 PEER="$1"

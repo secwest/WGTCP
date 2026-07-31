@@ -3,8 +3,8 @@
 ## Executive summary
 
 WireguardTCP provides a TCP carrier for WireGuard without changing WireGuard's
-encryption, keys, peer identity, or `AllowedIPs` model. The measured results
-show three practical advantages:
+encryption, keys, peer identity, or `AllowedIPs` model. The measured and
+functional results show six practical advantages:
 
 1. **Competitive clean-path speed.** On low- and medium-latency test paths,
    TCP mode matched or exceeded UDP mode in several bulk-transfer and HTTPS
@@ -16,6 +16,15 @@ show three practical advantages:
    post-repair executions in the dedicated mechanistic campaign, no execution
    met all three predeclared meltdown conditions, including runs in a
    deliberately extreme laboratory envelope.
+4. **Outbound-only NAT traversal.** A private peer established through SNAT
+   without DNAT or a forwarded inbound port, then roamed across source-address
+   and source-port changes.
+5. **Kernel-native operation.** The persistent carrier needs no proxy, relay,
+   or extra userspace encapsulation process, while retaining normal WireGuard
+   keys, AllowedIPs, keepalives, and configuration tools.
+6. **Bounded and recoverable stream handling.** Capped queues, exact
+   short-write continuation, parser resynchronization, fatal-send retirement,
+   and replacement-carrier recovery passed focused destructive tests.
 
 TCP mode is not universally faster than UDP. At clean 195-227 ms RTT, some
 bulk-TCP results were 14%-23% lower, and the harshest persistent-loss tests
@@ -157,6 +166,22 @@ WireguardTCP maintains per-peer connections. Once established, ordinary
 encrypted WireGuard messages flow over the existing stream; applications do
 not need a proxy, relay, or separate userspace encapsulation process. Framing
 and stream handling remain in the kernel module.
+
+### Authenticated roaming keeps identity separate from location
+
+The WireGuard public key remains the peer identity while the outer TCP address
+and ephemeral source port may change. Authenticated accepted-carrier promotion
+lets a reachable peer adopt the private peer's outbound stream, and generation
+ordering prevents an older carrier from rolling back the current path. This
+passed both source-port rebinding and source-address roaming.
+
+### Exact recovery avoids replaying uncertain stream prefixes
+
+Terminal send and receive paths retire only the exact failed socket. A partially
+emitted frame is not replayed onto a replacement stream, while a short write
+continues from the exact unsent suffix. The focused fault gate passed parser
+resynchronization, queue pressure, exact fatal-send selection, carrier
+replacement, and restoration of the production module.
 
 ### Stateful network compatibility improves practical availability
 

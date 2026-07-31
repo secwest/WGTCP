@@ -30,11 +30,12 @@ status above.
 The integrated callback-owner and roaming-startup tree passes **205 local
 source contracts** and all three guest shell harnesses pass syntax validation. Both
 Ubuntu guests compiled the production tools and modules on
-`6.8.0-134-generic` after the main ownership refactor. The last successful
-build snapshot had overlay SHA-256
+`6.8.0-134-generic` after the main ownership refactor. That build snapshot had
+overlay SHA-256
 `18e3aab15eb64257e73f491849133f9a332d2467c66777214cd2481e459252a7`;
 the subsequent remote writer/parser/handoff integration, callback module pin,
-and device-reopen quarantine guard still need a fresh synchronized build.
+and device-reopen quarantine guard had not yet received a synchronized build.
+The current focused status above supersedes that historical build boundary.
 
 Two expanded diagnostic campaigns reached 38 passing cases and one failure:
 `wg20260715T180738Z` exposed an obsolete source/uplink target expectation, and
@@ -63,11 +64,11 @@ completing. Neither run is counted as product evidence or as a final-source
 pass/fail result.
 
 Restarting the managed VMs cleared the orphaned ownership, but the Multipass
-daemon then stopped answering its local gRPC socket. The administrator service
-restart and fresh synchronized build, focused gate, and full gate remain
-pending. The current registry contains 39 cases, and no green current-source
-39-case campaign exists yet. Accordingly, the historical 36-case campaign
-below remains the latest complete green gate.
+daemon then stopped answering its local gRPC socket. At that historical point,
+the service restart, synchronized build, and focused gate had not completed.
+The current status above records the later synchronized builds and green
+focused gates. The historical 36-case campaign below remains the latest single
+broad-registry run.
 
 ## Recorded campaign
 
