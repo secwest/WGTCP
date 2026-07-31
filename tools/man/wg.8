@@ -76,7 +76,11 @@ the device. The use of \fIpreshared-key\fP is optional, and may be omitted;
 it adds an additional layer of symmetric-key cryptography to be mixed into
 the already existing public-key cryptography, for post-quantum resistance.
 If \fIallowed-ips\fP is specified, but the value is the empty string, all
-allowed ips are removed from the peer. The use of \fIpersistent-keepalive\fP
+allowed ips are removed from the peer. By default, \fIallowed-ips\fP replaces
+a peer's allowed ips. If + or - is prepended to any of the ips then
+the update is incremental; ips prefixed with '+' or '' are added to the peer's
+allowed ips if not present while ips prefixed with '-' are removed if present.
+The use of \fIpersistent-keepalive\fP
 is optional and is by default off; setting it to 0 or "off" disables it.
 Otherwise it represents, in seconds, between 1 and 65535 inclusive, how often
 to send an authenticated empty packet to the peer, for the purpose of keeping

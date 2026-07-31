@@ -224,7 +224,7 @@ static void peer_make_dead(struct wg_peer *peer)
 	if (peer->tcp_write_worker_scheduled) {
 		cancel_work_sync(&peer->tcp_write_work);
 		peer->tcp_write_worker_scheduled = false; /* Reset the flag after canceling */
-    	}
+	}
 
 	/* Destroy the TCP write workqueue if it exists */
 	if (peer->tcp_write_wq) {
@@ -235,7 +235,7 @@ static void peer_make_dead(struct wg_peer *peer)
 	/* clean up any partial TCP data if it exists */
 	if (peer->partial_skb) {
 		kfree_skb(peer->partial_skb);
-	    	peer->partial_skb = NULL;
+		peer->partial_skb = NULL;
 	}
 
 	/* The caller must now synchronize_net() for this to take effect. */

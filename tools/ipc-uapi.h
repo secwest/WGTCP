@@ -1,6 +1,6 @@
-/* SPDX-License-Identifier: MIT */
+// SPDX-License-Identifier: MIT
 /*
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include <arpa/inet.h>
@@ -89,7 +89,7 @@ static int userspace_set_device(struct wgdevice *dev)
 					continue;
 			} else
 				continue;
-			fprintf(f, "allowed_ip=%s/%d\n", ip, allowedip->cidr);
+			fprintf(f, "allowed_ip=%s%s/%d\n", (allowedip->flags & WGALLOWEDIP_REMOVE_ME) ? "-" : "", ip, allowedip->cidr);
 		}
 	}
 	fprintf(f, "\n");

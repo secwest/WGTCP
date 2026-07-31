@@ -109,8 +109,8 @@ void wg_noise_handshake_init(struct noise_handshake *handshake,
 	handshake->entry.peer = peer;
 	memcpy(handshake->remote_static, peer_public_key, NOISE_PUBLIC_KEY_LEN);
 	if (peer_preshared_key)
-        	memcpy(handshake->preshared_key, peer_preshared_key,
-        		NOISE_SYMMETRIC_KEY_LEN);
+		memcpy(handshake->preshared_key, peer_preshared_key,
+		       NOISE_SYMMETRIC_KEY_LEN);
 	handshake->static_identity = static_identity;
 	handshake->state = HANDSHAKE_ZEROED;
 	wg_noise_precompute_static_static(peer);

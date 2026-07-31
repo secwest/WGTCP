@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include <stddef.h>
@@ -13,18 +13,15 @@
 #include "ipc.h"
 #include "subcommands.h"
 
-#define DEBUG_PRINT(fmt, args...) do { } while (0)
-
-struct pubkey_origin {
-	uint8_t *pubkey;
+struct peer_origin {
+	struct wgpeer *peer;
 	bool from_file;
 };
 
-static int pubkey_cmp(const void *first, const void *second)
+static int peer_cmp(const void *first, const void *second)
 {
-	const struct pubkey_origin *a = first, *b = second;
-	int ret = memcmp(a->pubkey, b->pubkey, WG_KEY_LEN);
-	DEBUG_PRINT("pubkey_cmp: ret=%d\n", ret);
+	const struct peer_origin *a = first, *b = second;
+	int ret = memcmp(a->peer->public_key, b->peer->public_key, WG_KEY_LEN);
 	if (ret)
 		return ret;
 	return a->from_file - b->from_file;
@@ -32,22 +29,16 @@ static int pubkey_cmp(const void *first, const void *second)
 
 static bool sync_conf(struct wgdevice *file)
 {
-	DEBUG_PRINT("Entering sync_conf\n");
-
 	struct wgdevice *runtime;
 	struct wgpeer *peer;
-	struct pubkey_origin *pubkeys;
+	struct peer_origin *peers;
 	size_t peer_count = 0, i = 0;
 
-	if (!file->first_peer) {
-		DEBUG_PRINT("sync_conf: file->first_peer is NULL\n");
+	if (!file->first_peer)
 		return true;
-	}
 
 	for_each_wgpeer(file, peer)
 		++peer_count;
-
-	DEBUG_PRINT("sync_conf: peer_count after file iteration=%zu\n", peer_count);
 
 	if (ipc_get_device(&runtime, file->name) != 0) {
 		perror("Unable to retrieve current interface configuration");
@@ -64,59 +55,66 @@ static bool sync_conf(struct wgdevice *file)
 	for_each_wgpeer(runtime, peer)
 		++peer_count;
 
-	DEBUG_PRINT("sync_conf: peer_count after runtime iteration=%zu\n", peer_count);
-
-	pubkeys = calloc(peer_count, sizeof(*pubkeys));
-	if (!pubkeys) {
+	peers = calloc(peer_count, sizeof(*peers));
+	if (!peers) {
 		free_wgdevice(runtime);
-		perror("Public key allocation");
+		perror("Peer list allocation");
 		return false;
 	}
 
 	for_each_wgpeer(file, peer) {
-		pubkeys[i].pubkey = peer->public_key;
-		pubkeys[i].from_file = true;
-		DEBUG_PRINT("sync_conf: added pubkey from file at index %zu\n", i);
+		peers[i].peer = peer;
+		peers[i].from_file = true;
 		++i;
 	}
 	for_each_wgpeer(runtime, peer) {
-		pubkeys[i].pubkey = peer->public_key;
-		pubkeys[i].from_file = false;
-		DEBUG_PRINT("sync_conf: added pubkey from runtime at index %zu\n", i);
+		peers[i].peer = peer;
+		peers[i].from_file = false;
 		++i;
 	}
-	qsort(pubkeys, peer_count, sizeof(*pubkeys), pubkey_cmp);
+	qsort(peers, peer_count, sizeof(*peers), peer_cmp);
 
 	for (i = 0; i < peer_count; ++i) {
-		if (pubkeys[i].from_file)
-		continue;
-		if (i == peer_count - 1 || !pubkeys[i + 1].from_file || memcmp(pubkeys[i].pubkey, pubkeys[i + 1].pubkey, WG_KEY_LEN)) {
+		if (peers[i].from_file)
+			continue;
+		if (i == peer_count - 1 || !peers[i + 1].from_file || memcmp(peers[i].peer->public_key, peers[i + 1].peer->public_key, WG_KEY_LEN)) {
 			peer = calloc(1, sizeof(struct wgpeer));
 			if (!peer) {
 				free_wgdevice(runtime);
-				free(pubkeys);
+				free(peers);
 				perror("Peer allocation");
 				return false;
 			}
 			peer->flags = WGPEER_REMOVE_ME;
-			memcpy(peer->public_key, pubkeys[i].pubkey, WG_KEY_LEN);
+			memcpy(peer->public_key, peers[i].peer->public_key, WG_KEY_LEN);
 			peer->next_peer = file->first_peer;
 			file->first_peer = peer;
 			if (!file->last_peer)
 				file->last_peer = peer;
-			DEBUG_PRINT("sync_conf: added peer to file with public_key=%p\n", pubkeys[i].pubkey);
+		} else {
+			if (i < peer_count - 1 && peers[i + 1].from_file &&
+			    (peers[i].peer->flags & WGPEER_HAS_PRESHARED_KEY) &&
+			    !(peers[i + 1].peer->flags & WGPEER_HAS_PRESHARED_KEY) &&
+			    !memcmp(peers[i].peer->public_key, peers[i + 1].peer->public_key, WG_KEY_LEN)) {
+				memset(peers[i + 1].peer->preshared_key, 0, WG_KEY_LEN);
+				peers[i + 1].peer->flags |= WGPEER_HAS_PRESHARED_KEY;
+			}
+			if (i < peer_count - 1 && peers[i + 1].from_file &&
+			    peers[i].peer->persistent_keepalive_interval &&
+			    !(peers[i + 1].peer->flags & WGPEER_HAS_PERSISTENT_KEEPALIVE_INTERVAL) &&
+			    !memcmp(peers[i].peer->public_key, peers[i + 1].peer->public_key, WG_KEY_LEN)) {
+				peers[i + 1].peer->persistent_keepalive_interval = 0;
+				peers[i + 1].peer->flags |= WGPEER_HAS_PERSISTENT_KEEPALIVE_INTERVAL;
+			}
 		}
 	}
 	free_wgdevice(runtime);
-	free(pubkeys);
-	DEBUG_PRINT("Exiting sync_conf\n");
+	free(peers);
 	return true;
 }
 
 int setconf_main(int argc, const char *argv[])
 {
-	DEBUG_PRINT("Entering setconf_main: argc=%d, argv[1]=%s, argv[2]=%s\n", argc, argv[1], argv[2]);
-
 	struct wgdevice *device = NULL;
 	struct config_ctx ctx;
 	FILE *config_input = NULL;
@@ -152,11 +150,9 @@ int setconf_main(int argc, const char *argv[])
 	strncpy(device->name, argv[1], IFNAMSIZ - 1);
 	device->name[IFNAMSIZ - 1] = '\0';
 
-	DEBUG_PRINT("setconf_main: device->name=%s\n", device->name);
-
 	if (!strcmp(argv[0], "syncconf")) {
 		if (!sync_conf(device))
-		goto cleanup;
+			goto cleanup;
 	}
 
 	if (ipc_set_device(device) != 0) {
@@ -171,7 +167,5 @@ cleanup:
 		fclose(config_input);
 	free(config_buffer);
 	free_wgdevice(device);
-
-	DEBUG_PRINT("Exiting setconf_main: ret=%d\n", ret);
 	return ret;
 }

@@ -270,18 +270,6 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     plaintext_len = skb->len + padding_len;
     wg_dbg("Calculated lengths: padding_len=%u, trailer_len=%u, plaintext_len=%u\n", padding_len, trailer_len, plaintext_len);
 
-    /* Expand data section */
-    num_frags = skb_cow_data(skb, trailer_len, &trailer);
-    if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
-        wg_dbg("Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
-        wg_dbg("Exiting encrypt_packet with false\n");
-        return false;
-    }
-
-    /* Set the padding to zeros */
-    memset(skb_tail_pointer(trailer), 0, padding_len);
-    wg_dbg("Padding set to zeros: padding_len=%u, skb->len=%u\n", padding_len, skb->len);
-
     /* Expand head section */
     if (unlikely(skb_cow_head(skb, DATA_PACKET_HEAD_ROOM) < 0)) {
         wg_dbg("Failed skb_cow_head, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
@@ -297,6 +285,19 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
         return false;
     }
     wg_dbg("Checksum finalized, skb->len=%u\n", skb->len);
+
+    /* Expand data only after checksum completion; skb_checksum_help() may
+     * alter the packet layout and invalidate an earlier trailer pointer.
+     */
+    num_frags = skb_cow_data(skb, trailer_len, &trailer);
+    if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
+        wg_dbg("Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
+        wg_dbg("Exiting encrypt_packet with false\n");
+        return false;
+    }
+
+    memset(skb_tail_pointer(trailer), 0, padding_len);
+    wg_dbg("Padding set to zeros: padding_len=%u, skb->len=%u\n", padding_len, skb->len);
 
     /* Add padding and header */
     skb_set_inner_network_header(skb, 0);
@@ -356,7 +357,7 @@ void wg_packet_send_keepalive(struct wg_peer *peer)
 	wg_dbg("Entering wg_packet_send_keepalive with peer=%px\n", peer);
 	struct sk_buff *skb;
 
-	if (skb_queue_empty(&peer->staged_packet_queue)) {
+	if (skb_queue_empty_lockless(&peer->staged_packet_queue)) {
 		skb = alloc_skb(DATA_PACKET_HEAD_ROOM + MESSAGE_MINIMUM_LENGTH,
 				GFP_ATOMIC);
 		if (unlikely(!skb)) {

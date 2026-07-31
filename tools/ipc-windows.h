@@ -1,6 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include "containers.h"
@@ -19,11 +19,10 @@
 static bool have_cached_kernel_interfaces;
 static struct hashtable cached_kernel_interfaces;
 static const DEVPROPKEY devpkey_name = DEVPKEY_WG_NAME;
-extern bool is_win7;
 
 static int kernel_get_wireguard_interfaces(struct string_list *list)
 {
-	HDEVINFO dev_info = SetupDiGetClassDevsExW(&GUID_DEVCLASS_NET, is_win7 ? L"ROOT\\WIREGUARD" : L"SWD\\WireGuard", NULL, DIGCF_PRESENT, NULL, NULL, NULL);
+	HDEVINFO dev_info = SetupDiGetClassDevsExW(&GUID_DEVCLASS_NET, L"SWD\\WireGuard", NULL, DIGCF_PRESENT, NULL, NULL, NULL);
 	bool will_have_cached_kernel_interfaces = true;
 
 	if (dev_info == INVALID_HANDLE_VALUE) {
@@ -130,7 +129,7 @@ err_hash:
 		}
 	}
 
-	dev_info = SetupDiGetClassDevsExW(&GUID_DEVCLASS_NET, is_win7 ? L"ROOT\\WIREGUARD" : L"SWD\\WireGuard", NULL, DIGCF_PRESENT, NULL, NULL, NULL);
+	dev_info = SetupDiGetClassDevsExW(&GUID_DEVCLASS_NET, L"SWD\\WireGuard", NULL, DIGCF_PRESENT, NULL, NULL, NULL);
 	if (dev_info == INVALID_HANDLE_VALUE)
 		return NULL;
 
@@ -418,6 +417,7 @@ static int kernel_set_device(struct wgdevice *dev)
 		aip_count = 0;
 		wg_aip = (void *)wg_peer + sizeof(WG_IOCTL_PEER);
 		for_each_wgallowedip(peer, aip) {
+			wg_aip->Flags = aip->flags;
 			wg_aip->AddressFamily = aip->family;
 			wg_aip->Cidr = aip->cidr;
 

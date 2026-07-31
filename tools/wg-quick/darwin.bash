@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+# Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
 #
 
 set -e -o pipefail
@@ -62,6 +62,7 @@ parse_options() {
 		stripped="${line%%\#*}"
 		key="${stripped%%=*}"; key="${key##*([[:space:]])}"; key="${key%%*([[:space:]])}"
 		value="${stripped#*=}"; value="${value##*([[:space:]])}"; value="${value%%*([[:space:]])}"
+		unstripped_value="${line#*=}"; unstripped_value="${unstripped_value##*([[:space:]])}"; unstripped_value="${unstripped_value%%*([[:space:]])}"
 		[[ $key == "["* ]] && interface_section=0
 		[[ $key == "[Interface]" ]] && interface_section=1
 		if [[ $interface_section -eq 1 ]]; then
@@ -72,10 +73,10 @@ parse_options() {
 				[[ $v =~ (^[0-9.]+$)|(^.*:.*$) ]] && DNS+=( $v ) || DNS_SEARCH+=( $v )
 			done; continue ;;
 			Table) TABLE="$value"; continue ;;
-			PreUp) PRE_UP+=( "$value" ); continue ;;
-			PreDown) PRE_DOWN+=( "$value" ); continue ;;
-			PostUp) POST_UP+=( "$value" ); continue ;;
-			PostDown) POST_DOWN+=( "$value" ); continue ;;
+			PreUp) PRE_UP+=( "$unstripped_value" ); continue ;;
+			PreDown) PRE_DOWN+=( "$unstripped_value" ); continue ;;
+			PostUp) POST_UP+=( "$unstripped_value" ); continue ;;
+			PostDown) POST_DOWN+=( "$unstripped_value" ); continue ;;
 			SaveConfig) read_bool SAVE_CONFIG "$value"; continue ;;
 			esac
 		fi
@@ -130,14 +131,14 @@ add_if() {
 del_routes() {
 	[[ -n $REAL_INTERFACE ]] || return 0
 	local todelete=( ) destination gateway netif
-	while read -r destination _ _ _ _ netif _; do
+	while read -r destination _ _ netif _; do
 		[[ $netif == "$REAL_INTERFACE" ]] && todelete+=( "$destination" )
 	done < <(netstat -nr -f inet)
 	for destination in "${todelete[@]}"; do
 		cmd route -q -n delete -inet "$destination" >/dev/null || true
 	done
 	todelete=( )
-	while read -r destination gateway _ netif; do
+	while read -r destination gateway _ netif _; do
 		[[ $netif == "$REAL_INTERFACE" || ( $netif == lo* && $gateway == "$REAL_INTERFACE" ) ]] && todelete+=( "$destination" )
 	done < <(netstat -nr -f inet6)
 	for destination in "${todelete[@]}"; do
@@ -176,7 +177,7 @@ set_mtu() {
 		cmd ifconfig "$REAL_INTERFACE" mtu "$MTU"
 		return
 	fi
-	while read -r destination _ _ _ _ netif _; do
+	while read -r destination _ _ netif _; do
 		if [[ $destination == default ]]; then
 			defaultif="$netif"
 			break
@@ -369,7 +370,7 @@ add_route() {
 }
 
 set_config() {
-	cmd wg setconf "$REAL_INTERFACE" <(echo "$WG_CONFIG")
+	cmd wg addconf "$REAL_INTERFACE" <(echo "$WG_CONFIG")
 }
 
 save_config() {

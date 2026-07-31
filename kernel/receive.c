@@ -579,7 +579,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 
 	if (unlikely(!endpoint)) {
 		wg_dbg("Endpoint object is NULL. Cannot set peer endpoint.\n");
-    		return;
+		return;
 	}
 
 
@@ -651,7 +651,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 	if (unlikely(len == 0 || len_before_trim == 0)) {
 		wg_dbg("Invalid packet length detected: len=%u, len_before_trim=%u\n",
 		       len, len_before_trim);
-    		return;
+		return;
 	}
 
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+# Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
 
 PKG_CONFIG ?= pkg-config
 PREFIX ?= /usr
@@ -64,11 +64,11 @@ WINDRES := $(shell $(CC) $(CFLAGS) -print-prog-name=windres 2>/dev/null)
 CFLAGS += -Iwincompat/include -include wincompat/compat.h -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 -flto
 LDLIBS += -lws2_32 -lsetupapi -lole32 -ladvapi32 -lntdll -Lwincompat
 LDFLAGS += -flto -Wl,--dynamicbase -Wl,--nxcompat -Wl,--tsaware -mconsole
-LDFLAGS += -Wl,--major-os-version=6 -Wl,--minor-os-version=1 -Wl,--major-subsystem-version=6 -Wl,--minor-subsystem-version=1
+LDFLAGS += -Wl,--major-os-version=10 -Wl,--minor-os-version=0 -Wl,--major-subsystem-version=10 -Wl,--minor-subsystem-version=0
 # The use of -Wl,/delayload: here implies we're using llvm-mingw
 LDFLAGS += -Wl,/delayload:ws2_32.dll -Wl,/delayload:setupapi.dll -Wl,/delayload:ole32.dll -Wl,/delayload:advapi32.dll
 VERSION := $(patsubst "%",%,$(filter "%",$(file < version.h)))
-wg: wincompat/libc.o wincompat/init.o wincompat/loader.o wincompat/resources.o
+wg: wincompat/libc.o wincompat/init.o wincompat/load_config.o wincompat/loader.o wincompat/resources.o
 wincompat/resources.o: wincompat/resources.rc wincompat/manifest.xml
 	$(WINDRES) -DVERSION_STR=$(VERSION) -O coff -c 65001 -i $< -o $@
 endif

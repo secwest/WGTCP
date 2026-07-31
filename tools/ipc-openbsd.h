@@ -1,6 +1,6 @@
-/* SPDX-License-Identifier: MIT */
+// SPDX-License-Identifier: MIT
 /*
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include <errno.h>
@@ -252,6 +252,11 @@ static int kernel_set_device(struct wgdevice *dev)
 		aip_count = 0;
 		wg_aip = &wg_peer->p_aips[0];
 		for_each_wgallowedip(peer, aip) {
+			if (aip->flags) {
+				//TODO: implement me
+				errno = EOPNOTSUPP;
+				goto out;
+			}
 			wg_aip->a_af = aip->family;
 			wg_aip->a_cidr = aip->cidr;
 

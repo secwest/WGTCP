@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  *
  * This is a shell script written in C. It very intentionally still functions like
  * a shell script, calling out to external executables such as ip(8).
@@ -1047,7 +1047,7 @@ static void set_routes(const char *iface, unsigned int netid)
 static void set_config(const char *iface, const char *config)
 {
 	FILE *config_writer;
-	_cleanup_free_ char *cmd = concat("wg setconf ", iface, " /proc/self/fd/0", NULL);
+	_cleanup_free_ char *cmd = concat("wg addconf ", iface, " /proc/self/fd/0", NULL);
 	int ret;
 
 	printf("[#] %s\n", cmd);
