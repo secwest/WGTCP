@@ -377,7 +377,8 @@ verify a Canonical Ubuntu cloud image as described in
 ```bash
 sudo ./tests/linux/Provision-LinuxRegression.sh \
   --base-image "$PWD/noble-server-cloudimg-amd64.img" \
-  --ssh-public-key "$HOME/.ssh/id_ed25519.pub"
+  --ssh-public-key "$HOME/.ssh/id_ed25519.pub" \
+  --ssh-private-key "$HOME/.ssh/id_ed25519"
 ./tests/linux/Run-LinuxRegression.sh
 ```
 

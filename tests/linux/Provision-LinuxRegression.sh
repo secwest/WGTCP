@@ -10,6 +10,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 RESULTS_DIR=$SCRIPT_DIR/results
 BASE_IMAGE=
 SSH_PUBLIC_KEY=
+SSH_PRIVATE_KEY=
 STORAGE_DIR=/var/lib/libvirt/images/wireguardtcp-linux
 VM_A=wgtcp-a
 VM_B=wgtcp-b
@@ -29,11 +30,12 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: sudo tests/linux/Provision-LinuxRegression.sh --base-image IMAGE --ssh-public-key KEY [options]
+Usage: sudo tests/linux/Provision-LinuxRegression.sh --base-image IMAGE --ssh-public-key KEY --ssh-private-key KEY [options]
 
 Options:
   --base-image PATH              Verified Ubuntu 24.04 cloud image (required)
   --ssh-public-key PATH          Public key authorized for the ubuntu guest user (required)
+  --ssh-private-key PATH         Matching private key used while provisioning (required)
   --repo-root PATH               Git worktree to transfer (default: repository root)
   --results-dir PATH             Persistent harness state and logs
   --storage-dir PATH             Directory for VM disks and cloud-init seeds
@@ -53,6 +55,7 @@ while (( $# )); do
 	case "$1" in
 	--base-image) BASE_IMAGE=${2:?--base-image requires a value}; shift 2 ;;
 	--ssh-public-key) SSH_PUBLIC_KEY=${2:?--ssh-public-key requires a value}; shift 2 ;;
+	--ssh-private-key) SSH_PRIVATE_KEY=${2:?--ssh-private-key requires a value}; shift 2 ;;
 	--repo-root) REPO_ROOT=${2:?--repo-root requires a value}; shift 2 ;;
 	--results-dir) RESULTS_DIR=${2:?--results-dir requires a value}; shift 2 ;;
 	--storage-dir) STORAGE_DIR=${2:?--storage-dir requires a value}; shift 2 ;;
@@ -72,30 +75,42 @@ done
 (( EUID == 0 )) || die "run as root, for example: sudo $0 ..."
 [[ -n $BASE_IMAGE ]] || die "--base-image is required"
 [[ -n $SSH_PUBLIC_KEY ]] || die "--ssh-public-key is required"
+[[ -n $SSH_PRIVATE_KEY ]] || die "--ssh-private-key is required"
 [[ -f $BASE_IMAGE && -r $BASE_IMAGE ]] || die "base image is not readable: $BASE_IMAGE"
 [[ -f $SSH_PUBLIC_KEY && -r $SSH_PUBLIC_KEY ]] || die "SSH public key is not readable: $SSH_PUBLIC_KEY"
+[[ -f $SSH_PRIVATE_KEY && -r $SSH_PRIVATE_KEY ]] || die "SSH private key is not readable: $SSH_PRIVATE_KEY"
 [[ -d $REPO_ROOT/.git ]] || die "not a Git worktree: $REPO_ROOT"
 [[ $VM_A != "$VM_B" ]] || die "VM names must be distinct"
 (( FORCE_RECREATE_UNMANAGED == 0 || RECREATE == 1 )) ||
 	die "--force-recreate-unmanaged requires --recreate"
-[[ $VM_A =~ ^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "unsafe VM name: $VM_A"
-[[ $VM_B =~ ^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "unsafe VM name: $VM_B"
-[[ $PATH0_NETWORK =~ ^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$ ]] ||
+[[ $VM_A =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "unsafe VM name: $VM_A"
+[[ $VM_B =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "unsafe VM name: $VM_B"
+[[ $PATH0_NETWORK =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] ||
 	die "unsafe network name: $PATH0_NETWORK"
-[[ $PATH1_NETWORK =~ ^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$ ]] ||
+[[ $PATH1_NETWORK =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] ||
 	die "unsafe network name: $PATH1_NETWORK"
 [[ $CPU_COUNT =~ ^[1-9][0-9]*$ ]] || die "--cpus must be a positive integer"
 [[ $MEMORY_MIB =~ ^[1-9][0-9]*$ ]] || die "--memory-mib must be a positive integer"
 
-for command in cloud-localds git qemu-img sha256sum ssh ssh-keygen scp tar virsh virt-install python3; do
+for command in cloud-localds dnsmasq git qemu-img sha256sum ssh ssh-keygen scp tar virsh virt-install python3; do
 	command -v "$command" >/dev/null || die "required host command was not found: $command"
 done
+if [[ ! -r /usr/share/seabios/bios-256k.bin &&
+	! -r /usr/share/qemu/bios-256k.bin ]]; then
+	die "SeaBIOS firmware was not found; install the seabios package"
+fi
 
 REPO_ROOT=$(cd -- "$REPO_ROOT" && pwd -P)
 RESULTS_DIR=$(mkdir -p -- "$RESULTS_DIR"; cd -- "$RESULTS_DIR" && pwd -P)
+if [[ -n ${SUDO_USER:-} && $SUDO_USER != root ]]; then
+	RESULTS_GROUP=$(id -gn "$SUDO_USER") ||
+		die "could not resolve the results group for $SUDO_USER"
+	chown "$SUDO_USER:$RESULTS_GROUP" "$RESULTS_DIR"
+fi
 STORAGE_DIR=$(mkdir -p -- "$STORAGE_DIR"; cd -- "$STORAGE_DIR" && pwd -P)
 BASE_IMAGE=$(readlink -f -- "$BASE_IMAGE")
 SSH_PUBLIC_KEY=$(readlink -f -- "$SSH_PUBLIC_KEY")
+SSH_PRIVATE_KEY=$(readlink -f -- "$SSH_PRIVATE_KEY")
 STATE_PATH=$RESULTS_DIR/provision-state.json
 KNOWN_HOSTS_DIR=$RESULTS_DIR/known-hosts
 mkdir -p -- "$KNOWN_HOSTS_DIR"
@@ -261,14 +276,17 @@ assert_managed_domain() {
 }
 
 assert_managed_network() {
-	local name=$1 live expected
+	local name=$1 live expected xml
 	live=$(virsh_qemu net-uuid "$name")
 	expected=$(state_identity NetworkIdentities "$name")
 	[[ -n $expected ]] || die "network '$name' exists without a persisted managed UUID; refusing to adopt it"
 	[[ $live == "$expected" ]] ||
 		die "network '$name' UUID '$live' does not match managed UUID '$expected'; refusing to modify it"
-	virsh_qemu net-dumpxml "$name" | grep -Eq '<forward mode=.none.' ||
+	xml=$(virsh_qemu net-dumpxml "$name")
+	if grep -q '<forward' <<<"$xml" &&
+		! grep -Eq "<forward[^>]+mode=['\"]none['\"]" <<<"$xml"; then
 		die "managed network '$name' is not isolated (forward mode none)"
+	fi
 }
 
 destroy_domain() {
@@ -376,7 +394,6 @@ create_domain() {
 		--vcpus "$CPU_COUNT" \
 		--import \
 		--os-variant ubuntu24.04 \
-		--boot bios \
 		--disk "path=$disk,format=qcow2,bus=virtio" \
 		--disk "path=$seed,device=cdrom,readonly=on" \
 		--network "network=default,mac=$management_mac,model=virtio" \
@@ -386,6 +403,12 @@ create_domain() {
 		--noautoconsole; then
 		rm -f -- "$disk" "$seed"
 		die "virt-install failed while creating '$name'"
+	fi
+	if virsh_qemu dumpxml "$name" | grep -q '<loader'; then
+		virsh_qemu destroy "$name" >/dev/null 2>&1 || true
+		virsh_qemu undefine "$name" --nvram >/dev/null 2>&1 || true
+		rm -f -- "$disk" "$seed"
+		die "domain '$name' selected UEFI; refusing to run unsigned test modules"
 	fi
 	write_state Provisioning
 }
@@ -433,6 +456,7 @@ wait_for_ssh() {
 	while (( SECONDS < deadline )); do
 		address=$(domain_ip "$name" || true)
 		if [[ -n $address ]] && ssh \
+			-i "$SSH_PRIVATE_KEY" \
 			-o BatchMode=yes \
 			-o ConnectTimeout=10 \
 			-o StrictHostKeyChecking=accept-new \
@@ -450,6 +474,7 @@ ssh_guest() {
 	local address=$1
 	shift
 	ssh -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=yes \
+		-i "$SSH_PRIVATE_KEY" \
 		-o "UserKnownHostsFile=$KNOWN_HOSTS_DIR/$CURRENT_GUEST" \
 		"ubuntu@$address" "$@"
 }
@@ -464,11 +489,15 @@ create_snapshot() {
 	overlay_files=$snapshot_dir/overlay-files.zlist
 	deletions=$snapshot_dir/deletions.zlist
 	manifest=$snapshot_dir/snapshot-manifest.json
-	status_before=$(git -C "$REPO_ROOT" status --porcelain=v2 --branch --untracked-files=all)
-	git -C "$REPO_ROOT" archive --format=tar --output="$base" HEAD
-	git -C "$REPO_ROOT" -c core.safecrlf=false diff --name-only --no-renames \
+	status_before=$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		status --porcelain=v2 --branch --untracked-files=all)
+	git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		archive --format=tar --output="$base" HEAD
+	git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		-c core.safecrlf=false diff --name-only --no-renames \
 		--diff-filter=ACMRTUXB -z HEAD -- >"$modified"
-	git -C "$REPO_ROOT" ls-files --others --exclude-standard -z >"$untracked"
+	git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		ls-files --others --exclude-standard -z >"$untracked"
 	cat "$modified" "$untracked" | sort -zu >"$overlay_files"
 	if [[ -s $overlay_files ]]; then
 		(
@@ -478,9 +507,11 @@ create_snapshot() {
 	else
 		tar --format=pax -cf "$overlay" --files-from /dev/null
 	fi
-	git -C "$REPO_ROOT" -c core.safecrlf=false diff --name-only --no-renames \
+	git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		-c core.safecrlf=false diff --name-only --no-renames \
 		--diff-filter=D -z HEAD -- >"$deletions"
-	status_after=$(git -C "$REPO_ROOT" status --porcelain=v2 --branch --untracked-files=all)
+	status_after=$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" \
+		status --porcelain=v2 --branch --untracked-files=all)
 	[[ $status_before == "$status_after" ]] ||
 		die "the worktree changed while the guest snapshot was being built; run provisioning again"
 	SNAPSHOT_DIR=$snapshot_dir SNAPSHOT_BASE=$base SNAPSHOT_OVERLAY=$overlay \
@@ -508,7 +539,16 @@ document = {
     "Schema": 1,
     "CreatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "Head": subprocess.check_output(
-        ["git", "-C", os.environ["REPO_ROOT"], "rev-parse", "HEAD"], text=True
+        [
+            "git",
+            "-c",
+            f"safe.directory={os.environ['REPO_ROOT']}",
+            "-C",
+            os.environ["REPO_ROOT"],
+            "rev-parse",
+            "HEAD",
+        ],
+        text=True,
     ).strip(),
     "GitStatus": os.environ["SNAPSHOT_STATUS"],
     "BaseArchive": base.name,
@@ -532,6 +572,7 @@ install_snapshot() {
 	CURRENT_GUEST=$name
 	ssh_guest "$address" mkdir -p "$remote"
 	scp -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=yes \
+		-i "$SSH_PRIVATE_KEY" \
 		-o "UserKnownHostsFile=$KNOWN_HOSTS_DIR/$name" \
 		"$SNAPSHOT_BASE" "$SNAPSHOT_OVERLAY" "$SNAPSHOT_DELETIONS" "$SNAPSHOT_MANIFEST" \
 		"ubuntu@$address:$remote/"
