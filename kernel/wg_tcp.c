@@ -67,10 +67,18 @@ static unsigned int wg_tcp_test_max_send_bytes;
 static unsigned int wg_tcp_test_garbage_prefix_bytes;
 static unsigned int wg_tcp_test_queue_limit;
 static unsigned int wg_tcp_test_write_delay_ms;
+static unsigned int wg_tcp_test_fail_send_netns;
+static unsigned int wg_tcp_test_fail_send_ifindex;
+static unsigned int wg_tcp_test_fail_send_local_ipv4;
+static unsigned int wg_tcp_test_fail_send_source_port;
+static unsigned int wg_tcp_test_fail_send_remote_ipv4;
+static unsigned int wg_tcp_test_fail_send_remote_port;
+static unsigned int wg_tcp_test_fail_next_send;
 static atomic64_t wg_tcp_test_short_writes = ATOMIC64_INIT(0);
 static atomic64_t wg_tcp_test_injected_prefixes = ATOMIC64_INIT(0);
 static atomic64_t wg_tcp_test_resyncs = ATOMIC64_INIT(0);
 static atomic64_t wg_tcp_test_queue_drops = ATOMIC64_INIT(0);
+static atomic64_t wg_tcp_test_fatal_send_errors = ATOMIC64_INIT(0);
 
 module_param_named(tcp_test_max_send_bytes, wg_tcp_test_max_send_bytes,
 		   uint, 0600);
@@ -87,6 +95,34 @@ module_param_named(tcp_test_write_delay_ms, wg_tcp_test_write_delay_ms,
 		   uint, 0600);
 MODULE_PARM_DESC(tcp_test_write_delay_ms,
 		 "DEBUG only: delay the next serial TCP writer to force queue pressure");
+module_param_named(tcp_test_fail_send_netns, wg_tcp_test_fail_send_netns,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_netns,
+		 "DEBUG only: target network namespace for fatal send injection");
+module_param_named(tcp_test_fail_send_ifindex, wg_tcp_test_fail_send_ifindex,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_ifindex,
+		 "DEBUG only: target WireGuard ifindex for fatal send injection");
+module_param_named(tcp_test_fail_send_local_ipv4,
+		   wg_tcp_test_fail_send_local_ipv4, uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_local_ipv4,
+		 "DEBUG only: target local IPv4 address for fatal send injection");
+module_param_named(tcp_test_fail_send_source_port,
+		   wg_tcp_test_fail_send_source_port, uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_source_port,
+		 "DEBUG only: target local TCP source port for fatal send injection");
+module_param_named(tcp_test_fail_send_remote_ipv4,
+		   wg_tcp_test_fail_send_remote_ipv4, uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_remote_ipv4,
+		 "DEBUG only: target remote IPv4 address for fatal send injection");
+module_param_named(tcp_test_fail_send_remote_port,
+		   wg_tcp_test_fail_send_remote_port, uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_send_remote_port,
+		 "DEBUG only: target remote TCP port for fatal send injection");
+module_param_named(tcp_test_fail_next_send, wg_tcp_test_fail_next_send,
+		   uint, 0600);
+MODULE_PARM_DESC(tcp_test_fail_next_send,
+		 "DEBUG only: arm one EPIPE on the selected TCP carrier");
 
 static int wg_tcp_test_counter_get(char *buffer,
 				   const struct kernel_param *parameter)
@@ -117,6 +153,10 @@ module_param_cb(tcp_test_queue_drops, &wg_tcp_test_counter_ops,
 		&wg_tcp_test_queue_drops, 0400);
 MODULE_PARM_DESC(tcp_test_queue_drops,
 		 "DEBUG only: number of frames rejected by TCP queue pressure");
+module_param_cb(tcp_test_fatal_send_errors, &wg_tcp_test_counter_ops,
+		&wg_tcp_test_fatal_send_errors, 0400);
+MODULE_PARM_DESC(tcp_test_fatal_send_errors,
+		 "DEBUG only: number of terminal TCP frame send failures");
 
 static size_t wg_tcp_test_send_len(size_t frame_len)
 {
@@ -144,6 +184,31 @@ static unsigned int wg_tcp_test_take_write_delay_ms(void)
 	return min_t(unsigned int, xchg(&wg_tcp_test_write_delay_ms, 0U),
 		     WG_TCP_TEST_MAX_WRITE_DELAY_MS);
 }
+
+static bool wg_tcp_test_take_fatal_send(struct wg_peer *peer,
+					struct socket *socket)
+{
+	struct sock *sk;
+
+	if (READ_ONCE(wg_tcp_test_fail_next_send) != 1U || !peer ||
+	    !peer->device || !peer->device->dev || !socket || !socket->sk)
+		return false;
+	sk = socket->sk;
+	if (READ_ONCE(wg_tcp_test_fail_send_netns) != sock_net(sk)->ns.inum ||
+	    READ_ONCE(wg_tcp_test_fail_send_ifindex) !=
+					(unsigned int)peer->device->dev->ifindex ||
+	    sk->sk_family != AF_INET ||
+	    READ_ONCE(wg_tcp_test_fail_send_local_ipv4) !=
+					ntohl(inet_sk(sk)->inet_saddr) ||
+	    READ_ONCE(wg_tcp_test_fail_send_source_port) !=
+					ntohs(inet_sk(sk)->inet_sport) ||
+	    READ_ONCE(wg_tcp_test_fail_send_remote_ipv4) !=
+					ntohl(inet_sk(sk)->inet_daddr) ||
+	    READ_ONCE(wg_tcp_test_fail_send_remote_port) !=
+					ntohs(inet_sk(sk)->inet_dport))
+		return false;
+	return cmpxchg(&wg_tcp_test_fail_next_send, 1U, 0U) == 1U;
+}
 #else
 static size_t wg_tcp_test_send_len(size_t frame_len)
 {
@@ -164,6 +229,14 @@ static unsigned int wg_tcp_test_take_write_delay_ms(void)
 {
 	return 0;
 }
+
+static bool wg_tcp_test_take_fatal_send(struct wg_peer *peer,
+					struct socket *socket)
+{
+	(void)peer;
+	(void)socket;
+	return false;
+}
 #endif
 
 #define WG_TCP_MAX_PENDING_CONNECTIONS 128
@@ -178,14 +251,23 @@ static unsigned int wg_tcp_test_take_write_delay_ms(void)
 static void wg_finish_tcp_connection_init(struct wg_device *wg,
 					  struct socket *socket);
 static void wg_destroy_temp_peer(struct wg_peer *peer);
+static void
+wg_destroy_tcp_connection_entry(struct wg_device *wg,
+				struct wg_tcp_socket_list_entry *entry);
 static void wg_touch_tcp_connection(struct wg_peer *peer);
 
-void wg_setup_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
-void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
+static int wg_setup_tcp_socket_callbacks(struct wg_peer *peer,
+					 struct socket *socket, bool inbound);
+static int wg_reset_tcp_socket_callbacks(struct wg_peer *peer,
+					 struct socket *socket, bool inbound);
+static int wg_reset_exact_tcp_socket_callbacks(struct wg_peer *peer,
+					       struct socket *socket);
 void wg_get_endpoint_from_socket(struct socket *epsocket, struct endpoint *ep);
 static __be16 wg_header_checksum(const struct wg_tcp_encap_header *hdr);
 static void wg_tcp_mark_connection_authenticated(struct wg_device *wg,
 						 u64 connection_id);
+static bool wg_tcp_promote_authenticated_carrier(struct wg_peer *peer,
+						  u64 connection_id);
 
 static struct sk_buff *wg_tcp_build_frame(const struct sk_buff *payload)
 {
@@ -555,7 +637,19 @@ void wg_socket_set_peer_endpoint_authenticated(struct wg_peer *peer,
 	wg_socket_set_peer_endpoint(peer, endpoint);
 	if (peer->device->transport != WG_TRANSPORT_TCP)
 		return;
-	wg_tcp_mark_connection_authenticated(peer->device, connection_id);
+	if (connection_id) {
+		wg_tcp_mark_connection_authenticated(peer->device, connection_id);
+		spin_lock_bh(&peer->tcp_lock);
+		if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+		    connection_id > peer->tcp_promotion_connection_id) {
+			peer->tcp_promotion_connection_id = connection_id;
+			if (!peer->tcp_promotion_worker_scheduled) {
+				peer->tcp_promotion_worker_scheduled = true;
+				queue_work(system_wq, &peer->tcp_promotion_work);
+			}
+		}
+		spin_unlock_bh(&peer->tcp_lock);
+	}
 
 	write_lock_bh(&peer->endpoint_lock);
 	/* Only authenticated accepted carriers have a nonzero, device-monotonic
@@ -563,7 +657,7 @@ void wg_socket_set_peer_endpoint_authenticated(struct wg_peer *peer,
 	 * an older retained stream from reverting a later roaming observation.
 	 */
 	if (!peer->peer_endpoint_set || !connection_id ||
-	    connection_id <= peer->tcp_roaming_connection_id)
+	    connection_id < peer->tcp_roaming_connection_id)
 		goto out;
 	target = *endpoint;
 	if (target.addr.sa_family == AF_INET) {
@@ -949,6 +1043,67 @@ void wg_free_peer_socket_data(struct wg_peer *peer)
 					kfree(peer->peer_socket->sk->sk_user_data);
 }
 
+static int wg_release_peer_socket_locked(struct wg_peer *peer,
+					 struct socket *socket)
+{
+	struct sk_buff *partial = NULL;
+	bool inbound, outbound;
+	bool active;
+
+	if (!peer || IS_ERR(peer) || !socket)
+		return -EINVAL;
+	lockdep_assert_held(&peer->tcp_socket_lock);
+
+	spin_lock_bh(&peer->tcp_lock);
+	inbound = peer->inbound_socket == socket;
+	outbound = peer->outbound_socket == socket;
+	if (!inbound && !outbound) {
+		spin_unlock_bh(&peer->tcp_lock);
+		return -ESTALE;
+	}
+	if ((inbound && (peer->tcp_inbound_callbacks_set ||
+			 peer->tcp_inbound_socket_data)) ||
+	    (outbound && (peer->tcp_outbound_callbacks_set ||
+			  peer->tcp_outbound_socket_data))) {
+		spin_unlock_bh(&peer->tcp_lock);
+		return -EBUSY;
+	}
+	active = peer->peer_socket == socket;
+	if (active) {
+		peer->peer_socket = NULL;
+		partial = peer->partial_skb;
+		peer->partial_skb = NULL;
+		peer->received_len = 0;
+		peer->expected_len = 0;
+		peer->tcp_pending = false;
+		peer->tcp_retry_scheduled = false;
+	}
+	if (inbound) {
+		peer->inbound_socket = NULL;
+		peer->inbound_connected = false;
+		peer->inbound_timestamp = ktime_set(0, 0);
+	}
+	if (outbound) {
+		peer->outbound_socket = NULL;
+		peer->outbound_connected = false;
+		peer->outbound_timestamp = ktime_set(0, 0);
+	}
+	if (active || (!peer->inbound_connected && !peer->outbound_connected))
+		peer->tcp_established = false;
+	spin_unlock_bh(&peer->tcp_lock);
+
+	if (partial)
+		kfree_skb(partial);
+	if (active) {
+		spin_lock_bh(&peer->send_queue_lock);
+		__skb_queue_purge(&peer->send_queue);
+		spin_unlock_bh(&peer->send_queue_lock);
+	}
+	kernel_sock_shutdown(socket, SHUT_RDWR);
+	sock_release(socket);
+	return 0;
+}
+
 
 
 void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool inbound)
@@ -1038,6 +1193,9 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 {
 	struct socket *outbound, *inbound;
 	struct sock *outbound_sk, *inbound_sk;
+	bool quarantine_peer = false;
+	bool teardown_failed = false;
+	int ret;
 
 	if (!peer || IS_ERR(peer))
 		return;
@@ -1048,6 +1206,7 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 	peer->tcp_outbound_remove_scheduled = true;
 	peer->tcp_outbound_remove_socket = peer->outbound_socket;
 	peer->tcp_inbound_remove_scheduled = true;
+	peer->tcp_inbound_remove_socket = peer->inbound_socket;
 	spin_unlock_bh(&peer->tcp_lock);
 
 	/* Removal workers own socket destruction. Drain them before reading a
@@ -1058,6 +1217,9 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 	cancel_delayed_work_sync(&peer->tcp_retry_work);
 	cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);
 	cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);
+	cancel_work_sync(&peer->tcp_bootstrap_work);
+	cancel_work_sync(&peer->tcp_promotion_work);
+	mutex_lock(&peer->tcp_socket_lock);
 
 	/* A removal worker that was already running can publish its completion
 	 * while the cancellation waits. Reassert the stop claims before socket
@@ -1067,6 +1229,7 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 	peer->tcp_outbound_remove_scheduled = true;
 	peer->tcp_outbound_remove_socket = peer->outbound_socket;
 	peer->tcp_inbound_remove_scheduled = true;
+	peer->tcp_inbound_remove_socket = peer->inbound_socket;
 	outbound = peer->outbound_socket;
 	inbound = peer->inbound_socket;
 	spin_unlock_bh(&peer->tcp_lock);
@@ -1097,21 +1260,46 @@ void wg_tcp_peer_stop(struct wg_peer *peer)
 	__skb_queue_purge(&peer->send_queue);
 	spin_unlock_bh(&peer->send_queue_lock);
 
-	wg_reset_tcp_socket_callbacks(peer, false);
-	wg_reset_tcp_socket_callbacks(peer, true);
-	wg_clean_peer_socket(peer, true, false, false);
-	wg_clean_peer_socket(peer, true, false, true);
+	if (outbound) {
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, outbound);
+		if (!ret)
+			ret = wg_release_peer_socket_locked(peer, outbound);
+		if (ret)
+			teardown_failed = true;
+	}
+	if (inbound && inbound != outbound) {
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, inbound);
+		if (!ret)
+			ret = wg_release_peer_socket_locked(peer, inbound);
+		if (ret)
+			teardown_failed = true;
+	}
+	mutex_unlock(&peer->tcp_socket_lock);
+	if (WARN_ON_ONCE(teardown_failed)) {
+		pr_err("WireGuard: TCP peer teardown retained an owned socket\n");
+		spin_lock_bh(&peer->tcp_lock);
+		if (!peer->tcp_teardown_quarantined) {
+			peer->tcp_teardown_quarantined = true;
+			quarantine_peer = true;
+		}
+		spin_unlock_bh(&peer->tcp_lock);
+		if (quarantine_peer)
+			wg_peer_get(peer);
+	}
 
 	spin_lock_bh(&peer->tcp_lock);
-	peer->tcp_established = false;
-	peer->tcp_pending = false;
-	peer->tcp_connecting = false;
-	peer->tcp_reconnect_requested = false;
-	peer->inbound_connected = false;
-	peer->outbound_connected = false;
-	peer->tcp_outbound_remove_scheduled = false;
-	peer->tcp_outbound_remove_socket = NULL;
-	peer->tcp_inbound_remove_scheduled = false;
+	if (!teardown_failed) {
+		peer->tcp_established = false;
+		peer->tcp_pending = false;
+		peer->tcp_connecting = false;
+		peer->tcp_reconnect_requested = false;
+		peer->inbound_connected = false;
+		peer->outbound_connected = false;
+		peer->tcp_outbound_remove_scheduled = false;
+		peer->tcp_outbound_remove_socket = NULL;
+		peer->tcp_inbound_remove_scheduled = false;
+		peer->tcp_inbound_remove_socket = NULL;
+	}
 	spin_unlock_bh(&peer->tcp_lock);
 }
 
@@ -1225,7 +1413,6 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 		struct wg_peer *new_temp_peer = NULL;
 	        struct endpoint new_endpoint;
 		struct wg_tcp_socket_list_entry *socket_iter = NULL;
-		struct wg_socket_data *socket_data = NULL; /* New structure for sk_user_data */
 		struct socket *old_pending_socket = NULL;
 
 		/* BUG FIX: reset found at the start of each iteration —
@@ -1345,23 +1532,9 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 			new_temp_peer = wg_temp_peer_create(wg);
 			wg_dbg("wg_tcp_listener_worker created temp peer for inbound new connection temp_peer=%px\n", new_temp_peer);
 			if (!IS_ERR(new_temp_peer) && new_temp_peer) {
+				mutex_lock(&new_temp_peer->tcp_socket_lock);
 				new_temp_peer->peer_socket = new_peer_connection;
 				new_temp_peer->inbound_socket = new_peer_connection;
-				/* Allocate memory for the new socket data structure */
-				socket_data = kzalloc(sizeof(*socket_data), GFP_KERNEL);
-				if (!socket_data) {
-					pr_err("Failed to allocate memory for socket_data\n");
-					wg_destroy_temp_peer(new_temp_peer);
-					continue;
-				}
-
-				/* Initialize the socket data with the device and the temp peer */
-				socket_data->device = wg;
-				socket_data->peer = new_temp_peer;
-				socket_data->inbound = true;
-
-				/* Set the socket data as sk_user_data */
-				new_peer_connection->sk->sk_user_data = socket_data;
 
 				wg_get_endpoint_from_socket(new_peer_connection, &new_temp_peer->tcp_reply_endpoint);
 				new_temp_peer->endpoint = new_temp_peer->tcp_reply_endpoint;
@@ -1379,16 +1552,19 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 				 */
 				new_temp_peer->peer_endpoint_set = false;
 
-				if (wg_add_tcp_socket_to_list(wg, new_peer_connection,
-							      new_temp_peer)) {
+				err = wg_setup_tcp_socket_callbacks(
+					new_temp_peer, new_peer_connection, true);
+				if (err) {
+					mutex_unlock(&new_temp_peer->tcp_socket_lock);
 					wg_destroy_temp_peer(new_temp_peer);
 					continue;
 				}
-				/*
-				 * Authenticate pending traffic before promoting
-				 * the peer.
-				 */
-				wg_setup_tcp_socket_callbacks(new_temp_peer, true);
+				if (wg_add_tcp_socket_to_list(wg, new_peer_connection,
+							      new_temp_peer)) {
+					mutex_unlock(&new_temp_peer->tcp_socket_lock);
+					wg_destroy_temp_peer(new_temp_peer);
+					continue;
+				}
 				if (!skb_queue_empty(&new_peer_connection->sk->sk_receive_queue)) {
 					wg_dbg("wg_tcp_listener_worker calling wg_tcp_data_ready() for temp peer\n");
 					wg_tcp_data_ready(new_peer_connection->sk);
@@ -1396,6 +1572,7 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 				print_peer_socket_info(new_temp_peer);
 				wg_finish_tcp_connection_init(wg,
 							     new_peer_connection);
+				mutex_unlock(&new_temp_peer->tcp_socket_lock);
 			} else {
 				kernel_sock_shutdown(new_peer_connection, SHUT_RDWR);
 				sock_release(new_peer_connection);
@@ -1726,10 +1903,11 @@ out_net:
 }
 static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 {
-	struct wg_socket_data *socket_data = NULL;
-	struct sock *sk = socket ? socket->sk : NULL;
 	bool queue_reconnect = false;
 	bool owns_socket = false;
+	int detach_ret = 0;
+
+	lockdep_assert_held(&peer->tcp_socket_lock);
 
 	/* A connect callback can publish ESTABLISHED before kernel_connect()
 	 * returns. Claim removal and drain any writer queued in that window before
@@ -1746,35 +1924,40 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	if (owns_socket) {
 		cancel_work_sync(&peer->tcp_read_work);
 		cancel_work_sync(&peer->tcp_write_work);
+		spin_lock_bh(&peer->tcp_lock);
+		spin_lock(&peer->tcp_read_lock);
 		peer->tcp_read_worker_scheduled = false;
+		spin_unlock(&peer->tcp_read_lock);
+		spin_lock(&peer->tcp_write_lock);
 		peer->tcp_write_worker_scheduled = false;
+		spin_unlock(&peer->tcp_write_lock);
+		spin_unlock_bh(&peer->tcp_lock);
 	}
 
 	/* Stop WireGuard callbacks and detach their wrapper while the socket is
 	 * still alive. This waits for any callback already holding callback_lock.
 	 */
-	if (socket && READ_ONCE(peer->outbound_socket) == socket)
-		wg_reset_tcp_socket_callbacks(peer, false);
-	if (sk) {
-		write_lock_bh(&sk->sk_callback_lock);
-		socket_data = sk->sk_user_data;
-		sk->sk_user_data = NULL;
-		write_unlock_bh(&sk->sk_callback_lock);
+	if (owns_socket) {
+		detach_ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);
+		if (!detach_ret)
+			detach_ret = wg_release_peer_socket_locked(peer, socket);
+	}
+	if (detach_ret) {
+		spin_lock_bh(&peer->tcp_lock);
+		peer->tcp_connecting = false;
+		spin_unlock_bh(&peer->tcp_lock);
+		WARN_ON_ONCE(detach_ret);
+		return;
 	}
 
 	/* Publish one coherent disconnected state before releasing the socket.
 	 * Consumers either see this state or the still-live socket above.
 	 */
 	spin_lock_bh(&peer->tcp_lock);
-	if (peer->peer_socket == socket)
-		peer->peer_socket = NULL;
-	if (peer->outbound_socket == socket)
-		peer->outbound_socket = NULL;
 	peer->tcp_connecting = false;
 	peer->tcp_pending = false;
 	peer->tcp_established = false;
 	peer->outbound_connected = false;
-	peer->tcp_outbound_callbacks_set = false;
 	peer->tcp_outbound_remove_socket = NULL;
 	if (peer->tcp_reconnect_requested && !peer->tcp_stopping &&
 	    READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
@@ -1786,15 +1969,9 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	}
 	peer->clean_outbound = false;
 	peer->outbound_timestamp = ktime_set(0, 0);
-	peer->original_outbound_state_change = NULL;
-	peer->original_outbound_write_space = NULL;
-	peer->original_outbound_data_ready = NULL;
-	peer->original_outbound_error_report = NULL;
-	peer->original_outbound_destruct = NULL;
 	spin_unlock_bh(&peer->tcp_lock);
 
-	kfree(socket_data);
-	if (socket)
+	if (socket && !owns_socket)
 		sock_release(socket);
 	if (queue_reconnect) {
 		/* The socket is gone before replacement work can run. Recheck the
@@ -1810,16 +1987,95 @@ static void wg_tcp_connect_unwind(struct wg_peer *peer, struct socket *socket)
 	}
 }
 
+/* Publish the first established observation for one exact outbound carrier.
+ * Both kernel_connect() and the state callback can observe that transition, so
+ * tcp_lock elects exactly one authenticated bootstrap sender.
+ */
+static bool
+wg_tcp_publish_outbound_established_locked(struct wg_peer *peer,
+					   struct socket *socket)
+{
+	bool first_observation;
+
+	lockdep_assert_held(&peer->tcp_lock);
+	if (!socket || peer->peer_socket != socket ||
+	    peer->outbound_socket != socket)
+		return false;
+	first_observation = !peer->tcp_established ||
+			    !peer->outbound_connected;
+	peer->tcp_pending = false;
+	peer->tcp_established = true;
+	peer->outbound_connected = true;
+	if (first_observation)
+		peer->outbound_timestamp = ktime_get();
+	return first_observation;
+}
+
+static void wg_tcp_send_carrier_bootstrap(struct wg_peer *peer,
+					  struct socket *socket)
+{
+	bool is_current;
+
+	/* TCP establishment is not peer authentication. Sending a keepalive
+	 * emits an authenticated record when a key exists, or starts a handshake
+	 * otherwise, allowing the listener to promote its provisional carrier.
+	 */
+	spin_lock_bh(&peer->tcp_lock);
+	is_current = !READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+		     READ_ONCE(peer->device->tcp_cleanup_scheduled) &&
+		     peer->device->transport == WG_TRANSPORT_TCP &&
+		     netif_running(peer->device->dev) &&
+		     !peer->tcp_outbound_remove_scheduled &&
+		     peer->peer_socket == socket &&
+		     peer->outbound_socket == socket && peer->tcp_established &&
+		     peer->outbound_connected;
+	spin_unlock_bh(&peer->tcp_lock);
+	if (is_current)
+		wg_packet_send_keepalive(peer);
+}
+
+static void wg_tcp_queue_carrier_bootstrap(struct wg_peer *peer,
+					    struct socket *socket)
+{
+	spin_lock_bh(&peer->tcp_lock);
+	if (!READ_ONCE(peer->is_dead) && !peer->tcp_stopping &&
+	    peer->peer_socket == socket && peer->outbound_socket == socket) {
+		peer->tcp_bootstrap_socket = socket;
+		queue_work(system_wq, &peer->tcp_bootstrap_work);
+	}
+	spin_unlock_bh(&peer->tcp_lock);
+}
+
+void wg_tcp_bootstrap_worker(struct work_struct *work)
+{
+	struct wg_peer *peer =
+		container_of(work, struct wg_peer, tcp_bootstrap_work);
+	struct socket *socket;
+
+	/* State-change callbacks run with sk_callback_lock_bh held and may not
+	 * enter the Noise send path directly. Move that work to process context
+	 * and serialize the exact carrier with socket teardown.
+	 */
+	mutex_lock(&peer->tcp_socket_lock);
+	spin_lock_bh(&peer->tcp_lock);
+	socket = peer->tcp_bootstrap_socket;
+	peer->tcp_bootstrap_socket = NULL;
+	spin_unlock_bh(&peer->tcp_lock);
+	if (socket)
+		wg_tcp_send_carrier_bootstrap(peer, socket);
+	mutex_unlock(&peer->tcp_socket_lock);
+}
+
 /* Attempt to establish a TCP connection */
 int wg_tcp_connect(struct wg_peer *peer)
 {
-	struct wg_socket_data *socket_data;
 	struct socket *socket = NULL;
 	struct net *net;
 	struct endpoint target;
 	struct sockaddr_storage addr_storage;
 	struct sockaddr *addr = (struct sockaddr *)&addr_storage;
 	unsigned long timeout = 30 * HZ;
+	struct socket *bootstrap_socket = NULL;
 	bool queue_remove = false;
 	bool queue_retry = false;
 	int family;
@@ -1835,6 +2091,7 @@ int wg_tcp_connect(struct wg_peer *peer)
 		pr_err("Invalid state for TCP connection attempt.\n");
 		return -EINVAL;
 	}
+	mutex_lock(&peer->tcp_socket_lock);
 
 	/* One connect attempt must use one coherent target even if an
 	 * authenticated packet or netlink update changes the next retry target.
@@ -1855,7 +2112,8 @@ int wg_tcp_connect(struct wg_peer *peer)
 	if (family != AF_INET && family != AF_INET6) {
 		printk(KERN_ERR "Invalid address family for connection: %d\n",
 		       family);
-		return -EAFNOSUPPORT;
+		ret = -EAFNOSUPPORT;
+		goto out_unlock;
 	}
 
 	/* tcp_pending is also the connect-attempt ownership claim. It prevents
@@ -1870,11 +2128,13 @@ int wg_tcp_connect(struct wg_peer *peer)
 	    peer->inbound_connected || peer->outbound_connected ||
 	    peer->tcp_outbound_remove_scheduled) {
 		spin_unlock_bh(&peer->tcp_lock);
-		return 0;
+		ret = 0;
+		goto out_unlock;
 	}
 	if (peer->peer_socket || peer->outbound_socket) {
 		spin_unlock_bh(&peer->tcp_lock);
-		return -EALREADY;
+		ret = -EALREADY;
+		goto out_unlock;
 	}
 	peer->tcp_connecting = true;
 	peer->tcp_pending = true;
@@ -1950,27 +2210,15 @@ int wg_tcp_connect(struct wg_peer *peer)
 	peer->outbound_socket = socket;
 	spin_unlock_bh(&peer->tcp_lock);
 
-	wg_dbg("Allocating socket data\n");
-	socket_data = kzalloc(sizeof(*socket_data), GFP_KERNEL);
-	if (!socket_data) {
-		pr_err("Failed to allocate memory for wg_socket_data\n");
-		ret = -ENOMEM;
-		goto fail;
-	}
-	socket_data->device = peer->device;
-	socket_data->peer = peer;
-	socket_data->inbound = false;
-	write_lock_bh(&socket->sk->sk_callback_lock);
-	socket->sk->sk_user_data = socket_data;
-	write_unlock_bh(&socket->sk->sk_callback_lock);
-
 	/* Print diagnostic information about the created socket */
 	wg_dbg("Socket created, sk=%px, family=%d, state=%d\n",
 	       socket->sk, socket->sk->sk_family, socket->sk->sk_state);
 
 	/* Set up the socket callbacks before initiating the connect */
 	wg_dbg("Setting up socket callbacks\n");
-	wg_setup_tcp_socket_callbacks(peer, false); /* set outbound callbacks */
+	ret = wg_setup_tcp_socket_callbacks(peer, socket, false);
+	if (ret)
+		goto fail;
 
 	/* Set socket timeouts for send and receive operations */
 	wg_dbg("Setting socket timeouts\n");
@@ -2048,12 +2296,17 @@ int wg_tcp_connect(struct wg_peer *peer)
 	    peer->device->transport != WG_TRANSPORT_TCP ||
 	    !netif_running(peer->device->dev) ||
 	    peer->peer_socket != socket || peer->outbound_socket != socket ||
-	    READ_ONCE(socket->sk->sk_state) == TCP_CLOSE) {
+	    (READ_ONCE(socket->sk->sk_state) != TCP_SYN_SENT &&
+	     READ_ONCE(socket->sk->sk_state) != TCP_SYN_RECV &&
+	     READ_ONCE(socket->sk->sk_state) != TCP_ESTABLISHED)) {
 		spin_unlock_bh(&peer->tcp_lock);
 		ret = -ECONNABORTED;
 		goto fail;
 	}
 	peer->tcp_connecting = false;
+	if (READ_ONCE(socket->sk->sk_state) == TCP_ESTABLISHED &&
+	    wg_tcp_publish_outbound_established_locked(peer, socket))
+		bootstrap_socket = socket;
 	if (peer->tcp_reconnect_requested && !peer->tcp_stopping &&
 	    !peer->tcp_outbound_remove_scheduled) {
 		peer->tcp_outbound_remove_scheduled = true;
@@ -2073,66 +2326,38 @@ int wg_tcp_connect(struct wg_peer *peer)
 	spin_unlock_bh(&peer->tcp_lock);
 
 	wg_dbg("Exiting function wg_tcp_connect\n");
+	mutex_unlock(&peer->tcp_socket_lock);
+	if (bootstrap_socket)
+		wg_tcp_queue_carrier_bootstrap(peer, bootstrap_socket);
 	return 0;
 
 fail:
 	wg_tcp_connect_unwind(peer, socket);
 	wg_dbg("Exiting function wg_tcp_connect with error: %d\n", ret);
+out_unlock:
+	mutex_unlock(&peer->tcp_socket_lock);
 	return ret;
 }
 
 /* Function to release and clean up an old peer TCP connection - clean the active connection */
 static void __maybe_unused wg_release_peer_tcp_connection(struct wg_peer *peer)
 {
-	bool inbound = false;
-	wg_dbg("Entering function wg_release_old_peer_tcp_connection\n");
-	if (unlikely(!peer) || unlikely(IS_ERR(peer))){
-		wg_dbg("Exiting function wg_release_old_peer_tcp_connection - no peer to tear down.\n");
-		goto out;
-	}
-	print_peer_socket_info(peer);
-	if (!peer->peer_socket || !(peer->tcp_established || peer->tcp_pending)){
-		wg_dbg("Exiting function wg_release_old_peer_tcp_connection - no connection to tear down.\n");
-		goto out;
-	}
-	if (peer->peer_socket == peer->inbound_socket)
-		inbound = true;
-	/* Reset socket callbacks and release the socket */
-	wg_reset_tcp_socket_callbacks(peer, inbound);
+	struct socket *socket;
+	int ret;
 
-	/* Perform a graceful shutdown and release the socket */
-	kernel_sock_shutdown(peer->peer_socket, SHUT_RDWR);
-	sock_release(peer->peer_socket);
-
-	/* Lock to safely modify the peer's TCP connection state */
+	if (!peer || IS_ERR(peer))
+		return;
+	mutex_lock(&peer->tcp_socket_lock);
 	spin_lock_bh(&peer->tcp_lock);
-	peer->peer_socket = NULL;
-	if (inbound)
-		peer->inbound_socket = NULL;
-	else
-		peer->outbound_socket = NULL;
-	/* Clear TCP connection flags */
-	peer->tcp_pending = false;  /* BUG FIX: was true — blocked wg_tcp_connect() from reconnecting */
-	peer->tcp_established = false;
+	socket = peer->peer_socket;
 	spin_unlock_bh(&peer->tcp_lock);
-	/* flush any partial data before we switch and free the held buffer */
-	if (peer->partial_skb) {
-                kfree_skb(peer->partial_skb);
-		peer->partial_skb = NULL;
+	if (socket) {
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);
+		if (!ret)
+			ret = wg_release_peer_socket_locked(peer, socket);
+		WARN_ON_ONCE(ret);
 	}
-
-	/* Check if a retry is scheduled and clean up */
-	if (peer->tcp_retry_scheduled) {
-	peer->tcp_retry_scheduled = false;
-	cancel_delayed_work_sync(&peer->tcp_retry_work);
-	}
-
-	/* Clean up packet queues */
-	skb_queue_purge(&peer->send_queue);
-
-
-out:
-	wg_dbg("Exiting function wg_release_old_peer_tcp_connection\n");
+	mutex_unlock(&peer->tcp_socket_lock);
 }
 
 
@@ -2183,6 +2408,8 @@ void wg_tcp_state_change(struct sock *sk)
 	struct wg_device *cleanup_device = NULL;
 	struct wg_socket_data *socket_data = NULL;
 	struct wg_peer *peer = NULL;
+	struct socket *bootstrap_socket = NULL;
+	void (*original_state_change)(struct sock *) = NULL;
 	bool cleanup_temp = false;
 	bool cancel_retry = false;
 	bool queue_inbound_remove = false;
@@ -2193,8 +2420,10 @@ void wg_tcp_state_change(struct sock *sk)
 	/* Check if the socket is valid */
 	if (!sk || IS_ERR(sk)) {
 		pr_err("wg_tcp_state_change: Invalid socket passed to the function\n");
-		goto out;
+		goto done;
 	}
+
+	read_lock_bh(&sk->sk_callback_lock);
 
 	/* Retrieve the socket user data */
 	socket_data = sk->sk_user_data;
@@ -2202,19 +2431,22 @@ void wg_tcp_state_change(struct sock *sk)
 	/* Check if socket_data is valid */
 	if (!socket_data || IS_ERR(socket_data)) {
 		pr_err("wg_tcp_state_change: Invalid or NULL socket_data for socket %px\n", sk);
-		goto out;
+		goto unlock;
 	}
 
 	/* Retrieve the peer from the socket_data */
 	peer = socket_data->peer;
 
 	/* Check if peer is valid or being torn down */
-	if (!peer || IS_ERR(peer) || READ_ONCE(peer->is_dead) ||
+	if (!peer || IS_ERR(peer))
+		goto unlock;
+	original_state_change = socket_data->original_state_change;
+	if (READ_ONCE(peer->is_dead) ||
 	    (!socket_data->inbound &&
 	     READ_ONCE(peer->tcp_outbound_remove_scheduled)) ||
 	    (socket_data->inbound &&
 	     READ_ONCE(peer->tcp_inbound_remove_scheduled))) {
-		goto out;
+		goto unlock;
 	}
 	print_peer_socket_info(peer);
 	/* Diagnostic information about the current state */
@@ -2298,12 +2530,10 @@ void wg_tcp_state_change(struct sock *sk)
 				break;
 			spin_lock_bh(&peer->tcp_lock);
 			if (peer->outbound_socket &&
-			    peer->outbound_socket->sk == sk &&
-			    !peer->tcp_established && !peer->outbound_connected) {
-				peer->tcp_pending = false;
-			peer->tcp_established = true;
-				peer->outbound_connected = true;
-				peer->outbound_timestamp = ktime_get();
+			    peer->outbound_socket->sk == sk) {
+				if (wg_tcp_publish_outbound_established_locked(
+					    peer, peer->outbound_socket))
+					bootstrap_socket = peer->outbound_socket;
 				if (peer->tcp_retry_scheduled) {
 					peer->tcp_retry_scheduled = false;
 					cancel_retry = true;
@@ -2339,6 +2569,8 @@ void wg_tcp_state_change(struct sock *sk)
 				peer->inbound_connected = false;
 				if (!peer->tcp_inbound_remove_scheduled) {
 					peer->tcp_inbound_remove_scheduled = true;
+					peer->tcp_inbound_remove_socket =
+						peer->inbound_socket;
 					queue_inbound_remove = true;
 				}
 			} else {
@@ -2369,19 +2601,11 @@ void wg_tcp_state_change(struct sock *sk)
 		default:
 			break;
 	}
-out:
-	/* Work that frees sk_user_data is queued only after the original callback
-	 * has run, so this callback keeps a stable wrapper for its whole lifetime.
-	 */
-	if (sk && socket_data && peer) {
-		if (socket_data->inbound) {
-			if (peer->original_inbound_state_change)
-				peer->original_inbound_state_change(sk);
-		} else {
-			if (peer->original_outbound_state_change)
-				peer->original_outbound_state_change(sk);
-		}
-	}
+unlock:
+	if (original_state_change)
+		original_state_change(sk);
+	if (bootstrap_socket)
+		wg_tcp_queue_carrier_bootstrap(peer, bootstrap_socket);
 	if (peer && (queue_inbound_remove || queue_outbound_remove)) {
 		/* The original callback can overlap device or peer stop. Recheck the
 		 * barrier and publish work while holding tcp_lock so a completed
@@ -2392,6 +2616,8 @@ out:
 		    READ_ONCE(peer->device->tcp_cleanup_scheduled)) {
 			if (queue_inbound_remove &&
 			    peer->tcp_inbound_remove_scheduled &&
+			    peer->tcp_inbound_remove_socket ==
+				    peer->inbound_socket &&
 			    peer->inbound_socket &&
 			    peer->inbound_socket->sk == sk)
 				mod_delayed_work(system_wq,
@@ -2409,6 +2635,8 @@ out:
 	}
 	if (cleanup_temp && READ_ONCE(cleanup_device->tcp_cleanup_scheduled))
 		mod_delayed_work(system_wq, &cleanup_device->tcp_cleanup_work, 0);
+	read_unlock_bh(&sk->sk_callback_lock);
+done:
 	wg_dbg("Exiting function wg_tcp_state_change\n");
 }
 
@@ -2676,7 +2904,8 @@ static bool wg_validate_header_checksum(const struct wg_tcp_encap_header *hdr)
 }
 
 
-static int wg_tcp_send_frame(struct socket *sock, const struct sk_buff *frame)
+static int wg_tcp_send_frame(struct wg_peer *peer, struct socket *sock,
+			     const struct sk_buff *frame)
 {
 	size_t send_len = wg_tcp_test_send_len(frame->len);
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL };
@@ -2689,7 +2918,10 @@ static int wg_tcp_send_frame(struct socket *sock, const struct sk_buff *frame)
 #if WG_TCP_DIAG_ENABLED
 	wg_tcp_diag_dump_sock(sock->sk, "tx:frame:pre", 0, frame->len);
 #endif
-	sent = kernel_sendmsg(sock, &msg, &vec, 1, send_len);
+	if (wg_tcp_test_take_fatal_send(peer, sock))
+		sent = -EPIPE;
+	else
+		sent = kernel_sendmsg(sock, &msg, &vec, 1, send_len);
 #if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
 	if (sent > 0 && (unsigned int)sent < frame->len)
 		atomic64_inc(&wg_tcp_test_short_writes);
@@ -2711,6 +2943,54 @@ static void wg_tcp_arm_write_space(struct socket *socket)
 	 * scheduled claim, as tcp_poll() does when arming EPOLLOUT.
 	 */
 	smp_mb__after_atomic();
+}
+
+static void wg_tcp_fail_exact_socket(struct wg_peer *peer,
+				     struct socket *socket)
+{
+	struct wg_device *cleanup_device = NULL;
+	bool queue_outbound_remove = false;
+	bool queue_temp_cleanup = false;
+
+	if (!peer || IS_ERR(peer) || !peer->device || !socket)
+		return;
+	spin_lock_bh(&peer->tcp_lock);
+	if (peer->peer_socket != socket)
+		goto unlock;
+	if (peer->temp_peer) {
+		if (peer->inbound_socket != socket)
+			goto unlock;
+		WRITE_ONCE(peer->is_dead, true);
+		cleanup_device = peer->device;
+		queue_temp_cleanup =
+			READ_ONCE(cleanup_device->tcp_cleanup_scheduled);
+		goto unlock;
+	}
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    peer->outbound_socket != socket)
+		goto unlock;
+	if (peer->tcp_outbound_remove_scheduled &&
+	    peer->tcp_outbound_remove_socket != socket)
+		goto unlock;
+	peer->outbound_timestamp = ktime_set(0, 0);
+	peer->outbound_connected = false;
+	peer->tcp_pending = false;
+	peer->tcp_established = false;
+	peer->tcp_reconnect_requested = true;
+	if (!peer->tcp_connecting && !peer->tcp_outbound_remove_scheduled) {
+		peer->tcp_outbound_remove_scheduled = true;
+		peer->tcp_outbound_remove_socket = socket;
+		queue_outbound_remove = true;
+	}
+	if (queue_outbound_remove)
+		mod_delayed_work(system_wq, &peer->tcp_outbound_remove_work, 0);
+unlock:
+	spin_unlock_bh(&peer->tcp_lock);
+	if (queue_temp_cleanup &&
+	    READ_ONCE(cleanup_device->tcp_cleanup_scheduled))
+		mod_delayed_work(system_wq, &cleanup_device->tcp_cleanup_work, 0);
 }
 
 void wg_tcp_write_worker(struct work_struct *work)
@@ -2792,12 +3072,13 @@ void wg_tcp_write_worker(struct work_struct *work)
 		/* The skb already contains the complete stream frame. A short write
 		 * advances that exact byte sequence; it must never be reframed.
 		 */
-		sent = wg_tcp_send_frame(socket, skb);
+		sent = wg_tcp_send_frame(peer, socket, skb);
 		if (sent > 0) {
 			if ((unsigned int)sent > skb->len) {
 				pr_err("wg_tcp_write_worker: invalid write count %d/%u\n",
 				       sent, skb->len);
 				kfree_skb(skb);
+				wg_tcp_fail_exact_socket(peer, socket);
 				break;
 			}
 			skb_pull(skb, sent);
@@ -2816,7 +3097,7 @@ void wg_tcp_write_worker(struct work_struct *work)
 			atomic64_inc(&wg_tcp_stats_tx_packets);
 #endif
 			kfree_skb(skb);
-		} else if (!sent || sent == -EAGAIN || sent == -EWOULDBLOCK) {
+		} else if (sent == -EAGAIN || sent == -EWOULDBLOCK) {
 #if WG_TCP_DIAG_ENABLED
 			if (sent == -EAGAIN || sent == -EWOULDBLOCK)
 				atomic64_inc(&wg_tcp_stats_tx_eagain);
@@ -2828,14 +3109,18 @@ void wg_tcp_write_worker(struct work_struct *work)
 			wg_tcp_arm_write_space(socket);
 			break;
 		} else {
-			pr_err("wg_tcp_write_worker: send error=%d peer=%llu frame_len=%u\n",
-			       sent, peer->internal_id, skb->len);
+			pr_debug_ratelimited("WireGuard: terminal TCP send error=%d peer=%llu frame_len=%u\n",
+					     sent, peer->internal_id, skb->len);
+#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)
+			atomic64_inc(&wg_tcp_test_fatal_send_errors);
+#endif
 #if WG_TCP_DIAG_ENABLED
 			wg_tcp_diag_dump_sock(sk, "tx:write_worker:error", sent,
 					      skb->len);
 			atomic64_inc(&wg_tcp_stats_tx_errors);
 #endif
 			kfree_skb(skb);
+			wg_tcp_fail_exact_socket(peer, socket);
 			break;
 		}
 	}
@@ -3590,30 +3875,31 @@ out:
 
 void wg_tcp_data_ready(struct sock *sk)
 {
+	struct wg_socket_data *socket_data;
+	struct wg_peer *peer;
+	void (*original_data_ready)(struct sock *) = NULL;
+
 	wg_dbg("Entering function wg_tcp_data_ready\n");
 
-	/* Ensure the socket is valid */
 	if (!sk || IS_ERR(sk)) {
 		printk(KERN_ERR "wg_tcp_data_ready: Invalid socket\n");
-		goto out;
+		goto done;
 	}
 
-	/* Retrieve the socket user data */
-	struct wg_socket_data *socket_data = sk->sk_user_data;
+	read_lock_bh(&sk->sk_callback_lock);
+	socket_data = sk->sk_user_data;
 
-	/* Check if socket_data is valid */
 	if (!socket_data || IS_ERR(socket_data)) {
 		printk(KERN_ERR "wg_tcp_data_ready: Invalid or NULL socket_data\n");
-		goto out;
+		goto unlock;
 	}
 
-	/* Retrieve the peer from the socket_data */
-	struct wg_peer *peer = socket_data->peer;
-
-	/* Check if peer is valid or being torn down */
-	if (!peer || IS_ERR(peer) || READ_ONCE(peer->is_dead)) {
-		goto out;
-	}
+	peer = socket_data->peer;
+	if (!peer || IS_ERR(peer))
+		goto unlock;
+	original_data_ready = socket_data->original_data_ready;
+	if (READ_ONCE(peer->is_dead))
+		goto unlock;
 	if (peer->temp_peer)
 		wg_touch_tcp_connection(peer);
 
@@ -3643,43 +3929,37 @@ void wg_tcp_data_ready(struct sock *sk)
 	spin_unlock(&peer->tcp_read_lock);
 	spin_unlock_bh(&peer->tcp_lock);
 
-out:
-	/* BUG FIX: guard against NULL sk, sk_user_data, or peer —
-	 * early goto out jumps here when any of these are invalid
-	 */
-	if (sk && sk->sk_user_data) {
-		struct wg_socket_data *sd = (struct wg_socket_data *)sk->sk_user_data;
-		struct wg_peer *p = sd->peer;
-		if (p) {
-			if (sd->inbound) {
-				if (p->original_inbound_data_ready)
-					p->original_inbound_data_ready(sk);
-			} else {
-				if (p->original_outbound_data_ready)
-					p->original_outbound_data_ready(sk);
-			}
-		}
-	}
+unlock:
+	if (original_data_ready)
+		original_data_ready(sk);
+	read_unlock_bh(&sk->sk_callback_lock);
+done:
 	wg_dbg("Exiting function wg_tcp_data_ready\n");
 }
 
 void wg_tcp_write_space(struct sock *sk)
 {
-	wg_dbg("Entering function wg_tcp_write_space\n");
-	struct wg_peer *peer;
 	struct wg_socket_data *socket_data;
-	if (!sk)
-		goto out;
+	struct wg_peer *peer;
+	void (*original_write_space)(struct sock *) = NULL;
+
+	wg_dbg("Entering function wg_tcp_write_space\n");
+	if (!sk || IS_ERR(sk))
+		goto done;
+
+	read_lock_bh(&sk->sk_callback_lock);
 	socket_data = sk->sk_user_data;
 	if (!socket_data || IS_ERR(socket_data))
-		goto out;
+		goto unlock;
 	peer = socket_data->peer;
-	if (!peer || IS_ERR(peer) || READ_ONCE(peer->is_dead)) {
-		goto out;
-	}
+	if (!peer || IS_ERR(peer))
+		goto unlock;
+	original_write_space = socket_data->original_write_space;
+	if (READ_ONCE(peer->is_dead))
+		goto unlock;
 	if (!peer->tcp_write_wq) {
 		wg_dbg("wg_tcp_write_space peer->tcp_write_wq is NULL\n");
-		goto out;
+		goto unlock;
 	}
 
 	wg_dbg("wg_tcp_write_space scheduling serial writer\n");
@@ -3689,159 +3969,183 @@ void wg_tcp_write_space(struct sock *sk)
 	wg_dbg("wg_tcp_write_space: schedule write worker peer=%llu sk=%px writeq=%u\n",
 		 peer->internal_id, sk, skb_queue_len(&sk->sk_write_queue));
 	wg_tcp_schedule_write(peer);
-out:
-	/* BUG FIX: guard against NULL sk, sk_user_data, or peer —
-	 * early goto out jumps here when any of these are invalid
-	 */
-	if (sk && sk->sk_user_data) {
-		struct wg_socket_data *sd = (struct wg_socket_data *)sk->sk_user_data;
-		struct wg_peer *p = sd->peer;
-		if (p) {
-			if (sd->inbound) {
-				if (p->original_inbound_write_space)
-					p->original_inbound_write_space(sk);
-			} else {
-				if (p->original_outbound_write_space)
-					p->original_outbound_write_space(sk);
-			}
-		}
-	}
+unlock:
+	if (original_write_space)
+		original_write_space(sk);
+	read_unlock_bh(&sk->sk_callback_lock);
+done:
 	wg_dbg("Exiting function wg_tcp_write_space\n");
 }
 
-void wg_setup_tcp_socket_callbacks(struct wg_peer *peer, bool inbound)
+static int wg_setup_tcp_socket_callbacks(struct wg_peer *peer,
+					 struct socket *socket, bool inbound)
 {
-	wg_dbg("Entering function wg_setup_tcp_socket_callbacks\n");
-	if (!peer || IS_ERR(peer)) {
-		wg_dbg("Exiting function wg_setup_tcp_socket_callbacks, no peer.\n");
-		return;
-	}
-	struct socket *target_socket = inbound ? peer->inbound_socket : peer->outbound_socket;
-
-	if (!target_socket || (inbound ? peer->tcp_inbound_callbacks_set : peer->tcp_outbound_callbacks_set)) {
-		wg_dbg("Exiting function wg_setup_tcp_socket_callbacks, nothing to do.\n");
-		return;
-	}
-
-	struct sock *sk = target_socket->sk;
 	struct wg_socket_data *socket_data;
+	struct wg_socket_data *installed, **owner;
+	struct sock *sk;
+	bool *callbacks_set;
+	int ret = 0;
 
-	if (inbound)
-		peer->tcp_inbound_callbacks_set = true;
-	else
-		peer->tcp_outbound_callbacks_set = true;
+	if (!peer || IS_ERR(peer) || !peer->device || !socket || !socket->sk)
+		return -EINVAL;
+	lockdep_assert_held(&peer->tcp_socket_lock);
 
-	/* Acquire lock to safely modify socket callbacks */
+	sk = socket->sk;
+	callbacks_set = inbound ? &peer->tcp_inbound_callbacks_set :
+				  &peer->tcp_outbound_callbacks_set;
+	owner = inbound ? &peer->tcp_inbound_socket_data :
+			  &peer->tcp_outbound_socket_data;
+	socket_data = kzalloc(sizeof(*socket_data), GFP_KERNEL);
+	if (!socket_data)
+		return -ENOMEM;
+	if (!try_module_get(THIS_MODULE)) {
+		kfree(socket_data);
+		return -ENODEV;
+	}
+
 	write_lock_bh(&sk->sk_callback_lock);
-
-	/* Check if sk_user_data is already allocated */
-	socket_data = sk->sk_user_data;
-	if (socket_data) {
-		/* If already allocated, update the peer */
-		wg_dbg("wg_setup_tcp_socket_callbacks: sk_user_data already exists, updating peer.\n");
-		socket_data->device = peer->device;
-		socket_data->peer = peer;
-	} else {
-		/* Allocate memory for wg_socket_data */
-		socket_data = kzalloc(sizeof(*socket_data), GFP_ATOMIC);  /* BUG FIX: GFP_KERNEL can sleep; called under write_lock_bh */
-		if (!socket_data) {
-			printk(KERN_ERR "Failed to allocate memory for wg_socket_data\n");
-			write_unlock_bh(&sk->sk_callback_lock);
-			return;
-		}
-
-		/* Initialize wg_socket_data with device and peer */
-		socket_data->device = peer->device;
-		socket_data->peer = peer;
-		socket_data->inbound = inbound;
-
-		/* Set sk_user_data to the newly allocated socket_data */
-		sk->sk_user_data = socket_data;
+	spin_lock_bh(&peer->tcp_lock);
+	installed = sk->sk_user_data;
+	if ((inbound ? peer->inbound_socket : peer->outbound_socket) != socket ||
+	    READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->device->transport != WG_TRANSPORT_TCP ||
+	    (inbound ? peer->tcp_inbound_remove_scheduled :
+		       peer->tcp_outbound_remove_scheduled)) {
+		ret = -ESHUTDOWN;
+		goto unlock;
+	}
+	if (*callbacks_set) {
+		ret = *owner && installed == *owner &&
+		      (*owner)->peer == peer && (*owner)->socket == socket &&
+		      (*owner)->inbound == inbound &&
+		      sk->sk_state_change == wg_tcp_state_change &&
+		      sk->sk_write_space == wg_tcp_write_space &&
+		      sk->sk_data_ready == wg_tcp_data_ready ? 0 : -EUCLEAN;
+		goto unlock;
+	}
+	if (*owner) {
+		ret = -EUCLEAN;
+		goto unlock;
+	}
+	if (installed) {
+		ret = -EBUSY;
+		goto unlock;
 	}
 
-	/* Save the original callbacks based on the direction (inbound or outbound) */
-	if (inbound) {
-		peer->original_inbound_state_change = sk->sk_state_change;
-		peer->original_inbound_write_space = sk->sk_write_space;
-		peer->original_inbound_data_ready = sk->sk_data_ready;
-	} else {
-		peer->original_outbound_state_change = sk->sk_state_change;
-		peer->original_outbound_write_space = sk->sk_write_space;
-		peer->original_outbound_data_ready = sk->sk_data_ready;
-	}
-
-	/* Assign new callbacks and pass `peer` as user data for callback functions */
+	socket_data->device = peer->device;
+	socket_data->peer = peer;
+	socket_data->socket = socket;
+	socket_data->inbound = inbound;
+	socket_data->original_state_change = sk->sk_state_change;
+	socket_data->original_write_space = sk->sk_write_space;
+	socket_data->original_data_ready = sk->sk_data_ready;
+	sk->sk_user_data = socket_data;
+	*owner = socket_data;
 	sk->sk_state_change = wg_tcp_state_change;
 	sk->sk_write_space = wg_tcp_write_space;
 	sk->sk_data_ready = wg_tcp_data_ready;
-
+	*callbacks_set = true;
+	socket_data = NULL;
+unlock:
+	spin_unlock_bh(&peer->tcp_lock);
 	write_unlock_bh(&sk->sk_callback_lock);
-	wg_dbg("Exiting function wg_setup_tcp_socket_callbacks\n");
+	if (socket_data) {
+		module_put(THIS_MODULE);
+		kfree(socket_data);
+	}
+	return ret;
 }
 
-void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound)
+static int wg_reset_tcp_socket_callbacks(struct wg_peer *peer,
+					 struct socket *socket, bool inbound)
 {
-	wg_dbg("Entering function wg_reset_tcp_socket_callbacks\n");
+	struct wg_socket_data *socket_data = NULL, **owner;
 	struct sock *sk;
-	struct socket *target_socket;
+	bool *callbacks_set;
+	int ret = 0;
 
-	/* BUG FIX: null check peer BEFORE dereferencing it */
-	if (!peer || IS_ERR(peer)) {
-		wg_dbg("Exiting function wg_reset_tcp_socket_callbacks, no peer.\n");
-		return;
-	}
-	target_socket = inbound ? peer->inbound_socket : peer->outbound_socket;
-	if (!target_socket || (inbound ? !peer->tcp_inbound_callbacks_set : !peer->tcp_outbound_callbacks_set)) {
-		wg_dbg("Exiting function wg_reset_tcp_socket_callbacks, nothing to do.\n");
-		return;
-	}
+	if (!peer || IS_ERR(peer) || !socket || !socket->sk)
+		return -EINVAL;
+	lockdep_assert_held(&peer->tcp_socket_lock);
 
-	if (inbound)
-		peer->tcp_inbound_callbacks_set = false;
-	else
-		peer->tcp_outbound_callbacks_set = false;
-
-	sk = target_socket->sk;
-
-	/* Lock the socket to safely update callback pointers */
+	sk = socket->sk;
+	callbacks_set = inbound ? &peer->tcp_inbound_callbacks_set :
+				  &peer->tcp_outbound_callbacks_set;
+	owner = inbound ? &peer->tcp_inbound_socket_data :
+			  &peer->tcp_outbound_socket_data;
 	write_lock_bh(&sk->sk_callback_lock);
-
-	/* Check if we previously saved original callbacks and restore them */
-	if (inbound) {
-		if (peer->original_inbound_state_change) {
-			sk->sk_state_change = peer->original_inbound_state_change;
-			peer->original_inbound_state_change = NULL;
-		}
-		if (peer->original_inbound_write_space) {
-			sk->sk_write_space = peer->original_inbound_write_space;
-			peer->original_inbound_write_space = NULL;
-		}
-		if (peer->original_inbound_data_ready) {
-			sk->sk_data_ready = peer->original_inbound_data_ready;
-			peer->original_inbound_data_ready = NULL;
-		}
-	} else {
-		if (peer->original_outbound_state_change) {
-			sk->sk_state_change = peer->original_outbound_state_change;
-			peer->original_outbound_state_change = NULL;
-		}
-		if (peer->original_outbound_write_space) {
-			sk->sk_write_space = peer->original_outbound_write_space;
-			peer->original_outbound_write_space = NULL;
-		}
-		if (peer->original_outbound_data_ready) {
-			sk->sk_data_ready = peer->original_outbound_data_ready;
-			peer->original_outbound_data_ready = NULL;
-		}
+	spin_lock_bh(&peer->tcp_lock);
+	if ((inbound ? peer->inbound_socket : peer->outbound_socket) != socket) {
+		ret = -ESTALE;
+		goto unlock;
+	}
+	if (!*callbacks_set) {
+		if (WARN_ON_ONCE(*owner ||
+				 sk->sk_state_change == wg_tcp_state_change ||
+				 sk->sk_write_space == wg_tcp_write_space ||
+				 sk->sk_data_ready == wg_tcp_data_ready))
+			ret = -EUCLEAN;
+		goto unlock;
 	}
 
-	/* Clear the user data to avoid any dangling references */
-	if (sk->sk_user_data)
-		kfree(sk->sk_user_data);
-	sk->sk_user_data = NULL;
-
+	socket_data = *owner;
+	if (WARN_ON_ONCE(!socket_data || socket_data->peer != peer ||
+			 socket_data->socket != socket ||
+			 socket_data->inbound != inbound)) {
+		ret = -EUCLEAN;
+		goto unlock;
+	}
+	if (sk->sk_state_change == wg_tcp_state_change)
+		sk->sk_state_change = socket_data->original_state_change;
+	if (sk->sk_write_space == wg_tcp_write_space)
+		sk->sk_write_space = socket_data->original_write_space;
+	if (sk->sk_data_ready == wg_tcp_data_ready)
+		sk->sk_data_ready = socket_data->original_data_ready;
+	if (sk->sk_user_data == socket_data)
+		sk->sk_user_data = NULL;
+	else
+		WARN_ON_ONCE(1);
+	*owner = NULL;
+	*callbacks_set = false;
+unlock:
+	spin_unlock_bh(&peer->tcp_lock);
 	write_unlock_bh(&sk->sk_callback_lock);
-	wg_dbg("Exiting function wg_reset_tcp_socket_callbacks\n");
+	if (!ret && socket_data) {
+		module_put(THIS_MODULE);
+		kfree(socket_data);
+	}
+	return ret;
+}
+
+static int wg_reset_exact_tcp_socket_callbacks(struct wg_peer *peer,
+					       struct socket *socket)
+{
+	bool inbound_alias, outbound_alias;
+	bool inbound_owned, outbound_owned;
+
+	if (!peer || IS_ERR(peer) || !socket)
+		return -EINVAL;
+	lockdep_assert_held(&peer->tcp_socket_lock);
+
+	spin_lock_bh(&peer->tcp_lock);
+	inbound_alias = peer->inbound_socket == socket;
+	outbound_alias = peer->outbound_socket == socket;
+	inbound_owned = inbound_alias &&
+		(peer->tcp_inbound_callbacks_set || peer->tcp_inbound_socket_data);
+	outbound_owned = outbound_alias &&
+		(peer->tcp_outbound_callbacks_set || peer->tcp_outbound_socket_data);
+	spin_unlock_bh(&peer->tcp_lock);
+
+	if (!inbound_alias && !outbound_alias)
+		return -ESTALE;
+	if (WARN_ON_ONCE(inbound_owned && outbound_owned))
+		return -EUCLEAN;
+	if (inbound_owned)
+		return wg_reset_tcp_socket_callbacks(peer, socket, true);
+	if (outbound_owned)
+		return wg_reset_tcp_socket_callbacks(peer, socket, false);
+	return wg_reset_tcp_socket_callbacks(peer, socket, !outbound_alias);
 }
 
 void wg_tcp_retry_worker(struct work_struct *work)
@@ -4057,15 +4361,288 @@ wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,
 	return claimed;
 }
 
+static void wg_tcp_cancel_stream_workers(struct wg_peer *peer)
+{
+	cancel_work_sync(&peer->tcp_read_work);
+	cancel_work_sync(&peer->tcp_write_work);
+	spin_lock_bh(&peer->tcp_lock);
+	spin_lock(&peer->tcp_read_lock);
+	peer->tcp_read_worker_scheduled = false;
+	spin_unlock(&peer->tcp_read_lock);
+	spin_lock(&peer->tcp_write_lock);
+	peer->tcp_write_worker_scheduled = false;
+	spin_unlock(&peer->tcp_write_lock);
+	spin_unlock_bh(&peer->tcp_lock);
+}
+
+static void wg_tcp_rearm_surviving_stream_locked(struct wg_peer *peer)
+{
+	struct socket *socket;
+
+	lockdep_assert_held(&peer->tcp_socket_lock);
+	spin_lock_bh(&peer->tcp_lock);
+	socket = peer->peer_socket;
+	if (READ_ONCE(peer->is_dead) || peer->tcp_stopping ||
+	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
+	    peer->tcp_outbound_remove_scheduled ||
+	    peer->tcp_inbound_remove_scheduled || !peer->tcp_established ||
+	    !socket || !socket->sk) {
+		spin_unlock_bh(&peer->tcp_lock);
+		return;
+	}
+	spin_lock(&peer->tcp_read_lock);
+	if (!peer->tcp_read_worker_scheduled && peer->tcp_read_wq &&
+	    !skb_queue_empty(&socket->sk->sk_receive_queue)) {
+		peer->tcp_read_worker_scheduled = true;
+		queue_work(peer->tcp_read_wq, &peer->tcp_read_work);
+	}
+	spin_unlock(&peer->tcp_read_lock);
+	if (skb_queue_len(&peer->send_queue) > 0)
+		wg_tcp_schedule_write_locked(peer);
+	spin_unlock_bh(&peer->tcp_lock);
+}
+
+static bool wg_tcp_promote_authenticated_carrier(struct wg_peer *peer,
+						  u64 connection_id)
+{
+	struct wg_tcp_socket_list_entry *entry = NULL, *iter;
+	struct wg_peer *temp;
+	struct socket *socket, *old_inbound, *old_outbound;
+	bool temp_detached = false;
+	bool socket_transferred = false;
+	bool stale;
+	int ret = 0;
+
+	if (!peer || IS_ERR(peer) || !connection_id ||
+	    peer->device->transport != WG_TRANSPORT_TCP)
+		return false;
+
+	read_lock_bh(&peer->endpoint_lock);
+	stale = connection_id < peer->tcp_roaming_connection_id;
+	read_unlock_bh(&peer->endpoint_lock);
+
+	spin_lock_bh(&peer->device->tcp_connection_list_lock);
+	list_for_each_entry(iter, &peer->device->tcp_connection_list,
+			    tcp_connection_ll) {
+		if (iter->connection_id != connection_id)
+			continue;
+		iter->authenticated = true;
+		wg_tcp_release_admission_locked(peer->device, iter);
+		iter->timestamp = ktime_get();
+		if (!stale && !iter->initializing) {
+			if (WARN_ON_ONCE(!peer->device->tcp_tracked_connections))
+				peer->device->tcp_tracked_connections = 0;
+			else
+				--peer->device->tcp_tracked_connections;
+			list_del_rcu(&iter->tcp_connection_ll);
+			entry = iter;
+		}
+		break;
+	}
+	spin_unlock_bh(&peer->device->tcp_connection_list_lock);
+	if (!entry)
+		return false;
+	synchronize_rcu();
+
+	temp = entry->temp_peer;
+	socket = entry->tcp_socket;
+	if (!temp || IS_ERR(temp) || !socket || temp == peer)
+		goto fail_entry;
+
+	/* Configured peers are always locked before provisional peers. No other
+	 * path takes two socket-owner mutexes, making concurrent authenticated
+	 * candidates serialize without an address-dependent lock order.
+	 */
+	mutex_lock(&peer->tcp_socket_lock);
+	mutex_lock(&temp->tcp_socket_lock);
+	write_lock_bh(&peer->endpoint_lock);
+	if (connection_id < peer->tcp_roaming_connection_id) {
+		write_unlock_bh(&peer->endpoint_lock);
+		ret = -ESTALE;
+		goto unlock;
+	}
+	peer->tcp_roaming_connection_id = connection_id;
+	write_unlock_bh(&peer->endpoint_lock);
+
+	spin_lock_bh(&temp->tcp_lock);
+	if (temp->inbound_socket != socket || temp->peer_socket != socket ||
+	    temp->tcp_connection_id != connection_id) {
+		spin_unlock_bh(&temp->tcp_lock);
+		ret = -ESTALE;
+		goto unlock;
+	}
+	WRITE_ONCE(temp->is_dead, true);
+	temp->tcp_stopping = true;
+	temp->tcp_inbound_remove_scheduled = true;
+	temp->tcp_inbound_remove_socket = socket;
+	spin_unlock_bh(&temp->tcp_lock);
+
+	if (socket->sk) {
+		write_lock_bh(&socket->sk->sk_callback_lock);
+		write_unlock_bh(&socket->sk->sk_callback_lock);
+	}
+	wg_tcp_cancel_stream_workers(temp);
+	ret = wg_reset_exact_tcp_socket_callbacks(temp, socket);
+	if (ret)
+		goto unlock;
+	spin_lock_bh(&temp->tcp_lock);
+	temp->peer_socket = NULL;
+	temp->inbound_socket = NULL;
+	temp->inbound_connected = false;
+	temp->tcp_established = false;
+	temp->tcp_inbound_remove_scheduled = false;
+	temp->tcp_inbound_remove_socket = NULL;
+	spin_unlock_bh(&temp->tcp_lock);
+	temp_detached = true;
+
+	spin_lock_bh(&peer->tcp_lock);
+	old_inbound = peer->inbound_socket;
+	old_outbound = peer->outbound_socket;
+	peer->tcp_inbound_remove_scheduled = !!old_inbound;
+	peer->tcp_inbound_remove_socket = old_inbound;
+	peer->tcp_outbound_remove_scheduled = !!old_outbound;
+	peer->tcp_outbound_remove_socket = old_outbound;
+	spin_unlock_bh(&peer->tcp_lock);
+	if (old_inbound || old_outbound)
+		wg_tcp_cancel_stream_workers(peer);
+	if (old_inbound) {
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, old_inbound);
+		if (!ret)
+			ret = wg_release_peer_socket_locked(peer, old_inbound);
+		if (ret)
+			goto unlock;
+	}
+	if (old_outbound && old_outbound != old_inbound) {
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, old_outbound);
+		if (!ret)
+			ret = wg_release_peer_socket_locked(peer, old_outbound);
+		if (ret)
+			goto unlock;
+	}
+
+	/* From this point the configured peer, rather than the claimed list
+	 * entry, owns the accepted socket.
+	 */
+	entry->tcp_socket = NULL;
+	socket_transferred = true;
+	spin_lock_bh(&peer->tcp_lock);
+	/* The stream reader synthesizes the original outer IP/UDP headers for
+	 * WireGuard's authenticated receive path. Preserve the accepted tuple
+	 * when ownership moves away from the provisional peer.
+	 */
+	peer->inbound_source = temp->inbound_source;
+	peer->inbound_dest = temp->inbound_dest;
+	peer->peer_socket = socket;
+	peer->inbound_socket = socket;
+	peer->tcp_established = true;
+	peer->tcp_pending = false;
+	peer->tcp_connecting = false;
+	peer->inbound_connected = true;
+	peer->outbound_connected = false;
+	peer->inbound_timestamp = ktime_get();
+	peer->tcp_inbound_remove_scheduled = false;
+	peer->tcp_inbound_remove_socket = NULL;
+	peer->tcp_outbound_remove_scheduled = false;
+	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_reconnect_requested = false;
+	spin_unlock_bh(&peer->tcp_lock);
+	ret = wg_setup_tcp_socket_callbacks(peer, socket, true);
+	if (ret) {
+		spin_lock_bh(&peer->tcp_lock);
+		peer->tcp_inbound_callbacks_set = false;
+		peer->tcp_inbound_socket_data = NULL;
+		spin_unlock_bh(&peer->tcp_lock);
+		wg_release_peer_socket_locked(peer, socket);
+		goto unlock;
+	}
+	wg_tcp_rearm_surviving_stream_locked(peer);
+
+unlock:
+	mutex_unlock(&temp->tcp_socket_lock);
+	mutex_unlock(&peer->tcp_socket_lock);
+	if (ret) {
+		WARN_ON_ONCE(ret);
+		goto fail_entry;
+	}
+
+	temp->tcp_read_wq = NULL;
+	temp->tcp_write_wq = NULL;
+	if (temp->partial_skb)
+		kfree_skb(temp->partial_skb);
+	skb_queue_purge(&temp->send_queue);
+	entry->temp_peer = NULL;
+	entry->tcp_socket = NULL;
+	kfree(temp);
+	kfree(entry);
+	return true;
+
+fail_entry:
+	/* The list claim is exclusive. If handoff cannot complete, destroy the
+	 * provisional owner rather than leaving an untracked accepted socket.
+	 */
+	if (temp_detached) {
+		temp->tcp_read_wq = NULL;
+		temp->tcp_write_wq = NULL;
+		if (temp->partial_skb)
+			kfree_skb(temp->partial_skb);
+		skb_queue_purge(&temp->send_queue);
+		entry->temp_peer = NULL;
+		kfree(temp);
+	}
+	/* A transferred socket is released by the configured-peer failure path.
+	 * Leaving the entry pointer NULL prevents a second sock_release().
+	 */
+	if (socket_transferred)
+		entry->tcp_socket = NULL;
+	wg_destroy_tcp_connection_entry(peer->device, entry);
+	return false;
+}
+
+void wg_tcp_promotion_worker(struct work_struct *work)
+{
+	struct wg_peer *peer =
+		container_of(work, struct wg_peer, tcp_promotion_work);
+	u64 connection_id;
+
+	/* Authenticated data is finalized from NAPI/softirq context. Claiming an
+	 * accepted carrier uses synchronize_rcu(), mutexes, and workqueue drains,
+	 * so perform the ownership transfer only from this process-context work.
+	 */
+	for (;;) {
+		spin_lock_bh(&peer->tcp_lock);
+		connection_id = peer->tcp_promotion_connection_id;
+		peer->tcp_promotion_connection_id = 0;
+		if (!connection_id)
+			peer->tcp_promotion_worker_scheduled = false;
+		spin_unlock_bh(&peer->tcp_lock);
+		if (!connection_id)
+			break;
+		wg_tcp_promote_authenticated_carrier(peer, connection_id);
+	}
+}
+
 static void wg_destroy_temp_peer(struct wg_peer *peer)
 {
 	struct socket *socket;
 	struct sock *sk;
+	int ret = 0;
 
 	if (!peer || IS_ERR(peer))
 		return;
 
+	spin_lock_bh(&peer->tcp_lock);
 	WRITE_ONCE(peer->is_dead, true);
+	peer->tcp_stopping = true;
+	peer->tcp_inbound_remove_scheduled = true;
+	peer->tcp_inbound_remove_socket = peer->inbound_socket;
+	peer->tcp_outbound_remove_scheduled = true;
+	peer->tcp_outbound_remove_socket = peer->outbound_socket;
+	spin_unlock_bh(&peer->tcp_lock);
+	cancel_delayed_work_sync(&peer->tcp_retry_work);
+	cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);
+	cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);
+
+	mutex_lock(&peer->tcp_socket_lock);
 	socket = peer->inbound_socket;
 	sk = socket ? socket->sk : NULL;
 	/* Wait out a callback that passed the is_dead check before canceling
@@ -4075,39 +4652,24 @@ static void wg_destroy_temp_peer(struct wg_peer *peer)
 		write_lock_bh(&sk->sk_callback_lock);
 		write_unlock_bh(&sk->sk_callback_lock);
 	}
-	cancel_delayed_work_sync(&peer->tcp_retry_work);
-	cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);
-	cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);
-	cancel_work_sync(&peer->tcp_read_work);
-	cancel_work_sync(&peer->tcp_write_work);
-	peer->tcp_read_worker_scheduled = false;
-	peer->tcp_write_worker_scheduled = false;
+	wg_tcp_cancel_stream_workers(peer);
 
 	/* The workers are quiescent, so the wrapper can now be detached. */
-	wg_reset_tcp_socket_callbacks(peer, true);
-	if (sk) {
-		write_lock_bh(&sk->sk_callback_lock);
-		if (sk->sk_user_data) {
-			kfree(sk->sk_user_data);
-			sk->sk_user_data = NULL;
-		}
-		write_unlock_bh(&sk->sk_callback_lock);
-	}
+	if (socket)
+		ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);
 	/* Both pointers reference the device-scoped provisional queue. It remains
 	 * alive until every pending entry has been drained during device teardown.
 	 */
-	peer->tcp_read_wq = NULL;
-	peer->tcp_write_wq = NULL;
-	if (peer->partial_skb)
-		kfree_skb(peer->partial_skb);
-	skb_queue_purge(&peer->send_queue);
-
-	peer->peer_socket = NULL;
-	peer->inbound_socket = NULL;
-	peer->outbound_socket = NULL;
-	if (socket) {
-		kernel_sock_shutdown(socket, SHUT_RDWR);
-		sock_release(socket);
+	if (!ret && socket)
+		ret = wg_release_peer_socket_locked(peer, socket);
+	if (!ret) {
+		peer->tcp_read_wq = NULL;
+		peer->tcp_write_wq = NULL;
+	}
+	mutex_unlock(&peer->tcp_socket_lock);
+	if (WARN_ON_ONCE(ret)) {
+		pr_err("WireGuard: retained provisional TCP peer after callback detach failure\n");
+		return;
 	}
 	kfree(peer);
 }
@@ -4145,16 +4707,23 @@ void wg_tcp_outbound_remove_worker(struct work_struct *work)
 	struct wg_peer *peer = container_of(work, struct wg_peer, tcp_outbound_remove_work.work);
 	struct socket *socket;
 	struct sock *sk;
+	bool active, detach_failed = false;
 	bool clean_claim, reclaim_current = false;
 	bool retry_needed, reconnect, stopping;
 	int ret;
 
 	wg_dbg("Entering function wg_tcp_outbound_remove _worker\n");
+	retry_needed = READ_ONCE(peer->tcp_retry_scheduled) ||
+			 delayed_work_pending(&peer->tcp_retry_work);
+	cancel_delayed_work_sync(&peer->tcp_retry_work);
+	mutex_lock(&peer->tcp_socket_lock);
 	spin_lock_bh(&peer->tcp_lock);
 	socket = peer->tcp_outbound_remove_socket;
 	clean_claim = socket ? peer->outbound_socket == socket :
 				 !peer->outbound_socket;
 	sk = clean_claim && socket ? socket->sk : NULL;
+	active = clean_claim && socket && peer->peer_socket == socket;
+	peer->tcp_retry_scheduled = false;
 	spin_unlock_bh(&peer->tcp_lock);
 
 	/* No new stream work is queued while the remove flag is set. Wait for
@@ -4165,22 +4734,16 @@ void wg_tcp_outbound_remove_worker(struct work_struct *work)
 		write_lock_bh(&sk->sk_callback_lock);
 		write_unlock_bh(&sk->sk_callback_lock);
 	}
-	cancel_work_sync(&peer->tcp_read_work);
-	cancel_work_sync(&peer->tcp_write_work);
-	peer->tcp_read_worker_scheduled = false;
-	peer->tcp_write_worker_scheduled = false;
-
-	/* State change normally arms retry before removal. Preserve that intent,
-	 * but cancel the old instance so it cannot race socket destruction or
-	 * connect through the stale target.
-	 */
-	retry_needed = READ_ONCE(peer->tcp_retry_scheduled) ||
-			 delayed_work_pending(&peer->tcp_retry_work);
-	cancel_delayed_work_sync(&peer->tcp_retry_work);
-	peer->tcp_retry_scheduled = false;
+	if (active)
+		wg_tcp_cancel_stream_workers(peer);
 	if (clean_claim) {
-		wg_reset_tcp_socket_callbacks(peer, false);
-		wg_clean_peer_socket(peer, true, false, false);
+		if (socket) {
+			ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);
+			if (!ret)
+				ret = wg_release_peer_socket_locked(peer, socket);
+			if (ret)
+				detach_failed = true;
+		}
 	} else {
 		/* Never let an old work item tear down a replacement socket. */
 		reclaim_current = true;
@@ -4189,10 +4752,19 @@ void wg_tcp_outbound_remove_worker(struct work_struct *work)
 	spin_lock_bh(&peer->tcp_lock);
 	reconnect = peer->tcp_reconnect_requested;
 	stopping = peer->tcp_stopping;
-	peer->tcp_reconnect_requested = false;
-	peer->tcp_outbound_remove_scheduled = false;
-	peer->tcp_outbound_remove_socket = NULL;
+	if (!detach_failed) {
+		peer->tcp_reconnect_requested = false;
+		peer->tcp_outbound_remove_scheduled = false;
+		peer->tcp_outbound_remove_socket = NULL;
+	}
 	spin_unlock_bh(&peer->tcp_lock);
+	if (!detach_failed)
+		wg_tcp_rearm_surviving_stream_locked(peer);
+	mutex_unlock(&peer->tcp_socket_lock);
+	if (WARN_ON_ONCE(detach_failed)) {
+		pr_err("WireGuard: retained outbound TCP socket after callback detach failure\n");
+		goto out;
+	}
 
 	if (stopping || READ_ONCE(peer->is_dead) ||
 	    !READ_ONCE(peer->device->tcp_cleanup_scheduled) ||
@@ -4231,6 +4803,10 @@ out:
 void wg_tcp_inbound_remove_worker(struct work_struct *work)
 {
 	struct wg_peer *peer = container_of(work, struct wg_peer, tcp_inbound_remove_work.work);
+	struct socket *socket;
+	struct sock *sk;
+	bool active, clean_claim, detach_failed = false;
+	int ret = 0;
 
 	wg_dbg("Entering function wg_tcp_inbound_remove _worker\n");
 
@@ -4240,11 +4816,38 @@ void wg_tcp_inbound_remove_worker(struct work_struct *work)
 			mod_delayed_work(system_wq,
 					 &peer->device->tcp_cleanup_work, 0);
 	} else {
-		wg_reset_tcp_socket_callbacks(peer, true);
-		wg_clean_peer_socket(peer, true, false, true); /* clean and release */
+		mutex_lock(&peer->tcp_socket_lock);
 		spin_lock_bh(&peer->tcp_lock);
-		peer->tcp_inbound_remove_scheduled = false;
+		socket = peer->tcp_inbound_remove_socket;
+		clean_claim = socket ? peer->inbound_socket == socket :
+					 !peer->inbound_socket;
+		sk = clean_claim && socket ? socket->sk : NULL;
+		active = clean_claim && socket && peer->peer_socket == socket;
 		spin_unlock_bh(&peer->tcp_lock);
+		if (sk) {
+			write_lock_bh(&sk->sk_callback_lock);
+			write_unlock_bh(&sk->sk_callback_lock);
+		}
+		if (active)
+			wg_tcp_cancel_stream_workers(peer);
+		if (clean_claim && socket) {
+			ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);
+			if (!ret)
+				ret = wg_release_peer_socket_locked(peer, socket);
+			if (ret)
+				detach_failed = true;
+		}
+		spin_lock_bh(&peer->tcp_lock);
+		if (!detach_failed) {
+			peer->tcp_inbound_remove_scheduled = false;
+			peer->tcp_inbound_remove_socket = NULL;
+		}
+		spin_unlock_bh(&peer->tcp_lock);
+		if (!detach_failed)
+			wg_tcp_rearm_surviving_stream_locked(peer);
+		mutex_unlock(&peer->tcp_socket_lock);
+		if (WARN_ON_ONCE(detach_failed))
+			pr_err("WireGuard: retained inbound TCP socket after callback detach failure\n");
 	}
 	wg_dbg("Exiting function wg_inbound_remove_worker\n");
 }
@@ -4299,19 +4902,6 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 	/* initialize TCP fields */
 	peer->peer_socket = NULL; /* Initialize the peer socket to NULL */
 
-	/* Initialize the original socket callbacks to NULL */
-	peer->original_outbound_state_change = NULL;
-	peer->original_outbound_write_space = NULL;
-	peer->original_outbound_data_ready = NULL;
-	peer->original_outbound_error_report = NULL;
-	peer->original_outbound_destruct = NULL;
-
-	peer->original_inbound_state_change = NULL;
-	peer->original_inbound_write_space = NULL;
-	peer->original_inbound_data_ready = NULL;
-	peer->original_inbound_error_report = NULL;
-	peer->original_inbound_destruct = NULL;
-
 	peer->partial_skb = NULL; /* Initialize the partial skb pointer to NULL */
 	peer->expected_len = 0; /* Initialize expected length to 0 */
 	peer->received_len = 0; /* Initialize received length to 0 */
@@ -4329,6 +4919,8 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 	peer->tcp_connecting = false;
 	peer->tcp_inbound_callbacks_set = false;
 	peer->tcp_outbound_callbacks_set = false;
+	peer->tcp_inbound_socket_data = NULL;
+	peer->tcp_outbound_socket_data = NULL;
 	peer->clean_inbound = false;
 	peer->clean_outbound = false;
 	peer->inbound_connected = false;
@@ -4338,11 +4930,14 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 	peer->tcp_outbound_remove_scheduled = false;
 	peer->tcp_reconnect_requested = false;
 	peer->tcp_stopping = false;
+	peer->tcp_teardown_quarantined = false;
 	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_inbound_remove_socket = NULL;
 	peer->tcp_roaming_connection_id = 0;
 
 	/* Initialize the spinlock for protecting TCP-related state */
 	spin_lock_init(&peer->tcp_lock);
+	mutex_init(&peer->tcp_socket_lock);
 
 	/* Initialize the skb queue for the TX send queue */
 	skb_queue_head_init(&peer->send_queue);
@@ -4361,6 +4956,11 @@ struct wg_peer *wg_temp_peer_create(struct wg_device *wg)
 	peer->tcp_read_wq = wg->tcp_auth_wq;
 
 	INIT_WORK(&peer->tcp_write_work, wg_tcp_write_worker);
+	INIT_WORK(&peer->tcp_bootstrap_work, wg_tcp_bootstrap_worker);
+	peer->tcp_bootstrap_socket = NULL;
+	INIT_WORK(&peer->tcp_promotion_work, wg_tcp_promotion_worker);
+	peer->tcp_promotion_connection_id = 0;
+	peer->tcp_promotion_worker_scheduled = false;
 	peer->tcp_write_wq = wg->tcp_auth_wq;
 	if (!peer->tcp_read_wq) {
 		pr_err("Provisional TCP workqueue is unavailable\n");

@@ -11,7 +11,7 @@ GUEST = (ROOT / "tests" / "hyperv" / "guest-node.sh").read_text(encoding="utf-8"
 RUNNER = (ROOT / "tests" / "hyperv" / "regression.py").read_text(
     encoding="utf-8"
 )
-SOCKET = (ROOT / "kernel" / "socket.c").read_text(encoding="utf-8")
+SOCKET = (ROOT / "kernel" / "wg_tcp.c").read_text(encoding="utf-8")
 
 
 def integer_assignment(text: str, name: str) -> int:

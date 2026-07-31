@@ -26,6 +26,7 @@
 #define _WG_TCP_DEBUG_H
 
 #include <linux/icmp.h>
+#include <linux/atomic.h>
 #include <linux/types.h>
 
 #ifdef WG_TCP_VERBOSE
@@ -45,6 +46,7 @@
 struct sk_buff;
 struct crypt_queue;
 struct sk_buff_head;
+struct sock;
 struct socket;
 struct wg_device;
 struct wg_peer;
@@ -67,5 +69,22 @@ void print_wg_device(struct wg_device *device);
 void print_skbuff_head_info(const char *label, struct sk_buff_head *queue);
 void print_tcp_socket_info(struct socket *sock, const char *label);
 void print_peer_socket_info(struct wg_peer *peer);
+
+#ifdef WG_TCP_DIAG
+extern atomic64_t wg_tcp_stats_tx_bytes;
+extern atomic64_t wg_tcp_stats_rx_bytes;
+extern atomic64_t wg_tcp_stats_tx_packets;
+extern atomic64_t wg_tcp_stats_rx_packets;
+extern atomic64_t wg_tcp_stats_tx_eagain;
+extern atomic64_t wg_tcp_stats_tx_errors;
+extern atomic64_t wg_tcp_stats_rx_errors;
+extern atomic64_t wg_tcp_stats_short_writes;
+extern atomic64_t wg_tcp_stats_retransmits;
+
+void wg_tcp_diag_dump_sock(struct sock *sk, const char *where,
+			   int result, unsigned int queued);
+void wg_tcp_diag_pressure(struct sock *sk, u64 peer_id);
+void wg_tcp_diag_aggregate(void);
+#endif
 
 #endif /* _WG_TCP_DEBUG_H */

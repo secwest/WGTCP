@@ -483,6 +483,15 @@ kernel-log-check)
 	} | awk '!seen[$0]++')
 	if [[ -n $severe ]]; then
 		printf '%s\n' "$severe" >&2
+		dmesg | awk '
+			/scheduling while atomic|sleeping function called from invalid context/ {
+				remaining = 40
+			}
+			remaining > 0 {
+				print
+				--remaining
+			}
+		' >&2
 		die "new severe kernel messages were emitted"
 	fi
 	printf 'kernel_log=clean\n'
@@ -558,7 +567,8 @@ tcp-parity-netns)
 tcp-nat-netns)
 	(( $# == 3 || $# == 4 )) || die "tcp-nat-netns RUN CASE MODE [SOURCE_ROOT]"
 	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
-	[[ $mode == dual-reachable ]] || die "invalid TCP NAT mode: $mode"
+	[[ $mode == dual-reachable || $mode == single-private ]] || \
+		die "invalid TCP NAT mode: $mode"
 	[[ -f $source_root/tests/tcp-nat-netns.sh ]] || die "TCP NAT netns test not found"
 	dir=$(new_auxiliary_state "$run_id" "$case_id")
 	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \

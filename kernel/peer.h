@@ -15,9 +15,11 @@
 #include <linux/netfilter.h>
 #include <linux/spinlock.h>
 #include <linux/kref.h>
+#include <linux/mutex.h>
 #include <net/dst_cache.h>
 
 struct wg_device;
+struct wg_socket_data;
 
 struct wg_peer {
 	struct wg_device *device;
@@ -55,16 +57,8 @@ struct wg_peer {
 	bool peer_endpoint_set;
 	__be16 tcp_peer_listen_port; /* Configured, never an accepted source port. */
 	struct socket *peer_socket, *inbound_socket, *outbound_socket;
-	void (*original_outbound_state_change)(struct sock *sk);
-	void (*original_outbound_write_space)(struct sock *sk);
-	void (*original_outbound_data_ready)(struct sock *sk);
-	void (*original_outbound_error_report)(struct sock *sk);
-	void (*original_outbound_destruct)(struct sock *sk);
-	void (*original_inbound_state_change)(struct sock *sk);
-	void (*original_inbound_write_space)(struct sock *sk);
-	void (*original_inbound_data_ready)(struct sock *sk);
-	void (*original_inbound_error_report)(struct sock *sk);
-	void (*original_inbound_destruct)(struct sock *sk);
+	struct wg_socket_data *tcp_outbound_socket_data;
+	struct wg_socket_data *tcp_inbound_socket_data;
 	/* True while the corresponding socket callbacks are installed. */
 	bool tcp_outbound_callbacks_set;
 	bool tcp_inbound_callbacks_set;
@@ -83,11 +77,13 @@ struct wg_peer {
 	bool tcp_outbound_remove_scheduled; /* Flag to track outbound peer removal scheduling */
 	bool tcp_reconnect_requested; /* Reconnect after the current outbound socket is quiesced */
 	bool tcp_stopping; /* Device/peer stop owns all TCP work cancellation */
+	bool tcp_teardown_quarantined; /* Retains callback-reachable state on invariant failure */
 	struct socket *tcp_outbound_remove_socket; /* Exact socket claimed by the removal owner */
 	u64 tcp_roaming_connection_id; /* Newest authenticated accepted carrier */
 	/* Removes the inbound peer TCP connection. */
 	struct delayed_work tcp_inbound_remove_work;
 	bool tcp_inbound_remove_scheduled; /* Flag to track inbound peer removal scheduling */
+	struct socket *tcp_inbound_remove_socket; /* Exact socket claimed by the removal owner */
 
 	/* Removes TCP connections from the pending list. */
 	struct delayed_work tcp_cleanup_work;
@@ -107,6 +103,7 @@ struct wg_peer {
         spinlock_t send_queue_lock; /* TX lock */
 
 	struct list_head pending_connection_list; /* peers pending connection handshake */
+	struct mutex tcp_socket_lock; /* Serializes socket publication and callback ownership */
 	spinlock_t tcp_lock; /* Protects TCP-related state */
 
 	struct work_struct tcp_read_work; /* Work struct for scheduling the worker */
@@ -118,6 +115,11 @@ struct wg_peer {
 	struct workqueue_struct *tcp_write_wq; /* Workqueue for handling TCP data processing */
 	spinlock_t tcp_write_lock; /* Spinlock to protect access to the socket data */
 	bool tcp_write_worker_scheduled; /* Flag to indicate if the TCP write worker is scheduled */
+	struct work_struct tcp_bootstrap_work;
+	struct socket *tcp_bootstrap_socket;
+	struct work_struct tcp_promotion_work;
+	u64 tcp_promotion_connection_id;
+	bool tcp_promotion_worker_scheduled;
 
 };
 

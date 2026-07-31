@@ -22,7 +22,11 @@ struct wg_tcp_encap_header;
 struct wg_socket_data {
 	struct wg_device *device;
 	struct wg_peer *peer;
+	struct socket *socket;
 	bool inbound;
+	void (*original_state_change)(struct sock *sk);
+	void (*original_write_space)(struct sock *sk);
+	void (*original_data_ready)(struct sock *sk);
 };
 
 int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb,
@@ -71,12 +75,13 @@ int wg_tcp_listener6_thread(void *data);
 
 void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy,
 			  bool inbound);
-void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
 void wg_tcp_peer_stop(struct wg_peer *peer);
 void wg_tcp_peer_request_reconnect(struct wg_peer *peer);
 void wg_tcp_set_device_mark(struct wg_device *wg, u32 mark);
 void wg_tcp_write_worker(struct work_struct *work);
 void wg_tcp_read_worker(struct work_struct *work);
+void wg_tcp_bootstrap_worker(struct work_struct *work);
+void wg_tcp_promotion_worker(struct work_struct *work);
 void wg_tcp_cleanup_worker(struct work_struct *work);
 void wg_tcp_retry_worker(struct work_struct *work);
 

@@ -19,6 +19,9 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn("\tnftables\n", BOOTSTRAP)
         self.assertIn("tcp-nat-netns)", GUEST)
         self.assertIn("$mode == dual-reachable", GUEST)
+        self.assertIn("$mode == single-private", GUEST)
+        self.assertIn('"tcp-nat44-single-private"', RUNNER)
+        self.assertIn('self.tcp_nat_netns_case("single-private")', RUNNER)
         self.assertIn('"tcp-nat44-dual-reachable"', RUNNER)
         self.assertIn('self.tcp_nat_netns_case("dual-reachable")', RUNNER)
 
@@ -67,6 +70,10 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn("bidirectional_traffic=pass", SCRIPT)
 
     def test_initial_acquisition_has_one_bounded_deadline_and_churn_telemetry(self) -> None:
+        dual = SCRIPT[SCRIPT.index(
+            "initial_snat_packets_before=$(",
+            SCRIPT.index("exit 0\nfi"),
+        ) :]
         self.assertIn("initial_acquisition_timeout_seconds=90", SCRIPT)
         self.assertEqual(SCRIPT.count("initial_acquisition_deadline=$("), 1)
         self.assertIn(
@@ -86,8 +93,8 @@ class TcpNatContract(unittest.TestCase):
             SCRIPT.index('set wga peer "$server_pub"'),
         )
         self.assertLess(
-            SCRIPT.index('assert_nat_state "$initial_snat_port"'),
-            SCRIPT.index("initial_acquisition_seconds=$("),
+            dual.index('assert_nat_state "$initial_snat_port"'),
+            dual.index("initial_acquisition_seconds=$("),
         )
         self.assertIn("initial_snat_rule_packets=%s->%s", SCRIPT)
         self.assertIn("initial_dnat_rule_packets=%s->%s", SCRIPT)
@@ -97,12 +104,24 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn(
             '$initial_dnat_packets_after -gt $initial_dnat_packets_before', SCRIPT
         )
-        rebound = SCRIPT.index('replace_snat_rule "$rebound_snat_port"')
+        rebound = dual.index('replace_snat_rule "$rebound_snat_port"')
         self.assertIn(
             'wait_ping "$ns_client" wga "$server_tunnel_address"',
-            SCRIPT[rebound:],
+            dual[rebound:],
         )
-        self.assertNotIn("initial_acquisition_deadline", SCRIPT[rebound:])
+        self.assertNotIn("initial_acquisition_deadline", dual[rebound:])
+
+    def test_single_private_nat_has_no_forward_and_promotes_the_accept(self) -> None:
+        single = SCRIPT[
+            SCRIPT.index("if [[ $MODE == single-private ]]") :
+            SCRIPT.index("exit 0\nfi") + len("exit 0\nfi")
+        ]
+        self.assertIn('set wgb peer "$client_pub"', single)
+        self.assertNotIn('endpoint "$router_public_address', single)
+        self.assertIn("dnat=absent", single)
+        self.assertIn("accepted_carrier_promotion=pass", single)
+        self.assertIn('replace_snat_rule "$rebound_snat_port"', single)
+        self.assertIn("roaming_reconnect=pass", single)
 
 
 if __name__ == "__main__":

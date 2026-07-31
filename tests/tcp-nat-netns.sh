@@ -5,9 +5,9 @@ set -Eeuo pipefail
 
 MODE=${1:-}
 case "$MODE" in
-dual-reachable) ;;
+dual-reachable | single-private) ;;
 *)
-	printf 'usage: %s {dual-reachable}\n' "$0" >&2
+	printf 'usage: %s {dual-reachable|single-private}\n' "$0" >&2
 	exit 1
 	;;
 esac
@@ -419,13 +419,15 @@ run "$ns_router" nft add chain ip wgtcp_nat postrouting \
 	'{ type nat hook postrouting priority srcnat; policy accept; }'
 run "$ns_router" nft add chain ip wgtcp_nat forward \
 	'{ type filter hook forward priority filter; policy accept; }'
-run "$ns_router" nft add rule ip wgtcp_nat prerouting \
-	iifname "$router_public_if" ip daddr "$router_public_address" \
-	tcp dport "$forwarded_port" counter dnat to \
-	"$client_address:$client_listen_port"
-run "$ns_router" nft add rule ip wgtcp_nat forward \
-	iifname "$router_public_if" ip daddr "$client_address" \
-	tcp dport "$client_listen_port" tcp flags syn counter accept
+if [[ $MODE == dual-reachable ]]; then
+	run "$ns_router" nft add rule ip wgtcp_nat prerouting \
+		iifname "$router_public_if" ip daddr "$router_public_address" \
+		tcp dport "$forwarded_port" counter dnat to \
+		"$client_address:$client_listen_port"
+	run "$ns_router" nft add rule ip wgtcp_nat forward \
+		iifname "$router_public_if" ip daddr "$client_address" \
+		tcp dport "$client_listen_port" tcp flags syn counter accept
+fi
 install_snat_rule "$initial_snat_port"
 
 umask 077
@@ -446,6 +448,83 @@ run "$ns_client" ip link set wga up
 run "$ns_server" ip link set wgb up
 run "$ns_client" ip route add "$server_tunnel_address/32" dev wga
 run "$ns_server" ip route add "$client_tunnel_address/32" dev wgb
+initial_acquisition_started=$SECONDS
+initial_acquisition_deadline=$(( SECONDS + initial_acquisition_timeout_seconds ))
+
+if [[ $MODE == single-private ]]; then
+	initial_snat_packets_before=$(nat_rule_packets postrouting \
+		"$server_listen_port" "snat")
+	[[ $initial_snat_packets_before =~ ^[0-9]+$ ]] || {
+		echo "could not read the initial SNAT counter" >&2
+		exit 1
+	}
+	run "$ns_server" "$WG_FORK" set wgb peer "$client_pub" \
+		allowed-ips "$client_tunnel_address/32"
+	run "$ns_client" "$WG_FORK" set wga peer "$server_pub" \
+		allowed-ips "$server_tunnel_address/32" \
+		endpoint "$server_address:$server_listen_port" persistent-keepalive 2
+
+	wait_ping "$ns_client" wga "$server_tunnel_address" \
+		"$initial_acquisition_deadline"
+	wait_ping "$ns_server" wgb "$client_tunnel_address" \
+		"$initial_acquisition_deadline"
+	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
+		"$router_public_address:$initial_snat_port" \
+		"$initial_acquisition_deadline"
+	initial_acquisition_seconds=$(( SECONDS - initial_acquisition_started ))
+	initial_snat_packets_after=$(nat_rule_packets postrouting \
+		"$server_listen_port" "snat")
+	[[ $initial_snat_packets_after =~ ^[0-9]+$ && \
+		$initial_snat_packets_after -gt $initial_snat_packets_before ]] || {
+		echo "outbound-only carrier did not traverse SNAT" >&2
+		exit 1
+	}
+	[[ -z $(nat_rule_packets prerouting "$forwarded_port" "dnat") ]] || {
+		echo "single-private topology unexpectedly installed DNAT" >&2
+		exit 1
+	}
+
+	client_tx_before=$(sent_bytes "$ns_client" wga "$server_pub")
+	server_tx_before=$(sent_bytes "$ns_server" wgb "$client_pub")
+	client_tx_after=$(wait_keepalive_advance \
+		"$ns_client" wga "$server_pub" "$client_tx_before")
+	wait_ping "$ns_server" wgb "$client_tunnel_address"
+	server_tx_after=$(sent_bytes "$ns_server" wgb "$client_pub")
+	[[ $server_tx_before =~ ^[0-9]+$ && $server_tx_after =~ ^[0-9]+$ && \
+		$server_tx_after -gt $server_tx_before ]] || {
+		echo "public peer did not transmit over the promoted accepted carrier" >&2
+		exit 1
+	}
+
+	replace_snat_rule "$rebound_snat_port"
+	run "$ns_router" conntrack -F >/dev/null
+	wait_ping "$ns_client" wga "$server_tunnel_address"
+	wait_ping "$ns_server" wgb "$client_tunnel_address"
+	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
+		"$router_public_address:$rebound_snat_port"
+	if tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
+		"$router_public_address:$initial_snat_port"; then
+		old_carrier_state=retained
+	else
+		old_carrier_state=retired
+	fi
+
+	printf 'mode=single-private\n'
+	printf 'snat=pass\ndnat=absent\nbidirectional_traffic=pass\n'
+	printf 'accepted_carrier_promotion=pass\n'
+	printf 'initial_acquisition_seconds=%s\n' "$initial_acquisition_seconds"
+	printf 'initial_snat_rule_packets=%s->%s\n' \
+		"$initial_snat_packets_before" "$initial_snat_packets_after"
+	printf 'keepalive_client_tx=%s->%s\n' \
+		"$client_tx_before" "$client_tx_after"
+	printf 'public_peer_tx=%s->%s\n' "$server_tx_before" "$server_tx_after"
+	printf 'source_port_rebind=%s->%s\n' \
+		"$initial_snat_port" "$rebound_snat_port"
+	printf 'roaming_reconnect=pass\nold_accepted_carrier=%s\n' \
+		"$old_carrier_state"
+	exit 0
+fi
+
 initial_snat_packets_before=$(nat_rule_packets postrouting \
 	"$server_listen_port" "snat")
 initial_dnat_packets_before=$(nat_rule_packets prerouting \
@@ -455,8 +534,6 @@ initial_dnat_packets_before=$(nat_rule_packets prerouting \
 	echo "could not read initial NAT rule-packet baselines" >&2
 	exit 1
 }
-initial_acquisition_started=$SECONDS
-initial_acquisition_deadline=$(( SECONDS + initial_acquisition_timeout_seconds ))
 run "$ns_client" "$WG_FORK" set wga peer "$server_pub" \
 	allowed-ips "$server_tunnel_address/32" \
 	endpoint "$server_address:$server_listen_port" persistent-keepalive 2

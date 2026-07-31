@@ -247,21 +247,18 @@ cleanup/retry path. These mechanisms passed authenticated address learning,
 asymmetric listen ports, source-address migration, and uplink migration in the
 recorded topology.
 
-No path atomically promotes a provisional accepted socket into the configured
-peer. The current model therefore does not provide general responder-only
-roaming or one-sided NAT parity; it can learn an authenticated remote IP only
-when the separately configured peer listen port remains reachable.
+An authenticated packet received on a provisional accepted socket now promotes
+that exact carrier into the configured peer in process context. This permits a
+private peer to dial a reachable peer through ordinary SNAT without a reverse
+DNAT or forwarded listen port. A device-monotonic connection ID prevents a
+retained older carrier from reverting the authenticated winner.
 
-The recorded NAT44 case exercises that reachable-listen-port model directly.
-It passed SNAT, DNAT from external port 52241 to private listener 52221,
-bidirectional traffic, idle persistent keepalives, and recovery after a forced
-41001-to-41002 SNAT remap on both Ubuntu guests. The public peer continued to
-report configured port 52241, proving that the observed NAT source port did not
-contaminate future dial state. The old accepted 41001 socket remained locally
-visible after the new carrier and traffic recovered, so deterministic stale
-carrier retirement remains separate parity work. A live `FwMark` update then
-forced the public peer to reconnect through configured forward 52241; the
-router observed a new SYN and bidirectional traffic remained usable.
+Final rebased Hyper-V run `wg20260731T070252Z` passed this outbound-only model on both Ubuntu
+guests. It verified accepted-carrier promotion, bidirectional traffic,
+keepalive activity, a forced `41001`-to-`41002` source-port change,
+authenticated reacquisition, and retirement of the old accepted carrier.
+General provider NAT behavior and simultaneous publicly reachable initiation
+still require deployment-specific validation.
 
 TCP listeners, accepted sockets, and outbound sockets use the WireGuard
 device's retained creation namespace and carry its `FwMark`. Route, netdevice,
@@ -324,9 +321,9 @@ carrier.
 
 Important remaining TCP parity work includes:
 
-- implementing atomic authenticated carrier-to-peer binding and promotion,
-  duplicate-carrier retirement, and general responder-only/NAT ephemeral-port
-  roaming;
+- defining a canonical simultaneous-initiation winner when both peers are
+  reachable; immediate bootstrap currently permits either authenticated TCP
+  direction to win;
 - adding exact-stream handshake/cookie replies, TCP cookie-response
   consumption, MAC1 validation, and a staged MAC2 challenge rollout so
   pre-Noise cost defense does not break older TCP peers under load;
@@ -353,7 +350,7 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Dual-reachable NAT44, exact half-open recovery, and a same-identity two-carrier address-change surrogate passed on both guests | The half-open timers are test-accelerated; ordinary one-sided NAT and same-device roaming still need authenticated carrier promotion |
+| Stateful firewall/NAT friendliness | Outbound-only single NAT, authenticated accepted-carrier promotion, source-port rebinding, and stale-carrier retirement passed on both guests | General provider NAT behavior and simultaneous publicly reachable initiation still need broader validation |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are

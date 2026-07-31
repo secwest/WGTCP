@@ -958,16 +958,16 @@ void print_peer_socket_info(struct wg_peer *peer) {
  */
 
 /* Aggregate statistics counters */
-static atomic64_t wg_tcp_stats_tx_bytes = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_rx_bytes = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_tx_packets = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_rx_packets = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_tx_eagain = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_tx_errors = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_rx_errors = ATOMIC64_INIT(0);
-static atomic64_t wg_tcp_stats_short_writes = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_tx_bytes = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_rx_bytes = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_tx_packets = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_rx_packets = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_tx_eagain = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_tx_errors = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_rx_errors = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_short_writes = ATOMIC64_INIT(0);
 /* Note: retransmits counter shows tp->total_retrans from dump_sock, not incremented here */
-static atomic64_t wg_tcp_stats_retransmits = ATOMIC64_INIT(0);
+atomic64_t wg_tcp_stats_retransmits = ATOMIC64_INIT(0);
 
 /* Portable congestion window accessor */
 static inline u32 wg_tcp_get_cwnd(const struct tcp_sock *tp)
@@ -1130,7 +1130,7 @@ void wg_tcp_diag_dump_sock(struct sock *sk, const char *where,
 }
 
 /* Check and log TCP pressure indicators */
-static void wg_tcp_diag_pressure(struct sock *sk, u64 peer_id)
+void wg_tcp_diag_pressure(struct sock *sk, u64 peer_id)
 {
 	struct tcp_sock *tp;
 	struct inet_connection_sock *icsk;
@@ -1185,7 +1185,7 @@ static void wg_tcp_diag_pressure(struct sock *sk, u64 peer_id)
 }
 
 /* Log aggregate statistics */
-static void wg_tcp_diag_aggregate(void)
+void wg_tcp_diag_aggregate(void)
 {
 	wg_diag("wg-tcp-diag [STATS]: "
 		"tx=%lld bytes/%lld pkts rx=%lld bytes/%lld pkts | "

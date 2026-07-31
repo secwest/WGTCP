@@ -81,7 +81,9 @@ class UdpCompatibilityContract(unittest.TestCase):
                 "void wg_socket_reinit("
             )
         ]
-        udp_reinit = socket[socket.index("void wg_socket_reinit(") :]
+        udp_reinit = socket[
+            socket.index("void wg_socket_reinit(") :
+        ]
         self.assertIn(".sk_user_data = wg", udp_init)
         self.assertNotIn("socket_data", udp_init)
         self.assertIn("synchronize_rcu();", udp_reinit)
@@ -103,26 +105,33 @@ class UdpCompatibilityContract(unittest.TestCase):
         self.assertIn("dst_release(dst);\n\t\t\tret = -ELOOP;", send6)
 
     def test_udp_send_without_endpoint_returns_address_family_error(self) -> None:
-        tcp_socket = source("kernel/wg_tcp.c")
-        udp_socket = source("kernel/socket.c")
-        dispatch = tcp_socket[
-            tcp_socket.index("int wg_socket_send_skb_to_peer(") : tcp_socket.index(
+        tcp = source("kernel/wg_tcp.c")
+        socket = source("kernel/socket.c")
+        dispatch = tcp[
+            tcp.index("int wg_socket_send_skb_to_peer(") : tcp.index(
                 "static bool wg_tcp_dial_target_eq("
             )
         ]
-        endpoint_dispatch = udp_socket[
-            udp_socket.index("int wg_socket_send_skb_to_endpoint(") :
-            udp_socket.index("int wg_socket_send_buffer_to_peer(")
+        udp = dispatch[
+            dispatch.index("\t} else {\n\t\tread_lock_bh(&peer->endpoint_lock);") :
         ]
         self.assertIn("int ret = -EAFNOSUPPORT;", dispatch)
+        self.assertIn(
+            "ret = wg_socket_send_skb_to_endpoint(peer->device, skb,",
+            udp,
+        )
+        self.assertNotIn("return -EAGAIN;", udp)
+        endpoint_dispatch = socket[
+            socket.index("int wg_socket_send_skb_to_endpoint(") :
+            socket.index("int wg_socket_send_buffer_to_peer(")
+        ]
         self.assertIn("dev_kfree_skb(skb);", endpoint_dispatch)
         self.assertIn("return -EAFNOSUPPORT;", endpoint_dispatch)
-        self.assertNotIn("return -EAGAIN;", dispatch)
 
     def test_tcp_endpoint_rewrite_is_gated_from_udp(self) -> None:
-        socket = source("kernel/wg_tcp.c")
-        endpoint_update = socket[
-            socket.index("static void wg_socket_set_peer_endpoint_internal(") : socket.index(
+        tcp = source("kernel/wg_tcp.c")
+        endpoint_update = tcp[
+            tcp.index("static void wg_socket_set_peer_endpoint_internal(") : tcp.index(
                 "void wg_socket_set_peer_endpoint("
             )
         ]

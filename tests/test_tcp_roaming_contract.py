@@ -141,7 +141,7 @@ class TcpRoamingContract(unittest.TestCase):
         self.assertNotIn("wg_tcp_connect(", self.authenticated_update)
         self.assertIn("if (!peer->peer_endpoint_set || !connection_id ||", self.authenticated_update)
         self.assertIn(
-            "connection_id <= peer->tcp_roaming_connection_id",
+            "connection_id < peer->tcp_roaming_connection_id",
             self.authenticated_update,
         )
         self.assertIn(

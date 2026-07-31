@@ -86,13 +86,56 @@ class TcpLifecycleContract(unittest.TestCase):
         claim = section(
             self.socket,
             "wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,",
-            "static void wg_destroy_temp_peer(",
+            "static bool wg_tcp_promote_authenticated_carrier(",
         )
 
         self.assertIn("entry->authenticated = true;", mark)
         self.assertIn("entry->authenticated ||", claim)
         self.assertIn("WG_TCP_AUTH_MAX_LIFETIME_MS", claim)
         self.assertIn("wg_tcp_release_admission_locked(wg, entry);", mark)
+
+    def test_authenticated_promotion_preserves_the_accepted_tuple(self) -> None:
+        promotion = final_section(
+            self.socket,
+            "static bool wg_tcp_promote_authenticated_carrier(struct wg_peer *peer,",
+            "static void wg_destroy_temp_peer(",
+        )
+        source = "peer->inbound_source = temp->inbound_source;"
+        dest = "peer->inbound_dest = temp->inbound_dest;"
+        publish = "peer->peer_socket = socket;"
+        self.assertIn(source, promotion)
+        self.assertIn(dest, promotion)
+        self.assertLess(promotion.index(source), promotion.index(publish))
+        self.assertLess(promotion.index(dest), promotion.index(publish))
+
+    def test_authenticated_promotion_is_deferred_with_no_lost_wakeup(self) -> None:
+        update = section(
+            self.socket,
+            "void wg_socket_set_peer_endpoint_authenticated(struct wg_peer *peer,",
+            "void wg_socket_set_peer_endpoint_authenticated_from_skb(",
+        )
+        worker = section(
+            self.socket,
+            "void wg_tcp_promotion_worker(struct work_struct *work)",
+            "static void wg_destroy_temp_peer(",
+        )
+        stop = section(
+            self.socket,
+            "void wg_tcp_peer_stop(struct wg_peer *peer)",
+            "struct wg_peer *wg_temp_peer_create(",
+        )
+
+        self.assertIn("bool tcp_promotion_worker_scheduled;", self.peer_header)
+        self.assertIn("wg_tcp_mark_connection_authenticated(", update)
+        self.assertIn("if (!peer->tcp_promotion_worker_scheduled)", update)
+        self.assertIn("peer->tcp_promotion_worker_scheduled = true;", update)
+        self.assertIn("queue_work(system_wq, &peer->tcp_promotion_work);", update)
+        self.assertNotIn("wg_tcp_promote_authenticated_carrier(", update)
+        self.assertIn("peer->tcp_promotion_worker_scheduled = false;", worker)
+        self.assertIn(
+            "wg_tcp_promote_authenticated_carrier(peer, connection_id);", worker
+        )
+        self.assertIn("cancel_work_sync(&peer->tcp_promotion_work);", stop)
 
     def test_authenticated_streams_release_pre_auth_capacity_once(self) -> None:
         pending_from_source = section(
@@ -115,7 +158,7 @@ class TcpLifecycleContract(unittest.TestCase):
             "wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,",
             "static void wg_destroy_temp_peer(",
         )
-        destroy = section(
+        destroy = final_section(
             self.socket,
             "wg_destroy_tcp_connection_entry(struct wg_device *wg,",
             "void wg_remove_from_tcp_connection_list(",
@@ -175,9 +218,7 @@ class TcpLifecycleContract(unittest.TestCase):
 
         publish = add.index("list_add_tail_rcu(&entry->tcp_connection_ll")
         self.assertLess(add.index("entry->initializing = true;"), publish)
-        callbacks = listener.index(
-            "wg_setup_tcp_socket_callbacks(new_temp_peer, true);"
-        )
+        callbacks = listener.index("err = wg_setup_tcp_socket_callbacks(")
         handoff = listener.index("wg_finish_tcp_connection_init(wg,", callbacks)
         self.assertLess(callbacks, handoff)
         self.assertIn("entry->initializing = false;", finish)
@@ -202,7 +243,7 @@ class TcpLifecycleContract(unittest.TestCase):
         claim = section(
             self.socket,
             "wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,",
-            "static void wg_destroy_temp_peer(",
+            "static bool wg_tcp_promote_authenticated_carrier(",
         )
         cleanup = section(
             self.socket,
@@ -233,9 +274,9 @@ class TcpLifecycleContract(unittest.TestCase):
         claim = section(
             self.socket,
             "wg_claim_tcp_connection(struct wg_device *wg, struct socket *pending_socket,",
-            "static void wg_destroy_temp_peer(",
+            "static bool wg_tcp_promote_authenticated_carrier(",
         )
-        destroy = section(
+        destroy = final_section(
             self.socket,
             "wg_destroy_tcp_connection_entry(struct wg_device *wg,",
             "void wg_remove_from_tcp_connection_list(",
@@ -273,21 +314,18 @@ class TcpLifecycleContract(unittest.TestCase):
         self.assertEqual(connect.count("wg_tcp_connect_unwind(peer, socket);"), 1)
         self.assertNotIn("sock_release(", connect)
 
-        detach = "sk->sk_user_data = NULL;"
-        peer_alias = "peer->peer_socket = NULL;"
-        outbound_alias = "peer->outbound_socket = NULL;"
-        release = "sock_release(socket);"
-        for operation in (detach, peer_alias, outbound_alias, release):
+        detach = "wg_reset_exact_tcp_socket_callbacks(peer, socket);"
+        release_owned = "wg_release_peer_socket_locked(peer, socket);"
+        release_unowned = "sock_release(socket);"
+        for operation in (detach, release_owned, release_unowned):
             self.assertIn(operation, unwind)
-        self.assertLess(unwind.index(detach), unwind.index(release))
-        self.assertLess(unwind.index(peer_alias), unwind.index(release))
-        self.assertLess(unwind.index(outbound_alias), unwind.index(release))
+        self.assertLess(unwind.index(detach), unwind.index(release_owned))
+        self.assertLess(unwind.index(release_owned), unwind.index(release_unowned))
         for state in (
             "peer->tcp_connecting = false;",
             "peer->tcp_pending = false;",
             "peer->tcp_established = false;",
             "peer->outbound_connected = false;",
-            "peer->tcp_outbound_callbacks_set = false;",
         ):
             self.assertIn(state, unwind)
 
@@ -335,14 +373,14 @@ class TcpLifecycleContract(unittest.TestCase):
             stop.index("peer->tcp_outbound_remove_scheduled = true;"),
             stop.index("cancel_work_sync(&peer->tcp_write_work);"),
         )
-        self.assertLess(
-            stop.index("cancel_work_sync(&peer->tcp_write_work);"),
-            stop.index("wg_reset_tcp_socket_callbacks(peer, false);"),
+        reset = stop.index(
+            "wg_reset_exact_tcp_socket_callbacks(peer, outbound);"
         )
-        self.assertLess(
-            stop.index("wg_reset_tcp_socket_callbacks(peer, false);"),
-            stop.index("wg_clean_peer_socket(peer, true, false, false);"),
+        release = stop.index(
+            "wg_release_peer_socket_locked(peer, outbound);"
         )
+        self.assertLess(stop.index("cancel_work_sync(&peer->tcp_write_work);"), reset)
+        self.assertLess(reset, release)
 
     def test_peer_stop_drains_removal_owners_before_socket_snapshot(self) -> None:
         stop = section(
@@ -550,7 +588,7 @@ class TcpLifecycleContract(unittest.TestCase):
             (outbound, "outbound"),
             (inbound, "inbound"),
         ):
-            clean = f"wg_clean_peer_socket(peer, true, false, {str(direction == 'inbound').lower()})"
+            clean = "wg_reset_exact_tcp_socket_callbacks(peer, socket);"
             lock = "spin_lock_bh(&peer->tcp_lock);"
             publish = f"peer->tcp_{direction}_remove_scheduled = false;"
             clean_index = worker.index(clean)

@@ -1,6 +1,30 @@
 # Hyper-V Regression Results
 
-## Current follow-up status (2026-07-15)
+## Current focused status (2026-07-31)
+
+The latest-tree single-NAT implementation passes **209 local source contracts**.
+Production, DEBUG, and fault-injection modules build on both Multipass/Hyper-V
+Ubuntu guests running `6.8.0-136-generic`.
+
+Final rebased run `wg20260731T070252Z` passed `tcp-nat44-single-private`
+independently on both guests and passed the DEBUG initialization self-tests.
+The topology has one private peer behind SNAT and no DNAT or forwarded port.
+Both guests verified authenticated accepted-carrier promotion,
+bidirectional traffic, keepalive activity, a `41001` to `41002` source-port
+change, authenticated recovery, old-carrier retirement, and clean kernel logs.
+
+Final rebased run `wg20260731T070427Z` passed hostile-stream and fault-injection recovery on
+both guests, including exact fatal-send targeting and restoration of the
+production module.
+
+Run `wg20260731T064611Z` recorded three focused failures in older
+dual-reachable scenarios. Each retained clean kernel logs, but immediate
+bootstrap allowed the public peer's valid outbound/DNAT connection to win while
+the assertions required the private peer's `41001` SNAT direction. These are
+unresolved simultaneous-initiation direction expectations; they do not alter
+the outbound-only single-NAT pass and are not a complete green-suite claim.
+
+## Prior follow-up status (2026-07-15)
 
 The integrated callback-owner and roaming-startup tree passes **205 local
 source contracts** and all three guest shell harnesses pass syntax validation. Both

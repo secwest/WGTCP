@@ -1019,6 +1019,10 @@ class Suite:
                     lambda: self.tcp_parity_netns_case("carrier-lifetime"),
                 ),
                 (
+                    "tcp-nat44-single-private",
+                    lambda: self.tcp_nat_netns_case("single-private"),
+                ),
+                (
                     "tcp-nat44-dual-reachable",
                     lambda: self.tcp_nat_netns_case("dual-reachable"),
                 ),

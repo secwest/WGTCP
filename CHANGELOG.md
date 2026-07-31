@@ -630,6 +630,67 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 - Recorded this as groundwork rather than a claim that authenticated accepted
   carrier promotion or real single-device roaming was complete.
 
+## 2026-07-31 - Single-NAT operation and authenticated carrier roaming
+
+### Latest-tree integration
+
+- Rebased the NAT work through WireguardTCP commit `a1f93da`, retaining the
+  upstream TCP source split and the latest history, contract, prototype, and
+  Linux image-verification changes.
+- Migrated lifecycle, listener, namespace, port, framing, roaming, fault, and
+  UDP-compatibility contracts to the split implementation.
+- Added `kernel/wg_tcp_debug.o` to the relevant module builds and kept
+  destructive fault controls restricted to the fault-injection variant.
+
+### Accepted-carrier promotion
+
+- Promoted an accepted provisional TCP socket to the configured WireGuard peer
+  only after an authenticated WireGuard packet identifies that peer.
+- Transferred the exact accepted tuple and callback ownership, then detached
+  the provisional entry so only one owner can release the socket.
+- Used device-monotonic connection identifiers to reject older carriers after a
+  newer authenticated NAT mapping is observed.
+- Added outbound authenticated bootstrap so a private peer can establish the
+  tunnel without waiting for pre-existing inner traffic.
+- Deferred bootstrap and accepted-carrier promotion to process-context workers.
+  Promotion drains work, takes mutexes, and calls `synchronize_rcu()`, which is
+  invalid in the receive NAPI/softirq path.
+- Added a scheduler gate around promotion work so an authenticated observation
+  arriving while the worker exits cannot be lost.
+- Serialized stop, reconnect, callback reset, and exact-socket removal to
+  prevent stale callbacks, double release, and cross-generation cleanup.
+
+### Single-private NAT44 regression
+
+- Added `tcp-nat44-single-private`, an isolated topology with one private peer
+  behind SNAT and no DNAT or forwarded inbound port.
+- Verified that only the private peer dials, the public peer replies over the
+  promoted accepted carrier, keepalives preserve the mapping, and traffic is
+  bidirectional.
+- Replaced the NAT source port from `41001` to `41002`, flushed conntrack, and
+  verified authenticated reacquisition, bidirectional recovery, and retirement
+  of the old accepted carrier.
+
+### Validation
+
+- Passed all 209 local source and contract tests.
+- Built the production module with `W=1` against the prepared WSL 6.6 tree.
+- Built production, DEBUG, and fault-injection modules on both Hyper-V Ubuntu
+  guests running `6.8.0-136-generic`.
+- Final rebased Hyper-V run `wg20260731T070252Z` passed
+  `tcp-nat44-single-private` on both guests with clean kernel logs. Acquisition
+  completed within the case deadline on both guests; the same run passed DEBUG
+  initialization self-tests.
+- Final rebased Hyper-V run `wg20260731T070427Z` passed hostile-stream parsing, short-write,
+  fatal-send, exact-target retirement, recovery, and production-module restore
+  checks on both guests.
+- Follow-up run `wg20260731T064611Z` kept clean kernel logs but failed three
+  older dual-reachable tuple-direction assertions. Immediate bootstrap allows
+  the public peer's valid outbound/DNAT carrier to win when both peers are
+  reachable, while those tests require the private peer's `41001` SNAT carrier.
+  This is an unresolved simultaneous-initiation policy/test expectation, not
+  evidence against the outbound-only single-NAT result.
+
 ## Maintainer update policy
 
 Add future entries chronologically. Include the date, commit hash, implemented

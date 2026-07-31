@@ -267,6 +267,31 @@ documentation and regression scaffolding. This checkpoint records groundwork;
 it does not retroactively broaden the authenticated-promotion or real-device
 roaming claims.
 
+### 2026-07-31 - Authenticated accepted-carrier ownership
+
+The NAT branch was integrated through WireguardTCP `a1f93da`, preserving the
+latest TCP source split. The operational topology removes the earlier reverse-DNAT
+requirement: a private peer creates the only connection, while the reachable
+peer identifies and adopts that accepted stream after WireGuard authentication.
+
+Authentication is the ownership boundary. An accepted socket begins on a
+provisional peer because its TCP address is not a WireGuard identity. Once a
+decrypted packet identifies the configured peer, a device-monotonic connection
+ID selects that precise provisional entry. The configured peer receives the
+socket, callbacks, and observed tuple; the provisional entry is detached before
+destruction. An older ID cannot displace a newer authenticated carrier.
+
+Authenticated receive finalization runs in NAPI/softirq context, but promotion
+uses mutexes, workqueue drains, and `synchronize_rcu()`. The receive path
+therefore records the candidate generation and schedules process-context work.
+A lock-protected scheduled flag closes the worker-exit race: a producer either
+leaves work for the active worker or becomes the next worker owner.
+
+Outbound carrier establishment likewise schedules authenticated bootstrap work
+instead of initiating WireGuard handshakes from socket callbacks. Peer stop
+closes both scheduling gates and synchronously drains bootstrap and promotion
+work before releasing sockets.
+
 ## Appendix - Detailed architecture by subsystem
 
 ## Device-wide transport selection
@@ -510,6 +535,32 @@ The isolated NAT regression formalized a dual-reachable topology:
 
 All router behavior lives in a disposable network namespace, keeping host and
 guest root networking unchanged.
+
+### Outbound-only single-NAT behavior
+
+The `single-private` topology is the stronger operational model:
+
+- the private peer has the public peer's reachable TCP endpoint;
+- the public peer has no usable endpoint for the private peer;
+- the router performs SNAT only, with no DNAT or port forward;
+- the private peer bootstraps WireGuard authentication over its outbound TCP
+  carrier;
+- the public peer promotes that accepted carrier after authentication and uses
+  the same stream for replies; and
+- when the SNAT source port changes, the next authenticated generation replaces
+  the carrier and the prior accepted socket is retired.
+
+Final rebased Hyper-V run `wg20260731T070252Z` passed this model independently on both Ubuntu
+guests. The test observed `41001` to `41002` source-port rebinding,
+bidirectional traffic before and after the change, accepted-carrier promotion,
+old-carrier retirement, and no severe kernel messages.
+
+When both peers are publicly reachable, immediate bootstrap permits either
+valid TCP direction to win. The older dual-reachable assertions require the
+SNAT direction specifically, so run `wg20260731T064611Z` observed established
+reverse/DNAT carriers but failed those direction-specific checks. A future
+simultaneous-initiation policy must either select a canonical carrier direction
+or those tests must accept either authenticated winner.
 
 ## Network namespaces, routes, and socket marks
 

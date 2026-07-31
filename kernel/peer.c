@@ -67,19 +67,6 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	/* TCP field initialization */
 	peer->peer_socket = NULL; /* Initialize the peer socket to NULL */
 
-	/* Initialize the original socket callbacks to NULL */
-	peer->original_outbound_state_change = NULL;
-	peer->original_outbound_write_space = NULL;
-	peer->original_outbound_data_ready = NULL;
-	peer->original_outbound_error_report = NULL;
-	peer->original_outbound_destruct = NULL;
-
-	peer->original_inbound_state_change = NULL;
-	peer->original_inbound_write_space = NULL;
-	peer->original_inbound_data_ready = NULL;
-	peer->original_inbound_error_report = NULL;
-	peer->original_inbound_destruct = NULL;
-
 	peer->partial_skb = NULL; /* Initialize the partial skb pointer to NULL */
 	peer->expected_len = 0; /* Initialize expected length to 0 */
 	peer->received_len = 0; /* Initialize received length to 0 */
@@ -100,15 +87,20 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	peer->tcp_connecting = false;
 	peer->tcp_inbound_callbacks_set = false;
 	peer->tcp_outbound_callbacks_set = false;
+	peer->tcp_inbound_socket_data = NULL;
+	peer->tcp_outbound_socket_data = NULL;
 	peer->tcp_outbound_remove_scheduled = false;
 	peer->tcp_reconnect_requested = false;
 	peer->tcp_stopping = false;
+	peer->tcp_teardown_quarantined = false;
 	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_inbound_remove_socket = NULL;
 	peer->tcp_roaming_connection_id = 0;
 	peer->tcp_inbound_remove_scheduled = false;
 	peer->peer_endpoint_set = false;
 
 	/* Initialize the spinlock for protecting TCP-related state */
+	mutex_init(&peer->tcp_socket_lock);
 	spin_lock_init(&peer->tcp_lock);
 	spin_lock_init(&peer->tcp_read_lock);
 	spin_lock_init(&peer->tcp_write_lock);
@@ -125,6 +117,11 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	/* Initialize the work structure, associating it with the worker functions */
 	INIT_WORK(&peer->tcp_read_work, wg_tcp_read_worker);
 	INIT_WORK(&peer->tcp_write_work, wg_tcp_write_worker);
+	INIT_WORK(&peer->tcp_bootstrap_work, wg_tcp_bootstrap_worker);
+	peer->tcp_bootstrap_socket = NULL;
+	INIT_WORK(&peer->tcp_promotion_work, wg_tcp_promotion_worker);
+	peer->tcp_promotion_connection_id = 0;
+	peer->tcp_promotion_worker_scheduled = false;
 	if (wg->transport == WG_TRANSPORT_TCP) {
 		peer->tcp_read_wq = alloc_workqueue("tcp_read_wq",
 						    WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
@@ -197,18 +194,13 @@ static void peer_make_dead(struct wg_peer *peer)
 	/* Mark as dead, so that we don't allow jumping contexts after. */
 	WRITE_ONCE(peer->is_dead, true);
 
-	/* Reset socket callbacks BEFORE destroying workqueues to prevent
-	 * callbacks from firing queue_work on already-destroyed wqs.
-	 */
-	wg_reset_tcp_socket_callbacks(peer, false);
-	wg_reset_tcp_socket_callbacks(peer, true);
-
 	/* Cancel any pending remove/retry delayed work (non-sync to avoid
 	 * self-deadlock if called from a remove worker context).
 	 */
 	cancel_delayed_work(&peer->tcp_outbound_remove_work);
 	peer->tcp_outbound_remove_scheduled = false;
 	peer->tcp_outbound_remove_socket = NULL;
+	peer->tcp_inbound_remove_socket = NULL;
 	peer->tcp_reconnect_requested = false;
 	peer->tcp_stopping = true;
 	cancel_delayed_work(&peer->tcp_inbound_remove_work);
