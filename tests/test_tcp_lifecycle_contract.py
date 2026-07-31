@@ -263,7 +263,7 @@ class TcpLifecycleContract(unittest.TestCase):
         connect = section(
             self.socket,
             "int wg_tcp_connect(struct wg_peer *peer)\n{",
-            "/* FIX: -Wunused-function",
+            "static void __maybe_unused wg_release_peer_tcp_connection(",
         )
 
         self.assertIn("struct socket *socket = NULL;", connect)
@@ -417,7 +417,7 @@ class TcpLifecycleContract(unittest.TestCase):
         connect = section(
             self.socket,
             "int wg_tcp_connect(struct wg_peer *peer)\n{",
-            "/* FIX: -Wunused-function",
+            "static void __maybe_unused wg_release_peer_tcp_connection(",
         )
 
         self.assertGreaterEqual(

@@ -143,7 +143,7 @@ class TcpStreamContract(unittest.TestCase):
         queue_limit = section(
             self.socket,
             "static unsigned int wg_tcp_test_effective_queue_limit(void)",
-            "struct wg_tcp_socket_list_entry",
+            "#define WG_TCP_MAX_PENDING_CONNECTIONS",
         )
 
         self.assertIn("wg_tcp_test_effective_queue_limit()", enqueue)

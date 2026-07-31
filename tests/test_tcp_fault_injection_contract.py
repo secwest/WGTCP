@@ -31,7 +31,7 @@ class TcpFaultInjectionContract(unittest.TestCase):
             self.socket,
             "#if defined(DEBUG) && defined(WG_TCP_FAULT_INJECTION)\n"
             "#define WG_TCP_TEST_MAX_GARBAGE_PREFIX",
-            "struct wg_tcp_socket_list_entry",
+            "#define WG_TCP_MAX_PENDING_CONNECTIONS",
         )
         debug, production = controls.split("#else", maxsplit=1)
 
@@ -81,7 +81,7 @@ class TcpFaultInjectionContract(unittest.TestCase):
         sender = section(
             self.socket,
             "static int wg_tcp_send_frame(",
-            "void wg_print_wireguard_skb(",
+            "static void wg_tcp_arm_write_space(",
         )
 
         self.assertIn("send_len = wg_tcp_test_send_len(frame->len)", sender)
@@ -123,7 +123,7 @@ class TcpFaultInjectionContract(unittest.TestCase):
         controls = section(
             self.socket,
             "static unsigned int wg_tcp_test_take_write_delay_ms(void)",
-            "struct wg_tcp_socket_list_entry",
+            "#define WG_TCP_MAX_PENDING_CONNECTIONS",
         )
         writer = section(
             self.socket,

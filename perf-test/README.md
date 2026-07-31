@@ -38,7 +38,6 @@ perf-test/
   README.md              # this file (campaign overview + how to run)
   TESTPLAN.md            # full test design — measurement matrix, methodology,
                          # statistical model, repeatability rules
-  COSTESTIMATE.md        # cost estimate for the full campaign
   harness/
     run-cell.sh          # runs ONE matrix cell (one workload, one loss rate)
                          # on a (server, client) pair already provisioned
@@ -67,8 +66,7 @@ perf-test/
 
 1. **Read** [`TESTPLAN.md`](./TESTPLAN.md) — describes the matrix, methodology,
    and what "good" means.
-2. **Read** [`COSTESTIMATE.md`](./COSTESTIMATE.md) — confirm budget before running.
-3. **Provision the fleet:**
+2. **Provision the fleet:**
    ```pwsh
    .\orchestrator\deploy-fleet.ps1 `
        -Subscription <id> -ResourceGroup rg-wgtcp-perf `
@@ -76,18 +74,18 @@ perf-test/
        -RegionsX64 canadacentral,westus3,australiaeast,southafricanorth `
        -RegionsArm canadacentral,westus3,australiaeast,southafricanorth
    ```
-4. **Run the matrix:**
+3. **Run the matrix:**
    ```pwsh
    .\orchestrator\run-campaign.ps1 -ResultsDir .\results\v1.0.0
    ```
    Expect ≈ 24h on the default settings.
-5. **Aggregate + report:**
+4. **Aggregate + report:**
    ```pwsh
    python .\harness\aggregate.py .\results\v1.0.0 -o .\results\v1.0.0\matrix.csv
    ```
    Use [`REPORT-TEMPLATE.md`](./REPORT-TEMPLATE.md) to write the
    per-version analysis. Commit the report.
-6. **Teardown:**
+5. **Teardown:**
    ```pwsh
    .\orchestrator\teardown-fleet.ps1 -ResourceGroup rg-wgtcp-perf
    ```

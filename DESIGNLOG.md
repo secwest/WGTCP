@@ -1,378 +1,479 @@
-# Design Log
-
-This log records architectural decisions, their rationale, validation evidence,
-and known limitations. Update it in the same commit as every substantive design
-or behavioral change. Append a new entry when a decision changes; mark older
-entries as superseded instead of silently rewriting their history.
-
-## 2026-07-15: Meltdown documentation reports the measured operating envelope
-
-**Decision:** Describe the severe behavior as an extreme tested corner, not as
-a routine property of modern networks. State that clean 16-flow finite-queue
-and 100-400 ms RTT controls were stable, while severe stalls appeared only
-after persistent loss was combined with high RTT, saturation, and one ordered
-outer stream. Preserve the finding that no valid execution was formal
-meltdown.
-
-**Boundary:** The 4.42%-nominal Gilbert-Elliott profile is the lowest
-demonstrated severe point, not an onset threshold. The planned 0.3% random-loss
-row was not executed. Documentation must therefore avoid both alarmist
-prevalence claims and unsupported claims that pathology is impossible below
-the tested point.
-
-**Consequence:** `docs/TCP_MELTDOWN.md` is the concise operator-facing
-interpretation. `perf-test/meltdown/` remains the reproducible evidence source,
-and its analyzer exports exact contiguous stall intervals from raw 100 ms
-receiver counters.
-
-## 2026-07-14: Meltdown conclusions use separate evidence inventories
-
-### Severe degradation is not promoted to formal meltdown
-
-**Decision:** Report the pre-breadth released selection, the raw-execution
-audit, and the stopped breadth selection separately. A valid execution is
-`meltdown` only when its 100 ms stall fraction, significant fitted goodput
-decline, and inner-RTO rate all cross the thresholds predeclared in
-`perf-test/meltdown/TESTPLAN.md`. Invalid executions are retained but never
-promoted, even when their observed metrics cross all three thresholds.
-
-**Evidence:** The 106-cell released selection contains 98 valid cells,
-including five degraded and one near-meltdown. The 162-execution post-repair
-audit contains 122 valid cells: 92 stable, 17 degraded, 13 near-meltdown, and
-zero meltdown, plus 40 invalid records. The breadth base and bounded reruns
-leave a logical 20-cell state of 19 valid and one invalid. Every valid TCP
-breadth cell has severe stalls and outer recovery, but significant decline and
-qualifying inner RTO occur in different executions.
-
-**Consequence:** Documentation must not describe the results as either
-meltdown immunity or absence of TCP-over-TCP effects. It may state that severe
-degradation and near-meltdown behavior are demonstrated, while formal meltdown
-is not established in valid evidence.
-
-### Runtime claims stop at the measured source fingerprint
-
-**Decision:** Traffic conclusions remain attached to the recorded campaign
-runtime. The later upstream parity/lifecycle integration may be described as
-contract-tested and identically ARM-built, but not as traffic-qualified until
-that candidate is loaded and exercised separately.
-
-## 2026-07-14: NAT44 validation stays narrower than carrier promotion
-
-### Dual-reachable NAT is a supported test topology
-
-**Decision:** Validate current TCP-over-NAT behavior with a private peer, an
-isolated router namespace, and a public peer inside each Ubuntu guest. The
-private peer is explicitly SNATed and has a stable external DNAT port that the
-public peer uses as its configured endpoint. Both configured peers therefore
-retain outbound reachability, matching the current two-carrier transport
-model.
-
-**Rationale:** This topology proves useful stateful-firewall and port-forward
-operation without treating an accepted provisional socket as if it had already
-been promoted to the authenticated peer. A no-forward, responder-only case
-would test a different and still-unimplemented carrier ownership design.
-
-**Evidence:** Hyper-V run `wg20260714T005957Z` passed independently on
-`wgtcp-a` and `wgtcp-b`. In each guest, nftables translated private outbound
-traffic from source port 41001 and DNATed public port 52241 to private listener
-52221. Bidirectional inner traffic passed, both peers advanced
-`PersistentKeepalive` transmit counters while otherwise idle, and conntrack
-contained both exact translations.
-
-### Observed NAT source ports do not become dial ports
-
-**Decision:** A live NAT mapping change is allowed to produce a new observed
-accepted source port, but the netlink-visible endpoint and future reverse dial
-target keep the operator-configured forwarded port.
-
-**Evidence:** The test flushed only the disposable router namespace's
-conntrack table, changed its SNAT rule from port 41001 to 41002, and drove
-traffic across the resulting TCP failure. A new 41002 carrier appeared,
-bidirectional tunnel traffic recovered on both guests, and `wg show endpoints`
-continued to report public port 52241 rather than either translated source
-port. A subsequent live `FwMark` change forced the public peer's normal
-outbound reconnect owner to dial again; a router-namespace counter observed a
-new SYN through forwarded port 52241 and bidirectional traffic remained usable.
-
-**Boundary:** The old accepted 41001 socket still appeared locally
-`ESTABLISHED` after the new mapping and overlay traffic were active, although
-it no longer had conntrack state. Immediate duplicate/stale-carrier retirement
-is therefore recorded as remaining work. The result also does not establish
-ordinary one-sided client-behind-NAT operation, double NAT without forwarding,
-or arbitrary provider NAT behavior.
+# WireguardTCP Design History
 
-### NAT tests leave no persistent root networking changes
+This document explains how the WireguardTCP architecture evolved from the
+preserved original TCP branch into the current kernel module, userland tools,
+test systems, and performance framework. It records implemented design
+decisions and the bug fixes that refined them.
 
-**Decision:** Forwarding, nftables rules, and conntrack mutation live only in a
-dedicated router namespace. Namespace and veth ownership is recorded before
-creation, failures capture public WireGuard, socket, route, ruleset, and
-conntrack diagnostics, and cleanup deletes only recorded resources.
+## 1. Source lineage and standalone layout
 
-**Rationale:** The regression must not alter Multipass management networking,
-the private Hyper-V switches, or either guest's root firewall and forwarding
-policy. Installing `nftables` and `conntrack` is persistent lab provisioning;
-the test topology itself is disposable.
+### Original TCP branch
 
-**Final campaign:** Run `wg20260714T010310Z` repeated this case inside the
-complete 36-case suite and finished **36 PASS, 0 FAIL, 0 SKIP** in 558.520
-seconds across 541 commands. Preflight passed all 107 source contracts on both
-guests, every kernel-log check was clean, and the hostile-stream case restored
-the production module afterward.
+The preserved implementation identifies its source as
+`jnathan/naked_gun@4211b00ef437f097ffd741145ec4379eb89bb031`. Its original
+commit graph is no longer available from GitHub, so the design of that period is
+reconstructed from the imported source and retained source-era notes.
 
-## 2026-07-13: TCP parity and lifecycle hardening
+The original branch made TCP a carrier beneath WireGuard rather than a new VPN
+protocol:
 
-### UDP remains the compatibility baseline
+```text
+inner packet
+    -> WireGuard Noise encryption
+    -> WireGuard message
+    -> UDP datagram or framed TCP record
+```
 
-**Decision:** UDP remains the default transport when no transport is specified.
-Explicit UDP configuration preserves stock-facing grammar, output, random-port
-behavior, endpoint learning, and data-path semantics. In TCP mode, the companion
-UDP socket and the TCP listener share the selected numeric listen port.
+This retained WireGuard's peer keys, Noise state machine, replay protection,
+timers, `AllowedIPs`, and encrypted message formats. TCP framing was introduced
+only to recover record boundaries from a byte stream.
 
-**Rationale:** Existing WireGuard configurations and controllers must continue
-to work without opting into the experimental TCP transport.
+### Standalone import - `ffe7285`
 
-**Evidence:** The two-VM Ubuntu 24.04/Linux 6.8 campaign
-`wg20260713T185138Z` passed all 16 stock/fork kernel and tool combinations plus
-the focused UDP compatibility cases.
+The April 2026 import retained:
 
-### Configured endpoints and observed TCP tuples are separate state
+- the complete out-of-tree kernel module;
+- the modified `wg` and `wg-quick` tools;
+- the transport-aware UAPI;
+- source-era build and tunnel notes; and
+- no redundant Linux kernel source tree.
 
-**Decision:** A peer's configured TCP listen port is never replaced by an
-observed ephemeral TCP source port. Noise-authenticated accepted traffic may
-update the IP address used by a future dial, while device-monotonic connection
-IDs prevent an older retained carrier from reverting a newer observation.
-Explicit netlink endpoint changes remain authoritative.
+That layout made the transport implementation directly buildable against the
+running kernel and made kernel, userland, UAPI, tests, and documentation
+reviewable in one repository.
 
-**Rationale:** TCP source ports commonly reflect ephemeral or NAT-selected
-state and are not evidence of the remote peer's listening service. Authentication
-binds an address observation to a WireGuard peer, but does not advertise a new
-listen port.
+## 2. Device-wide transport selection
 
-**Consequence:** Authenticated address learning and asymmetric configured ports
-work in the tested topology. General responder-only roaming and arbitrary NAT
-source-port changes still require authenticated socket promotion or an explicit
-port-advertisement design.
+### Original decision
 
-### Network changes reconnect through one lifecycle owner
+Transport selection is an interface property:
 
-**Decision:** Route, address, netdevice, uplink, configured-endpoint, and live
-`FwMark` changes request reconnection through the existing cleanup and retry
-owners. Listener, accepted, and outbound socket marks are refreshed as needed.
-Callbacks do not destroy or replace sockets directly.
+- value zero and an omitted setting select UDP;
+- explicit `udp` selects the retained UDP path; and
+- explicit `tcp` selects the TCP carrier.
 
-**Rationale:** Established TCP streams retain route, source-address, and mark
-state. Reusing the serialized removal path avoids concurrent socket release and
-replacement from notifier, callback, and receive contexts.
+The Linux generic-netlink device attributes carry the selection between the
+modified tool and kernel. The parser accepts `Transport = tcp`, the direct
+command supports `wg set <interface> transport tcp`, and canonical
+configuration output uses the same spelling.
 
-**Evidence:** Full-tunnel policy routing, recursion avoidance, two live
-`FwMark` changes, route replacement, source-address replacement, and uplink
-migration passed on both Hyper-V guests.
+### Compatibility refinement - `f515eb5` and `849d702`
 
-### TCP stream I/O is serialized and socket lifetime is explicit
+The compatibility work established these invariants:
 
-**Decision:** All encoded records enter one bounded per-peer queue and only the
-write worker calls `kernel_sendmsg`. Short writes retain the exact unsent suffix
-at the head of that queue. Enqueue, worker publication, retry, removal, and stop
-state share the peer lifetime lock and stop barrier. Removal workers claim the
-exact socket they retire and drain callbacks and work before release.
+- Existing configurations remain UDP unless they opt into TCP.
+- Stock-facing UDP command grammar and output remain unchanged.
+- UDP random-port selection remains available.
+- TCP mode binds its listener and companion UDP socket to the same selected
+  numeric port.
+- Transport and TCP listen-port replacement occur while the interface is down,
+  preserving active socket ownership.
+- Separate interfaces provide independent TCP and UDP policy when both are
+  required by one host.
 
-The read worker pins one selected socket for receive, parser resynchronization,
-synthetic header construction, delivery, and requeue. Coalesced leftover data
-uses a right-sized buffer and expands only when later parsing requires it.
+The Hyper-V matrix tested stock and modified tools against stock and modified
+kernels, while source contracts encoded parser, netlink, output, random-port,
+and live-mode transition behavior.
 
-**Rationale:** Stream order, partial-write recovery, and teardown correctness
-must not depend on a mutable `peer_socket` pointer or on timing between callbacks
-and workqueue cancellation.
+## 3. TCP record format and receive integration
 
-**Evidence:** Production and DEBUG modules built with `W=1`; 89 source
-contracts passed locally and on each guest; the complete 32-case runtime
-campaign passed without kernel-log failures.
-
-### Provisional admission is bounded but is not a cookie replacement
-
-**Decision:** Pre-authentication TCP accepts use device-wide and per-source
-caps, a fixed-size lossy source table, per-source throttling, and idle and
-absolute deadlines. Valid Noise traffic releases pre-authentication accounting
-for that exact connection.
+### Original framing design
 
-**Rationale:** An unauthenticated TCP origin must not consume unbounded sockets,
-tracking objects, or parser state.
+The TCP carrier prepends an 8-byte header to each encrypted WireGuard message.
+The header carries:
 
-**Limitation:** These controls are stateful and do not provide a stateless,
-cookie-equivalent defense before cryptographic handshake work. A hostile-network
-deployment still needs that design and validation.
-
-### Dual-stack listeners are independent
-
-**Decision:** IPv4 and IPv6 listener sockets and threads are independently
-created, published, and released. Synthetic IPv6 receive metadata carries a
-scope from the accepted or dialed socket so authenticated learning does not
-discard link-local scope information.
-
-**Evidence:** Independent dual-stack listeners, asymmetric listen ports, and an
-IPv6 outer carrier passed at runtime. The later scoped-IPv6 campaign below
-supersedes this entry's original link-local validation gap; VRF and
-namespace-move behavior remain follow-up work.
-
-### Simultaneous Noise initiation uses a deterministic tie-break
-
-**Decision:** When both peers initiate concurrently, the static public keys
-select a deterministic Noise-handshake role under the handshake lock.
-
-**Limitation:** This resolves handshake-role ambiguity. It is not yet a complete
-authenticated physical-carrier promotion or deduplication protocol.
-
-### Performance claims remain bounded by evidence
-
-**Decision:** Documentation may report the observed TCP-mode throughput and
-resilience results, but must not claim general TCP-over-TCP meltdown immunity.
-The current evidence supports only the narrower conclusion that meltdown may
-occur under a smaller set of conditions than commonly assumed.
-
-**Status (partially superseded 2026-07-14):** Controlled physical-carrier loss,
-finite queues, 16-flow load, forced short writes, parser resynchronization, and
-inner/outer recovery telemetry are now complete. Reorder, blackout, broader
-workloads, dynamic recovery, and multi-hour soak remain before broadening the
-claim. See "Meltdown conclusions use separate evidence inventories" above.
-
-### Hyper-V control recovery uses exact ownership
-
-**Decision:** Host command timeouts are bounded. Orphaned `multipass.exe` client
-processes are inspected by PID, age, executable, CPU use, and full command line
-before only those exact stale clients are terminated. `multipassd`, VM worker
-processes, and guests are not blanket-stopped. Guest cleanup uses the run ID and
-internal case ID recorded by the successful `prepare` command.
-
-**Rationale:** This preserves VM and interface ownership boundaries while
-recovering from a failed host control channel. The final clean campaign passed
-after seven verified stale clients and the exact `m13` and `m10` guest state
-were removed.
-
-## 2026-07-13: Persistence, scoped IPv6, and hostile-stream validation
-
-### Configuration persistence keeps secrets inside the guest
-
-**Decision:** TCP mode must round-trip the canonical `Transport = tcp` state
-through `showconf`, `setconf`, and `syncconf`, and preserve it through
-`wg-quick SaveConfig`. Runtime tests keep secret-bearing private-key material
-in a mode-0700 guest temporary directory, require each configuration file to be
-mode 0600, compare files without printing them, and emit only public pass/fail
-fields.
-
-**Evidence:** Both guests restored traffic and exact canonical configuration
-after live `setconf` and drift-removing `syncconf`. Focused run
-`wg20260713T225629Z` also used a guest-local `wg-quick` copy paired with the
-modified `wg` tool to save, remove, recreate, and retest the interface; both
-guests returned `wg_quick_roundtrip=pass`.
-
-### Link-local IPv6 scope is part of the endpoint
-
-**Decision:** A link-local IPv6 TCP endpoint is the address, numeric port, and
-interface scope together. Userspace preserves the named `%interface` zone,
-kernel endpoint state carries `sin6_scope_id`, and synthetic receive metadata
-uses the selected socket scope rather than collapsing it to zero.
-
-**Evidence:** Asymmetric scoped endpoints survived tool output and `showconf`,
-the outer TCP tuples used the expected link-local interfaces, and bidirectional
-inner IPv6 traffic passed on both guests.
-
-### Destructive fault injection is a separate artifact
-
-**Decision:** Forced stream faults are compiled only when both `DEBUG` and
-`WG_TCP_FAULT_INJECTION` are defined. The lab builds a distinct
-`wireguard-fork-fault.ko`; production and ordinary DEBUG modules expose no
-`tcp_test_*` parameters. Root-only controls cap actual send requests, prepend a
-bounded provably invalid byte prefix, lower the drop-newest queue cap, and pause
-one writer invocation for at most one second. The delay is consumed with an
-atomic exchange so partial-send suffix retries do not repeat it. Read-only
-counters prove each path fired. Tests arm controls only after a clean tunnel
-exists, compare counter deltas, reset every module-global control, and require
-traffic recovery. Artifact reuse compares live `modinfo` output with the saved
-manifests before accepting an existing build.
-
-**Rationale:** This validates real kernel short-write, parser-resynchronization,
-and backpressure paths without turning unstable destructive controls into a
-production or general DEBUG interface.
-
-### Promotion must bind an authenticated carrier before learning from it
-
-**Decision:** The target roaming design uses a refcounted carrier object with
-`PROVISIONAL`, `AUTHENTICATED`, `PROMOTING`, `ACTIVE`, `RETIRING`, and `DEAD`
-states. An atomic `authenticate_candidate(connection_id, peer)` operation must
-find a live ID, bind it once to exactly one configured peer while retaining a
-peer reference, reject stale IDs and later identities, release admission, and
-only then permit dial-IP learning or queue promotion. Promotion selects at most
-one active and one bounded standby carrier and retires duplicates without
-moving a partially read or written record between streams.
-
-**Rationale:** Current connection IDs are a useful foundation, but marking a
-connection authenticated does not associate it with a peer. Endpoint mutation
-before a successful exact-ID claim permits stale completion and multi-identity
-ambiguity. The existing public-key tie-break resolves Noise initiation state,
-not physical TCP ownership.
-
-**Compatibility:** Pre-binding parsing cannot be handshake-only. A reconnect
-may carry a valid data message for an existing receiver index before a fresh
-handshake, so provisional carriers need strict byte/frame budgets while allowing
-exact-size handshake/cookie messages and bounded existing-key data until AEAD
-authentication binds the peer.
-
-### Carrier collision ordering needs shared authenticated input
-
-**Decision:** Static public-key ordering selects the preferred physical
-direction: the lower-key endpoint prefers outbound and the higher-key endpoint
-prefers the corresponding inbound carrier. Duplicate carriers in that direction
-must be ordered by a token derived from or exchanged inside their authenticated
-handshake. A device-local connection ID may locate a carrier and a local
-publication generation may reject stale work, but neither is shared and neither
-may decide a cross-peer winner.
-
-**Reason:** Using independent local counters can make the two endpoints publish
-different streams. Direction ordering is shared already; same-direction
-deduplication needs a second value both authenticated endpoints observe.
-
-### TCP cookie enforcement requires exact-stream replies and staged rollout
-
-**Decision:** Restore TCP pre-Noise cost defense in phases. First route
-handshake and cookie replies by exact TCP connection ID, consume cookie
-responses before transport branching, and enforce MAC1. Then deploy clients
-that understand same-stream cookie responses. Only afterward enforce under-load
-MAC2 challenges, because the current snapshot skips TCP cookie consumption and
-would not be rolling-upgrade compatible with immediate challenge enforcement.
-
-**Boundary:** Application cookies reduce pre-Noise CPU cost; they do not prevent
-TCP SYN, accept-queue, or socket state. Kernel SYN cookies/backlog policy and
-the existing accept caps remain separate first-layer controls.
-
-### Final evidence for this tranche
-
-Hyper-V run `wg20260713T221904Z` completed **35 PASS, 0 FAIL, 0 SKIP** in
-452.476 seconds across 533 commands with no kernel-log failures. Each guest
-observed 80 forced short writes, four injected malformed prefixes, four
-successful parser resynchronizations, more than 2,300 queue-pressure drops,
-and clean bidirectional recovery. The completed checks narrow the remaining
-work to promotion/cookie implementation, MTU, VRF and namespace churn,
-physical-carrier impairment, longer multi-flow soak, and platform breadth.
-
-### Fault-only modules are ephemeral test state
-
-**Decision:** One guest-side command owns the complete fault-module lifecycle.
-It installs an `EXIT` cleanup before loading the fault artifact, runs the
-namespace test, restores production after the namespace cleanup, and reports a
-combined test/restore failure when necessary. The host runner requires each
-guest to return `restored_kernel_variant=fork` before the case can pass.
-
-**Reason:** Root-only controls and a separate build guard prevent production
-parameter exposure, but leaving the instrumented artifact active after a
-successful case would still make later manual testing differ from the declared
-production state.
-
-**Evidence:** The exact hardened follow-up worktree snapshot (base archive SHA-256
-`5133a0d1c67879de26510d242d01d198b08e71ccbe305bcd197eec13ffc15bc7`,
-overlay SHA-256
-`efe576b3c226089de2bbbd23670c599f78a45d8ec315c896cf6c6494a9692dd7`)
-built all three module variants on both guests. Focused run
-`wg20260713T225629Z` passed the configuration and hostile-stream cases and
-returned `restored_kernel_variant=fork` from each guest-side command.
-Reuse-only artifact verification and all 103 contracts also passed on both
-guests.
+- total record length;
+- WireGuard message type;
+- framing flags; and
+- a lightweight framing checksum.
+
+The checksum locates plausible record boundaries; WireGuard authentication
+continues to determine whether a message is trusted.
+
+The receiver:
+
+1. reads stream bytes without assuming one socket read equals one record;
+2. validates type, flags, checksum, and bounded length;
+3. retains incomplete records for the next read;
+4. reconstructs endpoint metadata from the selected socket; and
+5. passes complete encrypted messages into the normal WireGuard receive path.
+
+### Stream parser hardening - `f515eb5`, `88b7173`, and `849d702`
+
+The parser evolved to:
+
+- use right-sized leftover buffers;
+- grow buffers only when a validated record requires more space;
+- process complete buffered records before requesting more socket data;
+- retain a possible seven-byte split-header suffix during resynchronization;
+- reschedule bounded buffered work; and
+- pin one socket through receive, parse, metadata construction, delivery, and
+  requeue.
+
+These changes made parser state belong to the exact carrier being consumed
+rather than to a mutable peer socket alias.
+
+### Hostile-stream validation
+
+The separate fault module added:
+
+- bounded garbage prefixes;
+- parser resynchronization counters;
+- forced short writes;
+- queue-pressure controls;
+- one-shot writer delay; and
+- post-pressure traffic verification.
+
+Production and ordinary DEBUG builds do not expose these destructive controls.
+
+## 4. Listener, dialer, and provisional accepted connections
+
+### Original listener and dialer design
+
+TCP mode supports both directions:
+
+- a per-device listener accepts new streams;
+- configured peers create nonblocking outbound connections;
+- socket callbacks schedule peer work; and
+- retry and cleanup workers own reconnection and retirement.
+
+Accepted sockets initially use temporary peers because the remote WireGuard
+identity becomes known only after authenticated Noise traffic arrives.
+
+Source-era notes record fixes to listener setup, temporary-peer handling,
+outbound connection establishment, and `TCP_NODELAY` on both accepted and
+outbound sockets.
+
+### Admission and identity hardening - `849d702`
+
+Provisional connections gained:
+
+- a device-wide admission cap;
+- a per-source admission cap;
+- a fixed-size source accounting table;
+- source throttling;
+- idle and absolute authentication deadlines;
+- stable device-local connection identifiers; and
+- release of pre-authentication accounting after valid Noise traffic.
+
+The listener records the temporary peer and connection identity in the tracked
+connection entry. Asynchronous authentication can therefore refer to one exact
+accepted carrier even when multiple sockets are active.
+
+## 5. Socket ownership and retirement
+
+### Original model
+
+The imported module already had listener, inbound, outbound, and selected peer
+socket aliases plus read, write, retry, inbound-removal, and outbound-removal
+work items.
+
+### Lifetime serialization - `b1c40d9`
+
+The July lifetime fix introduced two peer-level ownership locks:
+
+- a write mutex serializing send activity against retirement; and
+- a cleanup mutex granting exclusive retirement ownership.
+
+Read and write recheck flags record callbacks that arrive while their worker is
+already active. Teardown synchronously cancels both workers and clears
+scheduling state under the corresponding locks.
+
+The resulting invariant is:
+
+> A retiring socket is detached from callbacks, drained from asynchronous work,
+> and released once by its serialized owner.
+
+### Complete lifecycle hardening - `849d702`
+
+Later work unified:
+
+- connection-attempt ownership;
+- publication of peer and outbound aliases;
+- callback installation and reset;
+- retry scheduling;
+- inbound and outbound removal ownership;
+- peer stop barriers;
+- queue draining; and
+- final socket release.
+
+Removal workers claim the exact socket they retire. Peer stop establishes its
+barrier before cancelling work and snapshotting sockets. Network callbacks and
+notifiers request work rather than releasing sockets directly.
+
+### Cleanup pass - `8b2e3c7`, `c8d317c`, `d3fa877`, and `000a4ea`
+
+The implementation was then consolidated by:
+
+- moving shared declarations to `socket.h`;
+- removing stale prototypes;
+- deleting duplicate and incomplete structures;
+- removing the redundant `wg_tcp_socket_list_entry` definition;
+- removing dead receive, Noise, cookie, send, and socket paths; and
+- clarifying debug helper names.
+
+## 6. Serialized transmission and backpressure
+
+### Per-peer output queue
+
+Every framed message enters one bounded per-peer queue. One write worker owns
+`kernel_sendmsg()` calls for that peer, preserving stream order.
+
+When a send writes only part of a frame:
+
+- the exact unsent suffix remains at the queue head;
+- no second encapsulation header is created;
+- already-sent bytes are not repeated; and
+- the worker resumes from the retained offset.
+
+Queue pressure rejects the newest frame, preserving the partially transmitted
+head and every earlier serialized frame.
+
+### Lost-wakeup fix - `7f8472d`
+
+The write worker originally checked `sk_stream_is_writeable()` before calling
+`kernel_sendmsg()`. The fix removed that precondition because a nonblocking send
+reaching `EAGAIN` is what establishes the TCP stack's normal `SOCK_NOSPACE`
+wakeup contract.
+
+The corrected design:
+
+- attempts the nonblocking send;
+- explicitly arms write-space notification whenever work remains blocked;
+- pairs the flag update with the kernel memory barrier used by TCP polling; and
+- relies on `sk_write_space` to reschedule the serialized writer.
+
+This eliminated a condition in which queued frames could remain without a
+future callback.
+
+## 7. Endpoint identity, learning, and simultaneous initiation
+
+### Configured endpoint separation
+
+TCP has two distinct port concepts:
+
+- the configured peer listen port used for future outbound connections; and
+- the observed source port of an accepted connection.
+
+The implementation keeps them separate. Authenticated traffic can update the
+remote IP used by a future dial, while the configured listen port remains
+operator-controlled.
+
+Device-monotonic connection identifiers order authenticated observations so an
+older retained carrier cannot overwrite a newer target. Explicit netlink
+endpoint changes remain authoritative.
+
+### Simultaneous initiation
+
+When both peers initiate at the same time, static public-key ordering selects a
+deterministic Noise initiation role under the handshake lock. Both endpoints
+therefore make the same role decision without a separate coordination service.
+
+### NAT44 behavior
+
+The isolated NAT regression formalized a dual-reachable topology:
+
+- the private peer creates an outbound connection through SNAT;
+- a stable external port DNATs to its listener for reverse connectivity;
+- keepalives maintain state;
+- observed translated source ports do not replace the configured forwarded
+  port; and
+- a live `FwMark` update can force a new reverse dial through the configured
+  forward.
+
+All router behavior lives in a disposable network namespace, keeping host and
+guest root networking unchanged.
+
+## 8. Network namespaces, routes, and socket marks
+
+### Creation namespace
+
+Listener and outbound sockets use the WireGuard device's retained creation
+namespace. The design takes a reference while creating the socket and releases
+it after creation.
+
+### Device marks
+
+Listener, accepted, and outbound sockets carry the WireGuard device's
+`FwMark`. Live mark changes refresh socket policy and request serialized
+reconnection where required.
+
+### Route and address changes
+
+Route, address, netdevice, and uplink notifications do not directly replace
+sockets. They request reconnection through the same cleanup and retry owners
+used by ordinary lifecycle events.
+
+This model was validated with:
+
+- full-tunnel policy routing;
+- recursion avoidance;
+- route replacement;
+- source-address replacement;
+- uplink migration;
+- endpoint updates; and
+- live `FwMark` changes.
+
+## 9. IPv4, IPv6, and scoped endpoints
+
+IPv4 and IPv6 listeners are independently created, published, and released.
+Failure or teardown of one family does not transfer ownership of the other
+family's socket or thread.
+
+For link-local IPv6 carriers:
+
+- userspace preserves the named `%interface` zone;
+- kernel endpoint state carries `sin6_scope_id`;
+- accepted and dialed socket metadata retain the selected scope; and
+- synthetic receive metadata passes that scope into authenticated endpoint
+  handling.
+
+The runtime suite validated independent dual-stack listeners, IPv6 outer
+carriers, asymmetric ports, scoped link-local endpoints, and bidirectional
+inner IPv6 traffic.
+
+## 10. Configuration persistence
+
+The transport setting follows the normal WireGuard configuration lifecycle:
+
+- `wg showconf` emits canonical `Transport = tcp`;
+- `wg setconf` applies a complete configuration;
+- `wg syncconf` removes drift while retaining the desired transport; and
+- `wg-quick SaveConfig` preserves the setting across interface recreation.
+
+Regression tests keep private keys and secret-bearing configurations in
+guest-local restricted directories, compare files without printing secrets,
+and report only public pass/fail metadata.
+
+## 11. Diagnostics and test-only fault injection
+
+### Diagnostic builds
+
+The kernel Makefile supports:
+
+- `WG_TCP_DIAG` for TCP congestion, RTT, retransmission, queue, and socket
+  diagnostics; and
+- `WG_TCP_VERBOSE` for detailed isolated-lab tracing.
+
+### Build variants
+
+The regression environment builds and fingerprints:
+
+- a production module;
+- an ordinary DEBUG module; and
+- a DEBUG plus `WG_TCP_FAULT_INJECTION` module.
+
+Module metadata checks prove destructive parameters exist only in the fault
+variant. A guest-owned command installs cleanup before loading the fault module,
+runs the test, restores production, and reports both test and restoration
+status.
+
+## 12. Regression architecture
+
+### Source contracts
+
+Python contract tests inspect stable source sections and encode design
+invariants for transport grammar, netlink behavior, ownership, listener
+lifecycle, stream ordering, parser bounds, namespace use, endpoint learning,
+marks, ports, diagnostics, NAT, and test infrastructure.
+
+The July code cleanup removed several old comments and declarations that tests
+had used as section markers. Commit `cdc35c0` replaced those brittle markers
+with stable function and preprocessor boundaries, restoring all 181 contracts.
+
+### Hyper-V backend
+
+The Windows backend provisions two Ubuntu guests through Hyper-V/Multipass,
+adds isolated carrier networks, transfers a source snapshot, builds all module
+variants, switches modules, runs cases, classifies infrastructure failures, and
+captures timestamped reports and command logs.
+
+### Linux libvirt backend
+
+The Linux backend provisions the same topology with libvirt/QEMU/KVM and uses
+verified OpenSSH transport. It imports the Hyper-V runner's authoritative case
+definitions, so both host platforms execute one shared suite.
+
+Live provisioning fixes established:
+
+- UUID-based ownership for networks and domains;
+- canonical libvirt isolated-network handling;
+- SeaBIOS loading for unsigned test modules;
+- explicit SSH key and host-key management;
+- exact Git-visible source snapshots;
+- scoped Git trust;
+- privileged result ownership handoff; and
+- Linux-specific preflight reporting.
+
+## 13. Performance test architecture
+
+### Application campaign
+
+The application campaign chose isolated point-to-point pairs so each latency
+tier and architecture had an independent TCP-WG/UDP-WG comparison.
+
+The matrix combined:
+
+- x64 and arm64;
+- four region/latency tiers;
+- TCP-WG and UDP-WG;
+- short HTTPS, bulk TCP, bulk UDP, HTTP/2, and interactive traffic;
+- eight configured loss levels; and
+- three repetitions.
+
+Parser and orchestration fixes made report generation deterministic:
+
+- failed requests no longer enter successful latency statistics;
+- all-failed cells do not report a request rate;
+- HTTP/2 timing survives non-2xx response classification;
+- CPU samplers use supported intervals;
+- endpoint roles and region pairs are recovered and checked explicitly; and
+- tunnel-reset support allows exact gap-cell reruns.
+
+### Mechanistic carrier campaign
+
+The physical-carrier campaign added:
+
+- finite BDP-sized queues;
+- controlled rate and RTT;
+- random and burst loss;
+- matched TCP and UDP controls;
+- 100 ms tunnel-interface delivery sampling;
+- BPF retransmission and timeout events;
+- socket and qdisc snapshots;
+- workload and server identity;
+- source and runtime fingerprints; and
+- exact-cell rerun and composite rules.
+
+Test criteria are committed before execution. Results are recorded afterward
+with their original fingerprints. Invalid evidence remains visible but does not
+enter formal classifications.
+
+Concurrency-safe per-CPU BPF aggregation and monotonic sequence identifiers
+make lost or duplicated trace evidence detectable. Endpoint-role checks prevent
+the controller from measuring local traffic by mistake.
+
+The campaign completed 122 valid post-repair executions with zero formal
+meltdown classifications. The operator summary is maintained in
+`PERFORMANCE.md`, while `docs/TCP_MELTDOWN.md` and `perf-test/meltdown/` preserve
+the fixed definitions, detailed matrices, and reproduction workflow.
+
+## 14. Documentation evolution
+
+Documentation grew with the implementation:
+
+1. Source-era node, relay, build, and tunnel notes.
+2. Standalone build instructions in the imported README.
+3. `docs/TCP_TRANSPORT_DESIGN.md` for the complete transport architecture.
+4. Hyper-V and Linux regression runbooks.
+5. `docs/TCP_MELTDOWN.md` for the measured performance operating envelope.
+6. Root `QUICKSTART.md` for compilation, installation, first tunnel, advanced
+   templates, and troubleshooting.
+7. Root `PERFORMANCE.md` for measured advantages and formal campaign results.
+8. This chronological design history and the companion `CHANGELOG.md`.
+
+## Maintainer update policy
+
+Record future design changes chronologically within the relevant subsystem.
+Include the implementing commit, the invariant or behavior established, the bug
+fixed, and the validation that demonstrates the resulting design.

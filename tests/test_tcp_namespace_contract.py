@@ -87,7 +87,7 @@ class TcpNamespaceContract(unittest.TestCase):
         connect = section(
             self.socket,
             "int wg_tcp_connect(struct wg_peer *peer)\n{",
-            "/* FIX: -Wunused-function",
+            "static void __maybe_unused wg_release_peer_tcp_connection(",
         )
 
         acquire = "net = rcu_dereference(peer->device->creating_net);"
