@@ -169,14 +169,6 @@ struct wg_socket_data {
 	bool inbound;
 };
 
-struct wg_tcp_socket_list_entry {
-	struct socket *tcp_socket; /* Socket associated with the connection */
-	struct sockaddr_storage src_addr; /* Source address for the connection */
-	struct wg_peer *temp_peer; /* temporary peer for dataready */
-	struct list_head tcp_connection_ll; /* List pointer for the linked list */
-	ktime_t timestamp; /* Timestamp when the connection was added */
-};
-
 static void wg_finish_tcp_connection_init(struct wg_device *wg,
 					  struct socket *socket);
 static void wg_destroy_temp_peer(struct wg_peer *peer);
