@@ -66,6 +66,44 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn("persistent_keepalive=pass", SCRIPT)
         self.assertIn("bidirectional_traffic=pass", SCRIPT)
 
+    def test_initial_acquisition_has_one_bounded_deadline_and_churn_telemetry(self) -> None:
+        self.assertIn("initial_acquisition_timeout_seconds=90", SCRIPT)
+        self.assertEqual(SCRIPT.count("initial_acquisition_deadline=$("), 1)
+        self.assertIn(
+            'wait_ping "$ns_client" wga "$server_tunnel_address" \\\n\t"$initial_acquisition_deadline"',
+            SCRIPT,
+        )
+        self.assertIn(
+            'wait_ping "$ns_server" wgb "$client_tunnel_address" \\\n\t"$initial_acquisition_deadline"',
+            SCRIPT,
+        )
+        self.assertIn(
+            'assert_nat_state "$initial_snat_port" "$initial_acquisition_deadline"',
+            SCRIPT,
+        )
+        self.assertLess(
+            SCRIPT.index("initial_snat_packets_before=$("),
+            SCRIPT.index('set wga peer "$server_pub"'),
+        )
+        self.assertLess(
+            SCRIPT.index('assert_nat_state "$initial_snat_port"'),
+            SCRIPT.index("initial_acquisition_seconds=$("),
+        )
+        self.assertIn("initial_snat_rule_packets=%s->%s", SCRIPT)
+        self.assertIn("initial_dnat_rule_packets=%s->%s", SCRIPT)
+        self.assertIn(
+            '$initial_snat_packets_after -gt $initial_snat_packets_before', SCRIPT
+        )
+        self.assertIn(
+            '$initial_dnat_packets_after -gt $initial_dnat_packets_before', SCRIPT
+        )
+        rebound = SCRIPT.index('replace_snat_rule "$rebound_snat_port"')
+        self.assertIn(
+            'wait_ping "$ns_client" wga "$server_tunnel_address"',
+            SCRIPT[rebound:],
+        )
+        self.assertNotIn("initial_acquisition_deadline", SCRIPT[rebound:])
+
 
 if __name__ == "__main__":
     unittest.main()

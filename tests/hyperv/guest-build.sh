@@ -48,7 +48,11 @@ verify_module_metadata() {
 		fi
 	done
 	for parameter in max_send_bytes garbage_prefix_bytes queue_limit \
-			write_delay_ms short_writes injected_prefixes resyncs queue_drops; do
+			write_delay_ms fail_send_netns fail_send_ifindex \
+			fail_send_local_ipv4 fail_send_source_port \
+			fail_send_remote_ipv4 fail_send_remote_port fail_next_send \
+			short_writes injected_prefixes resyncs queue_drops \
+			fatal_send_errors; do
 		grep -q "^tcp_test_$parameter:" \
 			"$ARTIFACT_ROOT/modules/$KERNEL_RELEASE/wireguard-fork-fault.params" || \
 			die "fault module is missing tcp_test_$parameter"

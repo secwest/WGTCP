@@ -520,6 +520,7 @@ tcp-parity-netns)
 	(( $# == 3 || $# == 4 )) || die "tcp-parity-netns RUN CASE MODE [SOURCE_ROOT]"
 	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
 	[[ $mode == fwmark || $mode == route || $mode == source-uplink || \
+	   $mode == policy-churn || \
 	   $mode == ipv6 || $mode == ipv6-link-local || \
 	   $mode == carrier-lifetime || $mode == config-roundtrip || \
 	   $mode == fault-injection ]] || \
@@ -562,6 +563,17 @@ tcp-nat-netns)
 	dir=$(new_auxiliary_state "$run_id" "$case_id")
 	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
 		bash "$source_root/tests/tcp-nat-netns.sh" "$mode"
+	;;
+tcp-roaming-netns)
+	(( $# == 3 || $# == 4 )) || die "tcp-roaming-netns RUN CASE MODE [SOURCE_ROOT]"
+	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
+	[[ $mode == dual-router || $mode == half-open ]] || \
+		die "invalid TCP roaming mode: $mode"
+	[[ -f $source_root/tests/tcp-roaming-netns.sh ]] || \
+		die "TCP roaming netns test not found"
+	dir=$(new_auxiliary_state "$run_id" "$case_id")
+	WG_FORK=$WG_FORK WG_TEST_OWNERSHIP_DIR=$dir \
+		bash "$source_root/tests/tcp-roaming-netns.sh" "$mode"
 	;;
 cleanup)
 	(( $# == 3 )) || die "cleanup RUN CASE IFACE"

@@ -25,6 +25,9 @@ class TcpFaultInjectionContract(unittest.TestCase):
         cls.guest_node = (ROOT / "tests" / "hyperv" / "guest-node.sh").read_text(
             encoding="utf-8"
         )
+        cls.parity = (ROOT / "tests" / "tcp-parity-netns.sh").read_text(
+            encoding="utf-8"
+        )
 
     def test_controls_and_counters_exist_only_in_debug_builds(self) -> None:
         controls = section(
@@ -40,6 +43,13 @@ class TcpFaultInjectionContract(unittest.TestCase):
             "tcp_test_garbage_prefix_bytes",
             "tcp_test_queue_limit",
             "tcp_test_write_delay_ms",
+            "tcp_test_fail_send_netns",
+            "tcp_test_fail_send_ifindex",
+            "tcp_test_fail_send_local_ipv4",
+            "tcp_test_fail_send_source_port",
+            "tcp_test_fail_send_remote_ipv4",
+            "tcp_test_fail_send_remote_port",
+            "tcp_test_fail_next_send",
         ):
             self.assertIn(f"module_param_named({name}", debug)
             self.assertIn("uint, 0600", debug[debug.index(name) :])
@@ -49,6 +59,7 @@ class TcpFaultInjectionContract(unittest.TestCase):
             "tcp_test_injected_prefixes",
             "tcp_test_resyncs",
             "tcp_test_queue_drops",
+            "tcp_test_fatal_send_errors",
         ):
             self.assertIn(f"module_param_cb({name}", debug)
             self.assertNotIn(name, production)
@@ -64,6 +75,14 @@ class TcpFaultInjectionContract(unittest.TestCase):
         self.assertIn("if grep -q '^tcp_test_'", self.guest_build)
         self.assertIn('die "fault parameters leaked into $variant"', self.guest_build)
         self.assertIn('die "fault module is missing tcp_test_$parameter"', self.guest_build)
+        self.assertIn("fail_send_netns", self.guest_build)
+        self.assertIn("fail_send_ifindex", self.guest_build)
+        self.assertIn("fail_send_local_ipv4", self.guest_build)
+        self.assertIn("fail_send_source_port", self.guest_build)
+        self.assertIn("fail_send_remote_ipv4", self.guest_build)
+        self.assertIn("fail_send_remote_port", self.guest_build)
+        self.assertIn("fail_next_send", self.guest_build)
+        self.assertIn("fatal_send_errors", self.guest_build)
         self.assertIn("verify_module_metadata", self.guest_build)
         self.assertIn('cmp -s "$actual_root/$variant.params" "$module.params"', self.guest_build)
         self.assertIn('"$ARTIFACT_ROOT/manifest.json"', self.guest_build)
@@ -88,6 +107,94 @@ class TcpFaultInjectionContract(unittest.TestCase):
         self.assertIn(".iov_len = send_len", sender)
         self.assertIn("kernel_sendmsg(sock, &msg, &vec, 1, send_len)", sender)
         self.assertIn("atomic64_inc(&wg_tcp_test_short_writes)", sender)
+
+    def test_one_shot_fatal_send_is_fault_only_and_observable(self) -> None:
+        controls = section(
+            self.socket,
+            "static unsigned int wg_tcp_test_take_write_delay_ms(void)",
+            "struct wg_tcp_socket_list_entry",
+        )
+        sender = section(
+            self.socket,
+            "static int wg_tcp_send_frame(",
+            "static void wg_tcp_fail_exact_socket(",
+        )
+        writer = section(
+            self.socket,
+            "void wg_tcp_write_worker(",
+            "void wg_peer_discard_partial_read(",
+        )
+
+        consume = controls.index(
+            "cmpxchg(&wg_tcp_test_fail_next_send, 1U, 0U) == 1U"
+        )
+        for selector in (
+            "sock_net(sk)->ns.inum",
+            "peer->device->dev->ifindex",
+            "sk->sk_family != AF_INET",
+            "ntohl(inet_sk(sk)->inet_saddr)",
+            "ntohs(inet_sk(sk)->inet_sport)",
+            "ntohl(inet_sk(sk)->inet_daddr)",
+            "ntohs(inet_sk(sk)->inet_dport)",
+        ):
+            self.assertLess(controls.index(selector), consume)
+        self.assertIn("if (wg_tcp_test_take_fatal_send(peer, sock))", sender)
+        self.assertIn("sent = -EPIPE;", sender)
+        count = writer.index("atomic64_inc(&wg_tcp_test_fatal_send_errors)")
+        failure = writer.index("wg_tcp_fail_exact_socket(peer, socket);", count)
+        self.assertLess(count, failure)
+
+    def test_fault_runtime_proves_replacement_and_recovery(self) -> None:
+        for evidence in (
+            "tcp_test_fail_next_send",
+            "tcp_test_fail_send_netns",
+            "tcp_test_fail_send_ifindex",
+            "tcp_test_fail_send_local_ipv4",
+            "tcp_test_fail_send_source_port",
+            "tcp_test_fail_send_remote_ipv4",
+            "tcp_test_fail_send_remote_port",
+            "tcp_test_fatal_send_errors",
+            "fatal_stream_before=$(wait_tcp_endpoint",
+            "fatal_stream_after=$(wait_tcp_endpoint",
+            '"$fatal_stream_before" "$(( SECONDS + 60 ))"',
+            "fatal_recovery=pass",
+            "fatal_target_netns=%s",
+            "fatal_target_ifindex=%s",
+            "fatal_target_local_address=%s",
+            "fatal_target_source_port=%s",
+            "fatal_target_remote_address=%s",
+            "fatal_target_remote_port=%s",
+            "fatal_target_consumed=pass",
+        ):
+            self.assertIn(evidence, self.parity)
+        self.assertIn(
+            'run "$ns_a" ping -4 -I wga -c 1 -W 2', self.parity
+        )
+        targets = [
+            self.parity.index(f'tcp_test_{name}"')
+            for name in (
+                "fail_send_netns",
+                "fail_send_ifindex",
+                "fail_send_local_ipv4",
+                "fail_send_source_port",
+                "fail_send_remote_ipv4",
+                "fail_send_remote_port",
+            )
+        ]
+        target = max(targets)
+        arm = self.parity.index(
+            'printf \'1\\n\' >"$parameter_root/tcp_test_fail_next_send"',
+            target,
+        )
+        for selector in targets:
+            self.assertLess(selector, arm)
+        consumption = self.parity.index(
+            'fatal_armed_after=$(<"$parameter_root/tcp_test_fail_next_send")',
+            arm,
+        )
+        self.assertIn("[[ $fatal_armed_after == 0 ]]", self.parity[consumption:])
+        self.assertIn('wait_ping "$ns_a" wga 10.210.0.2', self.parity)
+        self.assertIn('wait_ping "$ns_b" wgb 10.210.0.1', self.parity)
 
     def test_garbage_prefix_preserves_the_authenticated_record_length(self) -> None:
         builder = section(
@@ -143,7 +250,7 @@ class TcpFaultInjectionContract(unittest.TestCase):
             "!READ_ONCE(peer->device->tcp_cleanup_scheduled)", recheck_lock
         )
         dequeue = writer.index("__skb_dequeue(&peer->send_queue)", recheck_unlock)
-        send = writer.index("wg_tcp_send_frame(socket, skb)", dequeue)
+        send = writer.index("wg_tcp_send_frame(peer, socket, skb)", dequeue)
         self.assertLess(delay, recheck_lock)
         self.assertLess(recheck_lock, cleanup_guard)
         self.assertLess(cleanup_guard, recheck_unlock)

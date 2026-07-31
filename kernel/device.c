@@ -94,11 +94,14 @@ static int wg_open(struct net_device *dev)
 	mutex_lock(&wg->device_update_lock);
 	list_for_each_entry(peer, &wg->peer_list, peer_list) {
 		bool queue_tcp_retry = false;
+		bool tcp_quarantined = false;
 
 		if (wg->transport == WG_TRANSPORT_TCP) {
 			spin_lock_bh(&peer->tcp_lock);
-			peer->tcp_stopping = false;
-			if (peer->peer_endpoint_set &&
+			tcp_quarantined = peer->tcp_teardown_quarantined;
+			if (!tcp_quarantined)
+				peer->tcp_stopping = false;
+			if (!tcp_quarantined && peer->peer_endpoint_set &&
 			    !peer->tcp_retry_scheduled &&
 			    !peer->tcp_outbound_remove_scheduled) {
 				peer->tcp_retry_scheduled = true;
@@ -108,6 +111,8 @@ static int wg_open(struct net_device *dev)
 				mod_delayed_work(system_wq, &peer->tcp_retry_work, 0);
 			spin_unlock_bh(&peer->tcp_lock);
 		}
+		if (tcp_quarantined)
+			continue;
 		wg_packet_send_staged_packets(peer);
 		if (peer->persistent_keepalive_interval)
 			wg_packet_send_keepalive(peer);
