@@ -38,7 +38,7 @@ curl -fLO https://cloud-images.ubuntu.com/noble/current/SHA256SUMS.gpg
 curl -fLO https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg \
   SHA256SUMS.gpg SHA256SUMS
-grep ' noble-server-cloudimg-amd64.img$' SHA256SUMS | sha256sum --check
+grep ' [*]noble-server-cloudimg-amd64.img$' SHA256SUMS | sha256sum --check
 ```
 
 Supply an SSH public key that belongs to the account which will run the
