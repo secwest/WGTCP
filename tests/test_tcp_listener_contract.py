@@ -20,8 +20,8 @@ def section(text: str, start: str, end: str) -> str:
 class TcpListenerContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.socket = source("kernel/socket.c")
-        cls.header = source("kernel/socket.h")
+        cls.socket = source("kernel/wg_tcp.c")
+        cls.header = source("kernel/wg_tcp.h")
         cls.device = source("kernel/device.c")
         cls.netlink = source("kernel/netlink.c")
         cls.peer = source("kernel/peer.c")
@@ -179,7 +179,7 @@ class TcpListenerContract(unittest.TestCase):
         receive = section(
             self.socket,
             "static int wg_receive(",
-            "static void sock_free(",
+            "static int wg_set_socket_timeouts(",
         )
 
         self.assertIn("sk->sk_protocol == IPPROTO_TCP", receive)
@@ -300,7 +300,7 @@ class TcpListenerContract(unittest.TestCase):
         send = section(
             self.socket,
             "int wg_socket_send_skb_to_peer(",
-            "int wg_socket_send_buffer_to_peer(",
+            "static bool wg_tcp_dial_target_eq(",
         )
 
         self.assertIn("ret = -ENOTCONN;", send)

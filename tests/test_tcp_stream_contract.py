@@ -19,13 +19,13 @@ def section(text: str, start: str, end: str) -> str:
 class TcpStreamContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.socket = source("kernel/socket.c")
+        cls.socket = source("kernel/wg_tcp.c")
 
     def test_only_the_serial_write_worker_writes_tcp_stream_bytes(self) -> None:
         send_to_peer = section(
             self.socket,
             "int wg_socket_send_skb_to_peer(",
-            "int wg_socket_send_buffer_to_peer(",
+            "static bool wg_tcp_dial_target_eq(",
         )
         write_worker = section(
             self.socket,

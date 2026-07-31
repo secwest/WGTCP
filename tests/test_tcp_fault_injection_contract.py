@@ -15,7 +15,7 @@ def section(text: str, start: str, end: str) -> str:
 class TcpFaultInjectionContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.socket = (ROOT / "kernel" / "socket.c").read_text(encoding="utf-8")
+        cls.socket = (ROOT / "kernel" / "wg_tcp.c").read_text(encoding="utf-8")
         cls.guest_build = (ROOT / "tests" / "hyperv" / "guest-build.sh").read_text(
             encoding="utf-8"
         )

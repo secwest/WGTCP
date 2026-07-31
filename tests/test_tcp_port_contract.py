@@ -21,7 +21,7 @@ class TcpPortContract(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.device = source("kernel/device.c")
         cls.netlink = source("kernel/netlink.c")
-        cls.socket = source("kernel/socket.c")
+        cls.socket = source("kernel/wg_tcp.c")
 
     def test_tcp_open_uses_udp_selected_port(self) -> None:
         open_device = section(

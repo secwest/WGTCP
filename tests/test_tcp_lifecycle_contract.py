@@ -25,7 +25,7 @@ def final_section(text: str, start: str, end: str) -> str:
 class TcpLifecycleContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.socket = source("kernel/socket.c")
+        cls.socket = source("kernel/wg_tcp.c")
         cls.peer = source("kernel/peer.c")
         cls.peer_header = source("kernel/peer.h")
         cls.device = source("kernel/device.c")
@@ -375,7 +375,7 @@ class TcpLifecycleContract(unittest.TestCase):
         send = section(
             self.socket,
             "int wg_socket_send_skb_to_peer(",
-            "int wg_socket_send_buffer_to_peer(",
+            "static bool wg_tcp_dial_target_eq(",
         )
         state_change = section(
             self.socket,

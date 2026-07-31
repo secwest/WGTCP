@@ -20,7 +20,7 @@ def section(text: str, start: str, end: str) -> str:
 class TcpNamespaceContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.socket = source("kernel/socket.c")
+        cls.socket = source("kernel/wg_tcp.c")
         cls.device = source("kernel/device.c")
         cls.main = source("kernel/main.c")
 
@@ -104,13 +104,14 @@ class TcpNamespaceContract(unittest.TestCase):
         self.assertNotIn("sock_create_kern(&init_net", connect)
 
     def test_synthetic_ipv6_receive_preserves_link_local_scope(self) -> None:
+        udp_socket = source("kernel/socket.c")
         build = section(
             self.socket,
             "static int wg_tcp_build_fake_headers(",
             "void wg_tcp_read_worker(",
         )
         endpoint = section(
-            self.socket,
+            udp_socket,
             "int wg_socket_endpoint_from_skb(",
             "bool endpoint_eq(",
         )

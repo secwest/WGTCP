@@ -21,7 +21,7 @@ class TcpRoamingContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         receive = source("kernel/receive.c")
-        cls.socket = source("kernel/socket.c")
+        cls.socket = source("kernel/wg_tcp.c")
         cls.peer_header = source("kernel/peer.h")
         cls.queueing = source("kernel/queueing.h")
         cls.netlink = source("kernel/netlink.c")
@@ -87,7 +87,7 @@ class TcpRoamingContract(unittest.TestCase):
         receive_dispatch = section(
             self.socket,
             "static int wg_receive(",
-            "static void set_sock_opts(",
+            "static int wg_set_socket_timeouts(",
         )
         self.assertIn("u8 outer_ipproto;", self.queueing)
         self.assertIn("u64 tcp_connection_id;", self.queueing)
