@@ -1,33 +1,54 @@
 # WireguardTCP
 
-WireguardTCP adds an opt-in TCP transport to the Linux WireGuard kernel module.
-It keeps WireGuard's keys, Noise encryption, peer identities, `AllowedIPs`,
-rekeying, and administration model while carrying encrypted WireGuard messages
-over a persistent TCP connection.
+**WireGuard's security and simplicity, with a TCP carrier that reaches networks
+where UDP cannot.**
 
-UDP remains the default. Choose TCP when UDP is blocked or when an established
-TCP flow works better with the network between your peers.
+WireguardTCP adds a high-performance TCP transport to the Linux WireGuard
+kernel module. It keeps the keys, Noise encryption, peer identities,
+`AllowedIPs`, rekeying, and administration model you already know while carrying
+encrypted WireGuard messages over persistent TCP connections. Two years of
+performance tuning and reliability engineering have shaped the transport from
+its framing and connection lifecycle through NAT roaming and failure recovery.
 
-- [Install and configure your first tunnel](QUICKSTART.md)
+- **[Install and configure your first tunnel](QUICKSTART.md)**
+- [Download Ubuntu 24.04 binaries](#ubuntu-2404-binaries)
 - [Review measured performance](PERFORMANCE.md)
-- [Read the transport design and security model](docs/TCP_TRANSPORT_DESIGN.md)
-- [See releases](https://github.com/secwest/WireguardTCP/releases)
+- [Build from source](#build-from-source)
 
 ## Why use it?
 
 | Benefit | What it means operationally |
 |---|---|
-| Works without UDP | Carry a WireGuard tunnel across networks that permit raw TCP but block UDP |
+| Reach more networks | Establish WireGuard tunnels across networks that permit TCP while restricting UDP |
+| Start quickly | Use ready-to-install Ubuntu 24.04 archives for both amd64 and arm64 |
 | Familiar WireGuard configuration | Keep the usual keys, peers, `AllowedIPs`, preshared keys, keepalives, `wg`, and `wg-quick` workflow |
-| No proxy or relay | Packet flow stays in the kernel; ordinary operation needs no additional tunnel daemon or userspace encapsulation hop |
-| Outbound-only NAT traversal | A private peer can initiate through ordinary SNAT without an inbound port forward; the reachable peer promotes the authenticated connection |
-| Roaming and recovery | Authenticated source-address and source-port changes, route changes, uplink changes, socket-mark changes, and failed carriers can establish a replacement connection |
-| IPv4 and IPv6 | TCP listeners and tunnels support IPv4, IPv6, dual-stack, and scoped link-local IPv6 configurations |
-| Per-interface choice | Run TCP and UDP WireGuard interfaces side by side for different routes or fallback policies |
+| Kernel-native operation | Carry packets without a proxy, relay, extra tunnel daemon, or userspace encapsulation hop |
+| Simple NAT deployment | Let a private peer initiate through ordinary SNAT without adding an inbound port forward |
+| Seamless roaming and recovery | Promote authenticated replacement connections after address, port, route, uplink, socket-mark, or carrier changes |
+| Strong measured performance | Match or exceed UDP-WG in several clean-path workloads and preserve substantially more traffic in selected lossy-path tests |
+| IPv4 and IPv6 | Use IPv4, IPv6, dual-stack, and scoped link-local IPv6 configurations |
 
-WireguardTCP is not HTTP or TLS camouflage. Both ends of a TCP tunnel need the
-modified Linux module and `wg` tool, and TCP is selected for the entire
-WireGuard interface rather than negotiated per peer.
+## Two years of tuning and validation
+
+WireguardTCP has been developed as a complete kernel transport rather than a
+thin TCP wrapper. Iterative profiling and fault testing improved writer
+wakeups, short-write continuation, bounded queues, parser recovery, connection
+replacement, authenticated promotion, roaming, and exact terminal-I/O cleanup.
+
+The resulting evidence spans both performance and reliability:
+
+| Validation area | Coverage |
+|---|---|
+| Application performance | 512 unique TCP-WG and UDP-WG comparison cells across x64 and ARM64, four latency tiers, multiple workloads, and a 0–20% configured-loss range |
+| Physical-carrier behavior | 122 valid post-repair executions examining latency, queues, concurrency, recovery, and TCP-over-TCP behavior |
+| Automated source and contract suite | 221 tests plus 16 parameterized subtests covering transport, lifecycle, NAT, roaming, namespaces, tooling, packaging, and compatibility |
+| End-to-end Linux validation | 40 complete VM scenarios covering UDP/TCP, stock/fork combinations, IPv4/IPv6, policy routing, NAT, roaming, configuration persistence, recovery, and destructive stream faults |
+| Platform breadth | Application campaigns cover x64 and ARM64; production, diagnostic, and isolated fault builds have been exercised on Ubuntu 24.04 Linux VMs |
+
+This work is reflected in the current module: its performance characteristics
+are measured, its critical stream and socket paths are bounded, and its NAT,
+roaming, recovery, and configuration behavior have dedicated end-to-end
+coverage.
 
 ## Design summary
 
@@ -74,15 +95,16 @@ conditions used to explore the transport's operating envelope.
 See [PERFORMANCE.md](PERFORMANCE.md) for the practical summary and
 [the performance report](perf-test/REPORT.md) for the complete matrices.
 
-### Where TCP fits
+### Great fits for WireguardTCP
 
 | Situation | Recommended starting point |
 |---|---|
-| Existing WireGuard UDP already meets the deployment's needs | Keep the default UDP transport |
-| UDP is blocked but raw TCP is reachable | Select WireguardTCP |
-| A private peer cannot receive inbound connections | Use outbound-only TCP with a persistent keepalive |
-| Reliable application delivery matters on a lossy path | Compare TCP and UDP results on that path |
-| You want an operational fallback | Use separate TCP and UDP WireGuard interfaces |
+| Restrictive firewall or network | Carry WireGuard over an allowed TCP port |
+| Private site, home, branch, or mobile peer | Dial outward through NAT and keep the mapping active |
+| Changing address, source port, route, or uplink | Let authenticated roaming establish the replacement carrier |
+| Lossy path where complete delivery matters | Put WireGuard packets on TCP's reliable outer carrier |
+| Existing WireGuard operations | Keep using familiar keys, configurations, tools, and service management |
+| Multi-path or fallback deployment | Run separate TCP and UDP WireGuard interfaces |
 
 ## Install
 
@@ -117,9 +139,9 @@ make -C "/lib/modules/$(uname -r)/build" \
 ```
 
 This produces the modified `wg` tool at `tools/wg` and the kernel module at
-`kernel/wireguard.ko`. Installing a kernel module is kernel- and
-distribution-specific; follow the QuickStart rather than replacing an active
-WireGuard module blindly. Rebuild the module after a kernel upgrade.
+`kernel/wireguard.ko`. The QuickStart provides the safe module replacement and
+verification steps for your distribution. Rebuild the module after a kernel
+upgrade.
 
 Ubuntu 24.04 release archives can be built with:
 
@@ -245,8 +267,8 @@ the old one.
   listen port. Block UDP at the firewall when the deployment must be TCP-only.
 - `wg showconf`, `setconf`, `syncconf`, and `wg-quick` SaveConfig preserve
   `Transport = tcp`.
-- The current implementation is provided through the Linux kernel and generic
-  netlink backend; do not assume wireguard-go or non-Linux support.
+- The current implementation targets the Linux kernel and generic netlink
+  backend.
 - TCP framing adds no new encryption. WireGuard's authenticated Noise protocol
   continues to determine peer identity and packet validity.
 
