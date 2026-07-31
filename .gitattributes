@@ -1,2 +1,3 @@
 * text=auto eol=lf
 BIG-WireguardTCP-Patch -text -eol
+/docs/downloads export-ignore

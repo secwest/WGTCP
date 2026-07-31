@@ -269,7 +269,7 @@ roaming claims.
 
 ### 2026-07-31 - Authenticated accepted-carrier ownership
 
-The NAT branch was integrated through WireguardTCP `58441e1`, preserving the
+The NAT branch was integrated through WireguardTCP `464c9d9`, preserving the
 latest TCP source split. The operational topology removes the earlier reverse-DNAT
 requirement: a private peer creates the only connection, while the reachable
 peer identifies and adopts that accepted stream after WireGuard authentication.

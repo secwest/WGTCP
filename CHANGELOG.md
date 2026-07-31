@@ -634,7 +634,7 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 
 ### Latest-tree integration
 
-- Rebased the NAT work through WireguardTCP commit `58441e1`, retaining the
+- Rebased the NAT work through WireguardTCP commit `464c9d9`, retaining the
   upstream TCP source split and the latest history, contract, prototype, and
   Linux image-verification changes.
 - Migrated lifecycle, listener, namespace, port, framing, roaming, fault, and
