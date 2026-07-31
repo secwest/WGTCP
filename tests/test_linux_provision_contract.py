@@ -8,6 +8,13 @@ PROVISION = (
 
 
 class LinuxProvisionContractTests(unittest.TestCase):
+    def test_default_resource_names_use_bash_compatible_validation(self):
+        self.assertNotIn("(?:", PROVISION)
+        self.assertIn("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", PROVISION)
+
+    def test_libvirt_management_network_dependency_is_required(self):
+        self.assertIn("cloud-localds dnsmasq git", PROVISION)
+
     def test_provisioner_uses_two_isolated_libvirt_networks(self):
         self.assertIn("<forward mode='none'/>", PROVISION)
         self.assertIn("PATH0_NETWORK=wgtcp-path0", PROVISION)
@@ -16,7 +23,10 @@ class LinuxProvisionContractTests(unittest.TestCase):
         self.assertIn('--network "network=$PATH1_NETWORK,mac=$path1_mac,model=virtio"', PROVISION)
 
     def test_unsigned_test_module_is_not_blocked_by_secure_boot(self):
-        self.assertIn("--boot bios", PROVISION)
+        self.assertNotIn("--boot uefi", PROVISION)
+        self.assertIn("virsh_qemu dumpxml \"$name\" | grep -q '<loader'", PROVISION)
+        self.assertIn("refusing to run unsigned test modules", PROVISION)
+        self.assertIn("install the seabios package", PROVISION)
 
     def test_provisioner_records_and_rechecks_resource_identity(self):
         self.assertIn('"VmIdentities"', PROVISION)
@@ -25,11 +35,23 @@ class LinuxProvisionContractTests(unittest.TestCase):
         self.assertIn("refusing to replace it implicitly", PROVISION)
 
     def test_source_snapshot_and_guest_build_are_required(self):
-        self.assertIn("git -C \"$REPO_ROOT\" archive", PROVISION)
+        self.assertIn("archive --format=tar", PROVISION)
         self.assertIn("BaseArchiveSha256", PROVISION)
         self.assertIn("OverlayArchiveSha256", PROVISION)
         self.assertIn("guest-bootstrap.sh", PROVISION)
         self.assertIn("guest-build.sh", PROVISION)
+
+    def test_root_snapshot_scopes_git_safe_directory_to_the_requested_repo(self):
+        self.assertGreaterEqual(PROVISION.count('safe.directory="$REPO_ROOT"'), 6)
+        self.assertIn("safe.directory={os.environ['REPO_ROOT']}", PROVISION)
+
+    def test_root_provisioner_uses_the_callers_explicit_private_key(self):
+        self.assertIn("--ssh-private-key", PROVISION)
+        self.assertGreaterEqual(PROVISION.count('-i "$SSH_PRIVATE_KEY"'), 3)
+
+    def test_results_directory_is_returned_to_the_sudo_caller(self):
+        self.assertIn("${SUDO_USER:-}", PROVISION)
+        self.assertIn('chown "$SUDO_USER:$RESULTS_GROUP" "$RESULTS_DIR"', PROVISION)
 
 
 if __name__ == "__main__":

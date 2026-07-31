@@ -117,12 +117,12 @@ class Suite(HYPERV.Suite):
             timeout=host_timeout,
         )
 
-    def preflight(self) -> dict[str, object]:
-        details = super().preflight()
-        details.pop("multipass", None)
-        details["ssh"] = self.ssh
-        details["transport"] = "libvirt-ssh"
-        return details
+    def preflight_details(self) -> dict[str, object]:
+        return {
+            "repo": self.args.repo,
+            "ssh": self.ssh,
+            "transport": "libvirt-ssh",
+        }
 
     def host_transport_preflight(self) -> bool:
         self.current_case = "infrastructure-preflight"

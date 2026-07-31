@@ -593,6 +593,9 @@ class Suite:
                 "kernel_variant": self.args.tcp_kernel_variant,
             }
 
+    def preflight_details(self) -> dict[str, object]:
+        return {"multipass": self.multipass, "repo": self.args.repo}
+
     def preflight(self) -> dict[str, object]:
         for vm, path0, path1 in (
             (self.args.vm_a, self.args.path0_a, self.args.path1_a),
@@ -615,7 +618,7 @@ class Suite:
             self.helper(vm, "guest-node.sh", "diagnose")
             self.helper(vm, "guest-node.sh", "underlay", path0, path1)
             self.helper(vm, "guest-node.sh", "contract-tests", self.args.repo)
-        return {"multipass": self.multipass, "repo": self.args.repo}
+        return self.preflight_details()
 
     def udp_netns_case(self) -> dict[str, object]:
         case_id = "udp-netns"

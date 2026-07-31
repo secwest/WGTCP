@@ -21,8 +21,8 @@ available to QEMU. Install the existing distribution packages:
 ```bash
 sudo apt-get update
 sudo apt-get install --yes \
-  qemu-kvm qemu-utils libvirt-daemon-system libvirt-clients \
-  virtinst cloud-image-utils openssh-client python3 ubuntu-keyring
+  qemu-kvm qemu-utils seabios libvirt-daemon-system libvirt-clients \
+  virtinst cloud-image-utils dnsmasq-base openssh-client python3 ubuntu-keyring
 sudo systemctl enable --now libvirtd
 sudo virsh -c qemu:///system net-start default
 ```
@@ -52,7 +52,8 @@ From the repository root:
 ```bash
 sudo ./tests/linux/Provision-LinuxRegression.sh \
   --base-image "$PWD/noble-server-cloudimg-amd64.img" \
-  --ssh-public-key "$HOME/.ssh/id_ed25519.pub"
+  --ssh-public-key "$HOME/.ssh/id_ed25519.pub" \
+  --ssh-private-key "$HOME/.ssh/id_ed25519"
 
 ./tests/linux/Run-LinuxRegression.sh
 ```

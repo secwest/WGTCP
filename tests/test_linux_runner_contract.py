@@ -43,6 +43,18 @@ class Harness(REGRESSION.Suite):
 
 
 class LinuxRunnerContractTests(unittest.TestCase):
+    def test_preflight_details_are_linux_transport_specific(self):
+        suite = Harness()
+
+        self.assertEqual(
+            suite.preflight_details(),
+            {
+                "repo": "/home/ubuntu/WireguardTCP",
+                "ssh": "/usr/bin/ssh",
+                "transport": "libvirt-ssh",
+            },
+        )
+
     def test_remote_uses_verified_ssh_and_shared_guest_helpers(self):
         suite = Harness()
 
