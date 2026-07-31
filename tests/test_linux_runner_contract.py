@@ -10,6 +10,9 @@ from unittest import mock
 
 
 REGRESSION_PATH = Path(__file__).parent / "linux" / "regression.py"
+RUNNER = (
+    Path(__file__).parent / "linux" / "Run-LinuxRegression.sh"
+).read_text(encoding="utf-8")
 SPEC = importlib.util.spec_from_file_location("linux_regression", REGRESSION_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"could not load {REGRESSION_PATH}")
@@ -44,6 +47,9 @@ class Harness(REGRESSION.Suite):
 
 
 class LinuxRunnerContractTests(unittest.TestCase):
+    def test_known_host_validation_is_limited_to_the_two_guests(self):
+        self.assertIn('for guest in "${state[@]:0:2}"; do', RUNNER)
+
     def test_preflight_details_are_linux_transport_specific(self):
         suite = Harness()
 

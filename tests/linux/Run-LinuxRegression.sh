@@ -71,7 +71,7 @@ guest_ip() {
 
 known_hosts_dir=$RESULTS_DIR/known-hosts
 [[ -d $known_hosts_dir ]] || die "verified known-hosts directory not found: $known_hosts_dir"
-for guest in "${state[@]}"; do
+for guest in "${state[@]:0:2}"; do
 	[[ -f $known_hosts_dir/$guest ]] || die "verified host key not found for $guest"
 done
 
