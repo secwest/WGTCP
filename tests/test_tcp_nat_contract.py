@@ -20,8 +20,13 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn("tcp-nat-netns)", GUEST)
         self.assertIn("$mode == dual-reachable", GUEST)
         self.assertIn("$mode == single-private", GUEST)
+        self.assertIn("$mode == single-private-address-roam", GUEST)
         self.assertIn('"tcp-nat44-single-private"', RUNNER)
         self.assertIn('self.tcp_nat_netns_case("single-private")', RUNNER)
+        self.assertIn('"tcp-nat44-single-private-address-roam"', RUNNER)
+        self.assertIn(
+            'self.tcp_nat_netns_case("single-private-address-roam")', RUNNER
+        )
         self.assertIn('"tcp-nat44-dual-reachable"', RUNNER)
         self.assertIn('self.tcp_nat_netns_case("dual-reachable")', RUNNER)
 
@@ -46,6 +51,9 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn('counter snat to', SCRIPT)
         self.assertIn('assert_nat_state "$initial_snat_port"', SCRIPT)
         self.assertIn('assert_nat_state "$rebound_snat_port"', SCRIPT)
+        self.assertIn("wait_active_carrier", SCRIPT)
+        self.assertIn("initial_carrier_direction=%s", SCRIPT)
+        self.assertIn("simultaneous_initiation_winner=authenticated-%s", SCRIPT)
         self.assertIn('replace_snat_rule "$rebound_snat_port"', SCRIPT)
         self.assertLess(
             SCRIPT.index('replace_snat_rule "$rebound_snat_port"'),
@@ -98,11 +106,12 @@ class TcpNatContract(unittest.TestCase):
         )
         self.assertIn("initial_snat_rule_packets=%s->%s", SCRIPT)
         self.assertIn("initial_dnat_rule_packets=%s->%s", SCRIPT)
+        self.assertIn("if [[ $initial_carrier_direction == snat ]]", SCRIPT)
         self.assertIn(
-            '$initial_snat_packets_after -gt $initial_snat_packets_before', SCRIPT
+            "initial_snat_packets_after > initial_snat_packets_before", SCRIPT
         )
         self.assertIn(
-            '$initial_dnat_packets_after -gt $initial_dnat_packets_before', SCRIPT
+            "initial_dnat_packets_after > initial_dnat_packets_before", SCRIPT
         )
         rebound = dual.index('replace_snat_rule "$rebound_snat_port"')
         self.assertIn(
@@ -113,7 +122,10 @@ class TcpNatContract(unittest.TestCase):
 
     def test_single_private_nat_has_no_forward_and_promotes_the_accept(self) -> None:
         single = SCRIPT[
-            SCRIPT.index("if [[ $MODE == single-private ]]") :
+            SCRIPT.index(
+                "if [[ $MODE == single-private || "
+                "$MODE == single-private-address-roam ]]"
+            ) :
             SCRIPT.index("exit 0\nfi") + len("exit 0\nfi")
         ]
         self.assertIn('set wgb peer "$client_pub"', single)
@@ -122,6 +134,7 @@ class TcpNatContract(unittest.TestCase):
         self.assertIn("accepted_carrier_promotion=pass", single)
         self.assertIn('replace_snat_rule "$rebound_snat_port"', single)
         self.assertIn("roaming_reconnect=pass", single)
+        self.assertIn("authenticated_address_roam=pass", single)
 
 
 if __name__ == "__main__":

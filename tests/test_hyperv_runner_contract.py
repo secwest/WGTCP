@@ -203,7 +203,7 @@ class HyperVRunnerContractTests(unittest.TestCase):
             "tcp-ipv6-dual-stack",
             "tcp-authenticated-carrier-lifetime",
             "tcp-nat44-dual-reachable",
-            "tcp-nat44-dual-router-address-roam",
+            "tcp-nat44-single-private-address-roam",
             "tcp-nat44-half-open-recovery",
             "tcp-debug-hostile-stream",
         ]

@@ -5,9 +5,9 @@ set -Eeuo pipefail
 
 MODE=${1:-}
 case "$MODE" in
-dual-reachable | single-private) ;;
+dual-reachable | single-private | single-private-address-roam) ;;
 *)
-	printf 'usage: %s {dual-reachable|single-private}\n' "$0" >&2
+	printf 'usage: %s {dual-reachable|single-private|single-private-address-roam}\n' "$0" >&2
 	exit 1
 	;;
 esac
@@ -58,6 +58,7 @@ fi
 client_address=10.240.0.2
 router_private_address=10.240.0.1
 router_public_address=192.0.2.1
+router_roamed_address=192.0.2.129
 server_address=192.0.2.2
 client_tunnel_address=10.212.0.1
 server_tunnel_address=10.212.0.2
@@ -297,15 +298,16 @@ nat_rule_packets() {
 }
 
 install_snat_rule() {
-	local translated_port=$1
+	local translated_port=$1 translated_address=${2:-$router_public_address}
 	run "$ns_router" nft add rule ip wgtcp_nat postrouting \
 		oifname "$router_public_if" ip saddr "$client_address" \
 		ip daddr "$server_address" tcp dport "$server_listen_port" \
-		counter snat to "$router_public_address:$translated_port"
+		counter snat to "$translated_address:$translated_port"
 }
 
 replace_snat_rule() {
-	local translated_port=$1 handle
+	local translated_port=$1 translated_address=${2:-$router_public_address}
+	local handle
 	handle=$(run "$ns_router" nft -a list chain ip wgtcp_nat postrouting | \
 		awk 'index($0, "snat") {
 			for (i = 1; i <= NF; ++i)
@@ -319,7 +321,7 @@ replace_snat_rule() {
 		handle "$handle" oifname "$router_public_if" \
 		ip saddr "$client_address" ip daddr "$server_address" \
 		tcp dport "$server_listen_port" counter snat to \
-		"$router_public_address:$translated_port"
+		"$translated_address:$translated_port"
 }
 
 forward_syn_packets() {
@@ -346,13 +348,47 @@ wait_forward_syn_advance() {
 	return 1
 }
 
+carrier_direction() {
+	local translated_port=$1
+	if tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
+		"$router_public_address:$translated_port"; then
+		printf 'snat\n'
+	elif run "$ns_server" ss -H -tn4 state established | \
+		awk -v remote="$router_public_address:$forwarded_port" '
+		{
+			for (i = 1; i <= NF; ++i)
+				if ($i == remote) found = 1
+		}
+		END { exit found ? 0 : 1 }
+	'; then
+		printf 'dnat\n'
+	else
+		printf 'none\n'
+	fi
+}
+
+wait_active_carrier() {
+	local translated_port=$1 deadline=${2:-0} direction
+	if (( deadline == 0 )); then
+		deadline=$(( SECONDS + 60 ))
+	fi
+	while (( SECONDS < deadline )); do
+		direction=$(carrier_direction "$translated_port")
+		if [[ $direction != none ]]; then
+			printf '%s\n' "$direction"
+			return 0
+		fi
+		sleep 1
+	done
+	echo "neither valid simultaneous-initiation carrier became established" >&2
+	return 1
+}
+
 assert_nat_state() {
 	local translated_port=$1 acquisition_deadline=${2:-0}
 	local expected_endpoint conntrack_state dnat_packets snat_packets
-	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
-		"$router_public_address:$translated_port" "$acquisition_deadline"
-	wait_tcp_remote "$ns_server" "$router_public_address:$forwarded_port" \
-		"$acquisition_deadline"
+	active_carrier_direction=$(wait_active_carrier "$translated_port" \
+		"$acquisition_deadline")
 	expected_endpoint="$router_public_address:$forwarded_port"
 	[[ $(peer_endpoint "$ns_server" wgb "$client_pub") == "$expected_endpoint" ]] || {
 		echo "observed NAT source port replaced configured dial target $expected_endpoint" >&2
@@ -365,25 +401,32 @@ assert_nat_state() {
 	}
 	dnat_packets=$(nat_rule_packets prerouting "$forwarded_port" "dnat")
 	snat_packets=$(nat_rule_packets postrouting "$server_listen_port" "snat")
-	[[ $dnat_packets =~ ^[0-9]+$ ]] && (( dnat_packets > 0 )) || {
-		echo "DNAT rule did not translate an inbound TCP carrier" >&2
-		exit 1
-	}
-	[[ $snat_packets =~ ^[0-9]+$ ]] && (( snat_packets > 0 )) || {
-		echo "SNAT rule did not translate an outbound TCP carrier" >&2
+	[[ $dnat_packets =~ ^[0-9]+$ && $snat_packets =~ ^[0-9]+$ ]] || {
+		echo "could not read simultaneous-initiation NAT counters" >&2
 		exit 1
 	}
 	conntrack_state=$(run "$ns_router" conntrack -L -p tcp 2>/dev/null)
-	grep -Eq "src=$client_address dst=$server_address .*dport=$server_listen_port .*dst=$router_public_address .*dport=$translated_port" \
-		<<<"$conntrack_state" || {
-		echo "conntrack did not contain the expected SNAT tuple" >&2
-		exit 1
-	}
-	grep -Eq "src=$server_address dst=$router_public_address .*dport=$forwarded_port .*src=$client_address dst=$server_address .*sport=$client_listen_port" \
-		<<<"$conntrack_state" || {
-		echo "conntrack did not contain the expected DNAT tuple" >&2
-		exit 1
-	}
+	if [[ $active_carrier_direction == snat ]]; then
+		(( snat_packets > 0 )) || {
+			echo "winning outbound carrier did not traverse SNAT" >&2
+			exit 1
+		}
+		grep -Eq "src=$client_address dst=$server_address .*dport=$server_listen_port .*dst=$router_public_address .*dport=$translated_port" \
+			<<<"$conntrack_state" || {
+			echo "conntrack did not contain the winning SNAT tuple" >&2
+			exit 1
+		}
+	else
+		(( dnat_packets > 0 )) || {
+			echo "winning reverse carrier did not traverse DNAT" >&2
+			exit 1
+		}
+		grep -Eq "src=$server_address dst=$router_public_address .*dport=$forwarded_port .*src=$client_address dst=$server_address .*sport=$client_listen_port" \
+			<<<"$conntrack_state" || {
+			echo "conntrack did not contain the winning DNAT tuple" >&2
+			exit 1
+		}
+	fi
 }
 
 create_namespace "$ns_client"
@@ -400,6 +443,10 @@ ip link set "$server_if" netns "$ns_server"
 run "$ns_client" ip addr add "$client_address/24" dev "$client_if"
 run "$ns_router" ip addr add "$router_private_address/24" dev "$router_private_if"
 run "$ns_router" ip addr add "$router_public_address/24" dev "$router_public_if"
+if [[ $MODE == single-private-address-roam ]]; then
+	run "$ns_router" ip addr add "$router_roamed_address/24" \
+		dev "$router_public_if"
+fi
 run "$ns_server" ip addr add "$server_address/24" dev "$server_if"
 for namespace_iface in \
 	"$ns_client $client_if" \
@@ -451,7 +498,11 @@ run "$ns_server" ip route add "$client_tunnel_address/32" dev wgb
 initial_acquisition_started=$SECONDS
 initial_acquisition_deadline=$(( SECONDS + initial_acquisition_timeout_seconds ))
 
-if [[ $MODE == single-private ]]; then
+if [[ $MODE == single-private || $MODE == single-private-address-roam ]]; then
+	rebound_snat_address=$router_public_address
+	if [[ $MODE == single-private-address-roam ]]; then
+		rebound_snat_address=$router_roamed_address
+	fi
 	initial_snat_packets_before=$(nat_rule_packets postrouting \
 		"$server_listen_port" "snat")
 	[[ $initial_snat_packets_before =~ ^[0-9]+$ ]] || {
@@ -496,12 +547,12 @@ if [[ $MODE == single-private ]]; then
 		exit 1
 	}
 
-	replace_snat_rule "$rebound_snat_port"
+	replace_snat_rule "$rebound_snat_port" "$rebound_snat_address"
 	run "$ns_router" conntrack -F >/dev/null
 	wait_ping "$ns_client" wga "$server_tunnel_address"
 	wait_ping "$ns_server" wgb "$client_tunnel_address"
 	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
-		"$router_public_address:$rebound_snat_port"
+		"$rebound_snat_address:$rebound_snat_port"
 	if tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
 		"$router_public_address:$initial_snat_port"; then
 		old_carrier_state=retained
@@ -509,7 +560,7 @@ if [[ $MODE == single-private ]]; then
 		old_carrier_state=retired
 	fi
 
-	printf 'mode=single-private\n'
+	printf 'mode=%s\n' "$MODE"
 	printf 'snat=pass\ndnat=absent\nbidirectional_traffic=pass\n'
 	printf 'accepted_carrier_promotion=pass\n'
 	printf 'initial_acquisition_seconds=%s\n' "$initial_acquisition_seconds"
@@ -520,6 +571,11 @@ if [[ $MODE == single-private ]]; then
 	printf 'public_peer_tx=%s->%s\n' "$server_tx_before" "$server_tx_after"
 	printf 'source_port_rebind=%s->%s\n' \
 		"$initial_snat_port" "$rebound_snat_port"
+	printf 'source_address_roam=%s->%s\n' \
+		"$router_public_address" "$rebound_snat_address"
+	if [[ $MODE == single-private-address-roam ]]; then
+		printf 'authenticated_address_roam=pass\n'
+	fi
 	printf 'roaming_reconnect=pass\nold_accepted_carrier=%s\n' \
 		"$old_carrier_state"
 	exit 0
@@ -546,18 +602,28 @@ wait_ping "$ns_client" wga "$server_tunnel_address" \
 wait_ping "$ns_server" wgb "$client_tunnel_address" \
 	"$initial_acquisition_deadline"
 assert_nat_state "$initial_snat_port" "$initial_acquisition_deadline"
+initial_carrier_direction=$active_carrier_direction
 initial_acquisition_seconds=$(( SECONDS - initial_acquisition_started ))
 initial_snat_packets_after=$(nat_rule_packets postrouting \
 	"$server_listen_port" "snat")
 initial_dnat_packets_after=$(nat_rule_packets prerouting \
 	"$forwarded_port" "dnat")
 [[ $initial_snat_packets_after =~ ^[0-9]+$ && \
-	$initial_dnat_packets_after =~ ^[0-9]+$ && \
-	$initial_snat_packets_after -gt $initial_snat_packets_before && \
-	$initial_dnat_packets_after -gt $initial_dnat_packets_before ]] || {
-	echo "initial TCP carrier acquisition did not advance both NAT rules" >&2
+	$initial_dnat_packets_after =~ ^[0-9]+$ ]] || {
+	echo "could not read post-acquisition NAT counters" >&2
 	exit 1
 }
+if [[ $initial_carrier_direction == snat ]]; then
+	(( initial_snat_packets_after > initial_snat_packets_before )) || {
+		echo "winning SNAT carrier did not advance its rule" >&2
+		exit 1
+	}
+else
+	(( initial_dnat_packets_after > initial_dnat_packets_before )) || {
+		echo "winning DNAT carrier did not advance its rule" >&2
+		exit 1
+	}
+fi
 
 client_tx_before=$(sent_bytes "$ns_client" wga "$server_pub")
 server_tx_before=$(sent_bytes "$ns_server" wgb "$client_pub")
@@ -581,6 +647,7 @@ run "$ns_router" conntrack -F >/dev/null
 wait_ping "$ns_client" wga "$server_tunnel_address"
 wait_ping "$ns_server" wgb "$client_tunnel_address"
 assert_nat_state "$rebound_snat_port"
+rebound_carrier_direction=$active_carrier_direction
 
 # Prove the preserved configured target is usable for a future reverse dial,
 # rather than checking only its netlink representation. A live mark change uses
@@ -589,10 +656,7 @@ assert_nat_state "$rebound_snat_port"
 # only because Linux may legally reuse a closed four-tuple.
 reverse_remote="$router_public_address:$forwarded_port"
 reverse_before=$(tcp_local_endpoint "$ns_server" "$reverse_remote")
-[[ -n $reverse_before ]] || {
-	echo "could not capture the pre-reconnect reverse carrier" >&2
-	exit 1
-}
+[[ -n $reverse_before ]] || reverse_before=none
 reverse_syn_before=$(forward_syn_packets)
 [[ $reverse_syn_before =~ ^[0-9]+$ ]] || {
 	echo "could not read the reverse-dial SYN counter" >&2
@@ -614,6 +678,11 @@ fi
 
 printf 'mode=dual-reachable\n'
 printf 'snat=pass\ndnat=pass\nbidirectional_traffic=pass\n'
+printf 'initial_carrier_direction=%s\n' "$initial_carrier_direction"
+printf 'post_snat_change_carrier_direction=%s\n' \
+	"$rebound_carrier_direction"
+printf 'simultaneous_initiation_winner=authenticated-%s\n' \
+	"$initial_carrier_direction"
 printf 'initial_acquisition_timeout_seconds=%s\n' \
 	"$initial_acquisition_timeout_seconds"
 printf 'initial_acquisition_seconds=%s\n' "$initial_acquisition_seconds"

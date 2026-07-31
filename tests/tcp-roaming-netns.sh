@@ -658,6 +658,7 @@ wait_correlated_recovery_pair() {
 	local excluded_clients=$1 excluded_servers=$2
 	local deadline=$(( SECONDS + ${3:-60} ))
 	local candidate current mapped mapped_count
+	local reverse_server_locals reverse_client_remotes
 
 	while (( SECONDS < deadline )); do
 		current=$(client_outbound_locals)
@@ -670,13 +671,24 @@ wait_correlated_recovery_pair() {
 			line_set_contains "$excluded_servers" "$mapped" && continue
 			if tcp_tuple_present "$ns_server" \
 				"$server_address:$server_listen_port" "$mapped"; then
-				printf '%s %s\n' "$candidate" "$mapped"
+				printf 'client %s %s\n' "$candidate" "$mapped"
 				return 0
 			fi
 		done <<<"$current"
+		reverse_server_locals=$(tcp_locals_for_remote "$ns_server" \
+			"$old_public_address:$forwarded_port")
+		reverse_client_remotes=$(tcp_remotes_for_local "$ns_client" \
+			"$client_old_address:$client_listen_port" "$server_address")
+		if (( $(nonempty_line_count <<<"$reverse_server_locals") == 1 && \
+			$(nonempty_line_count <<<"$reverse_client_remotes") == 1 )) && \
+		   [[ $reverse_server_locals == "$reverse_client_remotes" ]]; then
+			printf 'reverse %s %s\n' \
+				"$reverse_server_locals" "$reverse_client_remotes"
+			return 0
+		fi
 		sleep 0.25
 	done
-	echo "no conntrack-correlated replacement tuple pair appeared" >&2
+	echo "no authenticated replacement carrier appeared" >&2
 	return 1
 }
 
@@ -1174,6 +1186,19 @@ umask 077
 "$WG_FORK" genkey >"$tmpdir/server.key"
 client_pub=$("$WG_FORK" pubkey <"$tmpdir/client.key")
 server_pub=$("$WG_FORK" pubkey <"$tmpdir/server.key")
+if [[ $MODE == half-open ]] && ! python3 -c '
+import base64
+import sys
+sys.exit(0 if base64.b64decode(sys.argv[1], validate=True) <
+            base64.b64decode(sys.argv[2], validate=True) else 1)
+' "$client_pub" "$server_pub"; then
+	mv "$tmpdir/client.key" "$tmpdir/key.swap"
+	mv "$tmpdir/server.key" "$tmpdir/client.key"
+	mv "$tmpdir/key.swap" "$tmpdir/server.key"
+	temporary_pub=$client_pub
+	client_pub=$server_pub
+	server_pub=$temporary_pub
+fi
 if [[ $MODE == dual-router ]] && ! python3 -c '
 import base64
 import sys
@@ -1186,6 +1211,17 @@ sys.exit(0 if base64.b64decode(sys.argv[1], validate=True) <
 	temporary_pub=$client_pub
 	client_pub=$server_pub
 	server_pub=$temporary_pub
+fi
+if [[ $MODE == half-open ]]; then
+	python3 -c '
+import base64
+import sys
+sys.exit(0 if base64.b64decode(sys.argv[1], validate=True) <
+            base64.b64decode(sys.argv[2], validate=True) else 1)
+' "$client_pub" "$server_pub" || {
+		echo "could not order static keys for the half-open client-initiator setup" >&2
+		exit 1
+	}
 fi
 if [[ $MODE == dual-router ]]; then
 	python3 -c '
@@ -1218,7 +1254,6 @@ if [[ $MODE == half-open ]]; then
 		persistent-keepalive "$keepalive_interval"
 	run "$ns_server" "$WG_FORK" set wgb peer "$client_pub" \
 		allowed-ips "$client_tunnel_address/32" \
-		endpoint "$old_public_address:$forwarded_port" \
 		persistent-keepalive "$keepalive_interval"
 	wait_ping "$ns_client" wga "$server_tunnel_address"
 	wait_ping "$ns_server" wgb "$client_tunnel_address"
@@ -1268,18 +1303,21 @@ else
 	wait_ping "$ns_client" wga "$server_tunnel_address"
 	wait_ping "$ns_server" wgb "$client_tunnel_address"
 fi
-wait_tcp_remote "$ns_server" "$old_public_address:$forwarded_port"
 initial_endpoint="$old_public_address:$forwarded_port"
-[[ $(peer_endpoint "$ns_server" wgb "$client_pub") == "$initial_endpoint" ]] || {
-	echo "server did not retain the initial forwarded endpoint" >&2
-	exit 1
-}
-old_reverse_syns=$(nat_rule_packets "$ns_old_router" prerouting \
-	"$forwarded_port" "dnat")
-[[ $old_reverse_syns =~ ^[0-9]+$ ]] && (( old_reverse_syns > 0 )) || {
-	echo "old router did not observe the initial reverse SYN" >&2
-	exit 1
-}
+old_reverse_syns=0
+if [[ $MODE == dual-router ]]; then
+	[[ $(peer_endpoint "$ns_server" wgb "$client_pub") == "$initial_endpoint" ]] || {
+		echo "server did not retain the initial forwarded endpoint" >&2
+		exit 1
+	}
+	wait_tcp_remote "$ns_server" "$old_public_address:$forwarded_port"
+	old_reverse_syns=$(nat_rule_packets "$ns_old_router" prerouting \
+		"$forwarded_port" "dnat")
+	[[ $old_reverse_syns =~ ^[0-9]+$ ]] && (( old_reverse_syns > 0 )) || {
+		echo "old router did not observe the initial reverse SYN" >&2
+		exit 1
+	}
+fi
 
 if [[ $MODE == half-open ]]; then
 	# Require a continuous healthy interval with stable accepted/outbound sets and
@@ -1426,26 +1464,35 @@ if [[ $MODE == half-open ]]; then
 	recovered_pair=$(wait_correlated_recovery_pair \
 		"$pre_blackhole_client_locals" \
 		"$pre_blackhole_server_remotes" 60)
-	read -r new_client_local new_remote <<<"$recovered_pair"
-	line_set_contains "$pre_blackhole_server_remotes" "$new_remote" && {
-		echo "recovered server tuple was present before the blackhole" >&2
-		exit 1
-	}
-	line_set_contains "$pre_blackhole_client_locals" "$new_client_local" && {
-		echo "recovered client tuple was present before the blackhole" >&2
-		exit 1
-	}
-	[[ $(conntrack_server_remote_for_client_local "$new_client_local") == \
-		"$new_remote" ]] || {
-		echo "recovered client/server tuples lost their conntrack correlation" >&2
-		exit 1
-	}
-	new_established_tuple="$server_address:$server_listen_port<->$new_remote"
-	new_client_outbound_tuple="$new_client_local<->$server_address:$server_listen_port"
-	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
-		"$new_remote" 10
-	wait_tcp_tuple "$ns_client" "$new_client_local" \
-		"$server_address:$server_listen_port" 10
+	read -r recovery_direction new_client_local new_remote <<<"$recovered_pair"
+	if [[ $recovery_direction == client ]]; then
+		line_set_contains "$pre_blackhole_server_remotes" "$new_remote" && {
+			echo "recovered server tuple was present before the blackhole" >&2
+			exit 1
+		}
+		line_set_contains "$pre_blackhole_client_locals" "$new_client_local" && {
+			echo "recovered client tuple was present before the blackhole" >&2
+			exit 1
+		}
+		[[ $(conntrack_server_remote_for_client_local "$new_client_local") == \
+			"$new_remote" ]] || {
+			echo "recovered client/server tuples lost their conntrack correlation" >&2
+			exit 1
+		}
+		new_established_tuple="$server_address:$server_listen_port<->$new_remote"
+		new_client_outbound_tuple="$new_client_local<->$server_address:$server_listen_port"
+		wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
+			"$new_remote" 10
+		wait_tcp_tuple "$ns_client" "$new_client_local" \
+			"$server_address:$server_listen_port" 10
+	else
+		new_established_tuple="$new_client_local<->$old_public_address:$forwarded_port"
+		new_client_outbound_tuple="$client_old_address:$client_listen_port<->$new_remote"
+		wait_tcp_tuple "$ns_server" "$new_client_local" \
+			"$old_public_address:$forwarded_port" 10
+		wait_tcp_tuple "$ns_client" "$client_old_address:$client_listen_port" \
+			"$new_remote" 10
+	fi
 	wait_tcp_tuple_absent "$ns_client" "$old_client_local" \
 		"$server_address:$server_listen_port" 60
 
@@ -1456,10 +1503,22 @@ if [[ $MODE == half-open ]]; then
 	run "$ns_server" "$WG_FORK" set wgb peer "$client_pub" \
 		persistent-keepalive 0
 	sleep 2
-	tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
-		"$new_remote" && \
-		tcp_tuple_present "$ns_client" "$new_client_local" \
-		"$server_address:$server_listen_port" || {
+	if [[ $recovery_direction == client ]]; then
+		recovery_carrier_present() {
+			tcp_tuple_present "$ns_server" \
+				"$server_address:$server_listen_port" "$new_remote" && \
+			tcp_tuple_present "$ns_client" "$new_client_local" \
+				"$server_address:$server_listen_port"
+		}
+	else
+		recovery_carrier_present() {
+			tcp_tuple_present "$ns_server" "$new_client_local" \
+				"$old_public_address:$forwarded_port" && \
+			tcp_tuple_present "$ns_client" \
+				"$client_old_address:$client_listen_port" "$new_remote"
+		}
+	fi
+	recovery_carrier_present || {
 		echo "new TCP tuple did not survive transfer-baseline quiescence" >&2
 		exit 1
 	}
@@ -1476,10 +1535,7 @@ if [[ $MODE == half-open ]]; then
 		echo "client ping did not advance the server peer RX counter" >&2
 		exit 1
 	}
-	tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
-		"$new_remote" && \
-		tcp_tuple_present "$ns_client" "$new_client_local" \
-		"$server_address:$server_listen_port" || {
+	recovery_carrier_present || {
 		echo "new TCP tuple changed after the client-to-server ping" >&2
 		exit 1
 	}
@@ -1496,10 +1552,7 @@ if [[ $MODE == half-open ]]; then
 		echo "server ping did not advance the client peer RX counter" >&2
 		exit 1
 	}
-	tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
-		"$new_remote" && \
-		tcp_tuple_present "$ns_client" "$new_client_local" \
-		"$server_address:$server_listen_port" || {
+	recovery_carrier_present || {
 		echo "new TCP tuple changed after the server-to-client ping" >&2
 		exit 1
 	}
@@ -1508,11 +1561,13 @@ if [[ $MODE == half-open ]]; then
 		echo "old client outbound carrier returned after recovery" >&2
 		exit 1
 	}
-	[[ $(conntrack_server_remote_for_client_local "$new_client_local") == \
-		"$new_remote" ]] || {
-		echo "recovered tuple pair no longer matches old-router conntrack" >&2
-		exit 1
-	}
+	if [[ $recovery_direction == client ]]; then
+		[[ $(conntrack_server_remote_for_client_local "$new_client_local") == \
+			"$new_remote" ]] || {
+			echo "recovered tuple pair no longer matches old-router conntrack" >&2
+			exit 1
+		}
+	fi
 	recovery_duration=$(( SECONDS - recovery_started ))
 	capture_ss_snapshot after
 	pre_blackhole_server_remotes_output=$(sanitize_line_set \
@@ -1544,7 +1599,10 @@ if [[ $MODE == half-open ]]; then
 	printf 'new_established_tuple=%s\n' "$new_established_tuple"
 	printf 'new_client_outbound_tuple=%s\n' "$new_client_outbound_tuple"
 	printf 'new_tuples_outside_pre_blackhole_sets=pass\n'
-	printf 'recovered_tuple_correlation=old-router-conntrack\n'
+	printf 'recovery_carrier_direction=%s\n' "$recovery_direction"
+	printf 'recovered_tuple_correlation=%s\n' \
+		"$([[ $recovery_direction == client ]] && \
+			printf old-router-conntrack || printf reverse-dnat-tuple)"
 	printf 'old_client_outbound_absent=pass\n'
 	printf 'tcp_retrans_segs=%s->%s\n' \
 		"$tcp_retrans_before" "$tcp_retrans_after"

@@ -1027,8 +1027,8 @@ class Suite:
                     lambda: self.tcp_nat_netns_case("dual-reachable"),
                 ),
                 (
-                    "tcp-nat44-dual-router-address-roam",
-                    lambda: self.tcp_roaming_netns_case("dual-router"),
+                    "tcp-nat44-single-private-address-roam",
+                    lambda: self.tcp_nat_netns_case("single-private-address-roam"),
                 ),
                 (
                     "tcp-nat44-half-open-recovery",

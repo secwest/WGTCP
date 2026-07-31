@@ -567,7 +567,8 @@ tcp-parity-netns)
 tcp-nat-netns)
 	(( $# == 3 || $# == 4 )) || die "tcp-nat-netns RUN CASE MODE [SOURCE_ROOT]"
 	run_id=$1 case_id=$2 mode=$3 source_root=${4:-/home/ubuntu/WireguardTCP}
-	[[ $mode == dual-reachable || $mode == single-private ]] || \
+	[[ $mode == dual-reachable || $mode == single-private || \
+		$mode == single-private-address-roam ]] || \
 		die "invalid TCP NAT mode: $mode"
 	[[ -f $source_root/tests/tcp-nat-netns.sh ]] || die "TCP NAT netns test not found"
 	dir=$(new_auxiliary_state "$run_id" "$case_id")

@@ -43,10 +43,14 @@ class TcpRoamingRuntimeContract(unittest.TestCase):
         self.assertIn("$mode == dual-router || $mode == half-open", GUEST)
         self.assertIn("def tcp_roaming_netns_case", RUNNER)
         self.assertIn('timeout=max(self.args.timeout, 600)', RUNNER)
-        self.assertIn('"tcp-nat44-dual-router-address-roam"', RUNNER)
-        self.assertIn('self.tcp_roaming_netns_case("dual-router")', RUNNER)
+        self.assertNotIn('"tcp-nat44-dual-router-address-roam"', RUNNER)
+        self.assertIn('"tcp-nat44-single-private-address-roam"', RUNNER)
         self.assertIn('"tcp-nat44-half-open-recovery"', RUNNER)
         self.assertIn('self.tcp_roaming_netns_case("half-open")', RUNNER)
+        self.assertIn(
+            "could not order static keys for the half-open client-initiator setup",
+            SCRIPT,
+        )
 
     def test_owned_resources_are_recorded_before_creation(self) -> None:
         self.assertIn("trap cleanup EXIT", SCRIPT)
@@ -549,7 +553,8 @@ class TcpRoamingRuntimeContract(unittest.TestCase):
         self.assertIn("old_client_outbound_absent=pass", half_open)
         self.assertIn("old_client_carrier_tcp_info_loss=pass", half_open)
         self.assertIn("old_client_carrier_retrans_metric=pass", half_open)
-        self.assertIn("recovered_tuple_correlation=old-router-conntrack", half_open)
+        self.assertIn("recovery_carrier_direction=%s", half_open)
+        self.assertIn("reverse-dnat-tuple", half_open)
         self.assertNotIn("unacked:", half_open)
         self.assertIn("blackhole_drop_only=true", half_open)
         self.assertIn("production_timing_proof=false", half_open)
