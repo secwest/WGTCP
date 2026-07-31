@@ -25,7 +25,7 @@ static void base64_encode(char *out, const u8 *in, size_t len)
 	static const char base64_table[] =
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	static const int mod_table[] = { 0, 2,
-					 1 }; // Used for padding calculations
+					 1 }; /* Used for padding calculations */
 
 	size_t i, j;
 	for (i = 0, j = 0; i < len;) {
@@ -41,10 +41,10 @@ static void base64_encode(char *out, const u8 *in, size_t len)
 		out[j++] = base64_table[(triple >> 0 * 6) & 0x3F];
 	}
 
-	// Handle padding
+	/* Handle padding */
 	for (int k = 0; k < mod_table[len % 3]; k++)
 		out[j - 1 - k] = '=';
-	out[j] = '\0'; // Null-terminate the output string
+	out[j] = '\0'; /* Null-terminate the output string */
 }
 
 
@@ -117,8 +117,8 @@ void wg_noise_handshake_init(struct noise_handshake *handshake,
 	handshake->static_identity = static_identity;
 	handshake->state = HANDSHAKE_ZEROED;
 	wg_noise_precompute_static_static(peer);
-	
-	char b64_output[45];  // Base64 encoded output buffer for 32 bytes input
+
+	char b64_output[45]; /* Base64 encoded output buffer for 32 bytes input */
 	base64_encode(b64_output, handshake->static_identity->static_public, NOISE_PUBLIC_KEY_LEN);
 	wg_dbg("WG: Initiator's static public key (static_public) [Base64]: %s\n", b64_output);
 	wg_dbg("WG: Initiator's static public key (static_public) [Hex]: %*ph\n", NOISE_PUBLIC_KEY_LEN, handshake->static_identity->static_public);
@@ -991,7 +991,7 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 		goto out;
 	handshake = &peer->handshake;
 
-	char b64_output[45]; // Base64 encoded output buffer for 32 bytes input
+	char b64_output[45]; /* Base64 encoded output buffer for 32 bytes input */
 	base64_encode(b64_output, handshake->remote_static,
 		      NOISE_PUBLIC_KEY_LEN);
 	wg_dbg("WG: Initiator's static public key (remote_static) [Base64]: %s\n",

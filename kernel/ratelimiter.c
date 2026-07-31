@@ -57,7 +57,6 @@ static void entry_uninit(struct ratelimiter_entry *entry)
 /* Calling this function with a NULL work uninits all entries. */
 static void wg_ratelimiter_gc_entries(struct work_struct *work)
 {
-	//wg_dbg("wg_ratelimiter_gc_entries: work=%p\n", work);
 	const u64 now = ktime_get_coarse_boottime_ns();
 	struct ratelimiter_entry *entry;
 	struct hlist_node *temp;
@@ -83,7 +82,6 @@ static void wg_ratelimiter_gc_entries(struct work_struct *work)
 	}
 	if (likely(work))
 		queue_delayed_work(system_power_efficient_wq, &gc_work, HZ);
-	//wg_dbg("wg_ratelimiter_gc_entries: exit\n");
 }
 
 bool wg_ratelimiter_allow(struct sk_buff *skb, struct net *net)

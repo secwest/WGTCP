@@ -68,7 +68,7 @@ static int wg_open(struct net_device *dev)
 	if (dev_v6)
 		dev_v6->cnf.addr_gen_mode = IN6_ADDR_GEN_MODE_NONE;
 
-	
+
 	wg->listener_active = false;
 	/* Bind UDP first so port zero retains WireGuard's random-port semantics.
 	 * TCP then uses the concrete port selected by the companion UDP socket.
@@ -590,11 +590,11 @@ static int wg_newlink(struct net *src_net, struct net_device *dev,
 	wg_cookie_checker_init(&wg->cookie_checker, wg);
 	INIT_LIST_HEAD(&wg->peer_list);
 	wg->device_update_gen = 1;
-	// Initialize the tcp_cleanup_scheduled flag and spinlock
+	/* Initialize the tcp_cleanup_scheduled flag and spinlock */
 	wg->tcp_cleanup_scheduled = false;
 	spin_lock_init(&wg->tcp_cleanup_lock);
 
-	// Initialize the work for tcp_cleanup_worker
+	/* Initialize the work for tcp_cleanup_worker */
 	INIT_DELAYED_WORK(&wg->tcp_cleanup_work, wg_tcp_cleanup_worker);
 	INIT_DELAYED_WORK(&wg->tcp_route_work, wg_tcp_route_change_worker);
 

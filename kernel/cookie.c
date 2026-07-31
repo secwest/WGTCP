@@ -100,14 +100,14 @@ static void compute_mac1(u8 mac1[COOKIE_LEN], const void *message, size_t len,
 {
     wg_dbg("Entering: compute_mac1 with mac1=%p, message=%p, len=%zu, key=%p\n", mac1, message, len, key);
 
-    // Adjust the length as per the original logic
+    /* Adjust the length as per the original logic */
     len = len - sizeof(struct message_macs) +
           offsetof(struct message_macs, mac1);
 
-    // Perform the MAC computation
+    /* Perform the MAC computation */
     blake2s(mac1, message, key, COOKIE_LEN, len, NOISE_SYMMETRIC_KEY_LEN);
 
-    // Print out diagnostics
+    /* Print out diagnostics */
     wg_dbg("WG: Key used for MAC1 computation: %*phN\n",
            NOISE_SYMMETRIC_KEY_LEN, key);
     wg_dbg("WG: Message used for MAC1 computation (first 32 bytes): %*phN\n",
@@ -175,7 +175,7 @@ enum cookie_mac_state wg_cookie_validate_packet(struct cookie_checker *checker,
 
 	ret = INVALID_MAC;
 
-	// Compute MAC1 and compare
+	/* Compute MAC1 and compare */
 	compute_mac1(computed_mac, skb->data, skb->len, checker->message_mac1_key);
 	wg_dbg("Computed MAC1: %*phN\n", COOKIE_LEN, computed_mac);
 
@@ -188,7 +188,7 @@ enum cookie_mac_state wg_cookie_validate_packet(struct cookie_checker *checker,
 	if (!check_cookie)
 		goto out;
 
-	// Generate cookie and compute MAC2
+	/* Generate cookie and compute MAC2 */
 	make_cookie(cookie, skb, checker);
 	wg_dbg("Generated cookie: %*phN\n", COOKIE_LEN, cookie);
 
@@ -201,7 +201,7 @@ enum cookie_mac_state wg_cookie_validate_packet(struct cookie_checker *checker,
 	ret = VALID_MAC_WITH_COOKIE_BUT_RATELIMITED;
 	wg_dbg("MAC2 validated successfully.\n");
 
-	// Rate limiting check
+	/* Rate limiting check */
 	if (!wg_ratelimiter_allow(skb, dev_net(checker->device->dev))) {
 		wg_dbg("Packet rate-limited.\n");
 		goto out;

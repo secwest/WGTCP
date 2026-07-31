@@ -323,7 +323,8 @@ void wg_print_wireguard_skb(const struct sk_buff *skb)
         /* 2) Raw IP header dump (IPv4 only) */
         {
         /* FIX: -Wdistinct-pointer-types — use unsigned char* to match
-         * skb->head and skb_end_pointer() types */
+         * skb->head and skb_end_pointer() types
+         */
                 unsigned char *net_hdr = skb_network_header(skb);
                 if (net_hdr >= skb->head &&
                     net_hdr + sizeof(struct iphdr) <= skb_end_pointer(skb)) {
@@ -351,37 +352,37 @@ void wg_print_wireguard_skb(const struct sk_buff *skb)
 }
 
 
-// New helper function to track and debug MTU issues
+/* New helper function to track and debug MTU issues */
 /* FIX: -Wunused-function — marked __maybe_unused (debug helper) */
 static void __maybe_unused debug_wireguard_tcp_mtu(struct sk_buff *skb, const char *location)
 {
         const struct iphdr *iph;
         int actual_size, dev_mtu = 0;
-        
+
         if (!skb || !location)
                 return;
-                
+
         if (skb->dev)
                 dev_mtu = skb->dev->mtu;
-                
+
         actual_size = skb->len;
-        
+
         wg_dbg("=== WG-TCP MTU Check at %s ===\n", location);
         wg_dbg("Packet size: %d bytes", actual_size);
-        
+
         if (dev_mtu > 0) {
                 wg_dbg("Device MTU: %d bytes", dev_mtu);
                 if (actual_size > dev_mtu)
-                        printk(KERN_WARNING "WARNING: Packet exceeds MTU by %d bytes\n", 
+                        printk(KERN_WARNING "WARNING: Packet exceeds MTU by %d bytes\n",
                                actual_size - dev_mtu);
         }
-        
+
         if (skb_network_header_len(skb) >= sizeof(struct iphdr)) {
                 iph = ip_hdr(skb);
                 if (iph && (ntohs(iph->frag_off) & IP_DF)) {
                         wg_dbg("DF flag is set - PMTUD expected to handle oversized packets\n");
-                        
-                        // Check if socket has valid route with correct PMTU
+
+                        /* Check if socket has valid route with correct PMTU */
                         if (skb->sk) {
                                 struct dst_entry *dst = skb_dst(skb);
                                 if (dst) {
@@ -396,12 +397,12 @@ static void __maybe_unused debug_wireguard_tcp_mtu(struct sk_buff *skb, const ch
                         }
                 }
         }
-        
-        wg_dbg("GSO: %s (segs=%u, size=%u)\n", 
+
+        wg_dbg("GSO: %s (segs=%u, size=%u)\n",
                skb_is_gso(skb) ? "enabled" : "disabled",
                skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 0,
                skb_is_gso(skb) ? skb_shinfo(skb)->gso_size : 0);
-               
+
         wg_dbg("=== WG-TCP MTU Check End ===\n");
 }
 
@@ -424,13 +425,13 @@ static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
 
 	if (wg_noise_handshake_create_initiation(&packet, &peer->handshake)) {
 		wg_cookie_add_mac_to_packet(&packet, sizeof(packet), peer);
-		
+
 		wg_dbg("MAC added to handshake initiation packet\n");
 		wg_dbg("Handshake Initiation Packet: %*ph\n",
 			(int)sizeof(packet), &packet);
 		wg_dbg("Peer Cookie Parameters: peer=%px, handshake=%px, index=%u\n",
 			peer, &peer->handshake, packet.sender_index);
- 
+
 		wg_timers_any_authenticated_packet_traversal(peer);
 		wg_timers_any_authenticated_packet_sent(peer);
 		atomic64_set(&peer->last_sent_handshake,
@@ -561,7 +562,7 @@ void wg_packet_send_handshake_response(struct wg_peer *peer)
 		wg_dbg("Peer Cookie Parameters: peer=%px, handshake=%px, index=%u\n",
 			peer, &peer->handshake, packet.sender_index);
 
-		
+
 		if (wg_noise_handshake_begin_session(&peer->handshake,
 						     &peer->keypairs)) {
 			wg_timers_session_derived(peer);
@@ -591,7 +592,7 @@ void wg_packet_send_handshake_cookie(struct wg_device *wg,
 
 	wg_dbg("Cookie Checker: %px\n", &wg->cookie_checker);
 
-	
+
 	net_dbg_skb_ratelimited("%s: Sending cookie response for denied handshake message for %pISpfsc\n",
 				wg->dev->name, initiating_skb);
 	wg_cookie_message_create(&packet, initiating_skb, sender_index,
@@ -599,10 +600,10 @@ void wg_packet_send_handshake_cookie(struct wg_device *wg,
 
 	wg_dbg("Handshake Cookie Packet: %*ph\n",
 		(int)sizeof(packet), &packet);
-	
+
 	wg_socket_send_buffer_as_reply_to_skb(wg, initiating_skb, &packet,
 					      sizeof(packet));
-	
+
 	wg_dbg("Exiting wg_packet_send_handshake_cookie\n");
 }
 
@@ -672,12 +673,12 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	padding_len = calculate_skb_padding(skb);
 	trailer_len = padding_len + noise_encrypted_len(0);
 	plaintext_len = skb->len + padding_len;
-	
+
 
 	wg_dbg("wg: encrypt_packet: padding_len=%u\n", padding_len);
         wg_dbg("wg: encrypt_packet: plaintext_len=%u, trailer_len=%u\n",
               plaintext_len, trailer_len);
-	
+
 	/* Expand data section to have room for padding and auth tag. */
 	num_frags = skb_cow_data(skb, trailer_len, &trailer);
 
@@ -691,7 +692,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
                wg_dbg("wg: encrypt_packet: after cow_data: skb->len=%u headroom=%u tailroom=%u\n",
                       skb->len, skb_headroom(skb), skb_tailroom(skb));
        }
-	
+
 	if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
 		wg_dbg("Exiting encrypt_packet\n");
                printk(KERN_ERR "wg: encrypt_packet: num_frags out of range: %d\n",
@@ -740,7 +741,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
                       (size_t)noise_encrypted_len(plaintext_len));
                printk(KERN_ERR "wg: tailroom=%u headroom=%u\n",
                       skb_tailroom(skb), skb_headroom(skb));
- 
+
 		return false;
 	}
 	wg_dbg("Exiting encrypt_packet\n");
@@ -750,7 +751,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 						   PACKET_CB(skb)->nonce,
 						   keypair->sending.key);
 }
-#endif // ORIGINAL
+#endif /* ORIGINAL */
 
 void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);
 
@@ -769,18 +770,18 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 #ifdef WG_TCP_VERBOSE
     decode_and_print_packet(skb, "[encrypt]");
 #endif
-	
-    // Force hash calculation before encryption
+
+    /* Force hash calculation before encryption */
     skb_get_hash(skb);
     wg_dbg("Hash calculated for skb.\n");
 
-    // Calculate lengths
+    /* Calculate lengths */
     padding_len = calculate_skb_padding(skb);
     trailer_len = padding_len + noise_encrypted_len(0);
     plaintext_len = skb->len + padding_len;
     wg_dbg("Calculated lengths: padding_len=%u, trailer_len=%u, plaintext_len=%u\n", padding_len, trailer_len, plaintext_len);
 
-    // Expand data section
+    /* Expand data section */
     num_frags = skb_cow_data(skb, trailer_len, &trailer);
     if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg))) {
         wg_dbg("Failed skb_cow_data: num_frags=%d, skb->len=%u\n", num_frags, skb->len);
@@ -788,11 +789,11 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
         return false;
     }
 
-    // Set the padding to zeros
+    /* Set the padding to zeros */
     memset(skb_tail_pointer(trailer), 0, padding_len);
     wg_dbg("Padding set to zeros: padding_len=%u, skb->len=%u\n", padding_len, skb->len);
 
-    // Expand head section
+    /* Expand head section */
     if (unlikely(skb_cow_head(skb, DATA_PACKET_HEAD_ROOM) < 0)) {
         wg_dbg("Failed skb_cow_head, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
         wg_dbg("Exiting encrypt_packet with false\n");
@@ -800,7 +801,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     }
     wg_dbg("Expanded head section, skb->len=%u, skb->head=%px\n", skb->len, skb->head);
 
-    // Finalize checksum calculation
+    /* Finalize checksum calculation */
     if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL && skb_checksum_help(skb))) {
         wg_dbg("Failed skb_checksum_help, skb->len=%u\n", skb->len);
         wg_dbg("Exiting encrypt_packet with false\n");
@@ -808,7 +809,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
     }
     wg_dbg("Checksum finalized, skb->len=%u\n", skb->len);
 
-    // Add padding and header
+    /* Add padding and header */
     skb_set_inner_network_header(skb, 0);
     header = (struct message_data *)skb_push(skb, sizeof(*header));
     header->header.type = cpu_to_le32(MESSAGE_DATA);
@@ -822,7 +823,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
            MESSAGE_DATA, keypair->remote_index, PACKET_CB(skb)->nonce);
     wg_dbg("Network header set: skb_network_header=%px, skb->len=%u\n", skb_network_header(skb), skb->len);
 
-    // Encrypt the scattergather segments
+    /* Encrypt the scattergather segments */
     sg_init_table(sg, num_frags);
     if (skb_to_sgvec(skb, sg, sizeof(struct message_data), noise_encrypted_len(plaintext_len)) <= 0) {
         wg_dbg("Failed skb_to_sgvec, skb->len=%u\n", skb->len);
@@ -974,7 +975,7 @@ static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 		goto err;
 
 	wg_dbg("wg_packet_create_data sending: %*ph\n", first->len, first->data);
-	
+
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->encrypt_queue, &peer->tx_queue, first,
 						   wg->packet_crypt_wq);
 	if (unlikely(ret == -EPIPE))

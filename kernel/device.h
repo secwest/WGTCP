@@ -37,7 +37,8 @@ struct crypt_queue {
 
 struct prev_queue {
 	struct sk_buff *head, *tail, *peeked;
-	struct { struct sk_buff *next, *prev; } empty; // Match first 2 members of struct sk_buff.
+	/* Must match the first two members of struct sk_buff. */
+	struct { struct sk_buff *next, *prev; } empty;
 	atomic_t count;
 };
 
@@ -74,8 +75,8 @@ struct wg_tcp_accept_source {
 struct wg_device {
 	struct net_device *dev;
 	struct crypt_queue encrypt_queue, decrypt_queue, handshake_queue;
-	struct sock __rcu *sock4, *sock6; // UDP listening sockets
-	struct socket __rcu *tcp_listen_socket4, *tcp_listen_socket6; // TCP listening sockets
+	struct sock __rcu *sock4, *sock6; /* UDP listening sockets */
+	struct socket __rcu *tcp_listen_socket4, *tcp_listen_socket6; /* TCP listening sockets */
 	struct net __rcu *creating_net;
 	struct noise_static_identity static_identity;
 	struct workqueue_struct *packet_crypt_wq,*handshake_receive_wq, *handshake_send_wq;
@@ -90,7 +91,7 @@ struct wg_device {
 	struct task_struct *tcp_listener4_thread, *tcp_listener6_thread;
 	struct delayed_work tcp_cleanup_work;
 	struct delayed_work tcp_route_work;
-        spinlock_t tcp_cleanup_lock; // Add a spinlock to protect the flag
+        spinlock_t tcp_cleanup_lock; /* Add a spinlock to protect the flag */
 	bool tcp_cleanup_scheduled;
 	bool tcp_socket4_ready;
 	bool tcp_socket6_ready;

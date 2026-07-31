@@ -66,10 +66,10 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	kref_init(&peer->refcount);
 	skb_queue_head_init(&peer->staged_packet_queue);
 	wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
-	// TCP field initialization
-	peer->peer_socket = NULL;  // Initialize the peer socket to NULL
+	/* TCP field initialization */
+	peer->peer_socket = NULL; /* Initialize the peer socket to NULL */
 
-	// Initialize the original socket callbacks to NULL
+	/* Initialize the original socket callbacks to NULL */
 	peer->original_outbound_state_change = NULL;
 	peer->original_outbound_write_space = NULL;
 	peer->original_outbound_data_ready = NULL;
@@ -82,21 +82,21 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	peer->original_inbound_error_report = NULL;
 	peer->original_inbound_destruct = NULL;
 
-	peer->partial_skb = NULL;  // Initialize the partial skb pointer to NULL
-	peer->expected_len = 0;    // Initialize expected length to 0
-	peer->received_len = 0;    // Initialize received length to 0
+	peer->partial_skb = NULL; /* Initialize the partial skb pointer to NULL */
+	peer->expected_len = 0; /* Initialize expected length to 0 */
+	peer->received_len = 0; /* Initialize received length to 0 */
 
-	// Initialize the TCP retry scheduled flag to false
+	/* Initialize the TCP retry scheduled flag to false */
 	peer->tcp_retry_scheduled = false;
 
-	// Initialize the delayed work for TCP connection retry
+	/* Initialize the delayed work for TCP connection retry */
 	INIT_DELAYED_WORK(&peer->tcp_retry_work, wg_tcp_retry_worker);
 
-	// Initialize the delayed work for TCP socket removal
+	/* Initialize the delayed work for TCP socket removal */
 	INIT_DELAYED_WORK(&peer->tcp_inbound_remove_work, wg_tcp_inbound_remove_worker);
 	INIT_DELAYED_WORK(&peer->tcp_outbound_remove_work, wg_tcp_outbound_remove_worker);
-	
-	// Initialize TCP connection status flags
+
+	/* Initialize TCP connection status flags */
 	peer->tcp_established = false;
 	peer->tcp_pending = false;
 	peer->tcp_connecting = false;
@@ -110,21 +110,21 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	peer->tcp_inbound_remove_scheduled = false;
 	peer->peer_endpoint_set = false;
 
-	// Initialize the spinlock for protecting TCP-related state
+	/* Initialize the spinlock for protecting TCP-related state */
 	spin_lock_init(&peer->tcp_lock);
 	spin_lock_init(&peer->tcp_read_lock);
 	spin_lock_init(&peer->tcp_write_lock);
 
-	// Initialize the skb queue for the TX send queue
+	/* Initialize the skb queue for the TX send queue */
 	skb_queue_head_init(&peer->send_queue);
 
-	// Initialize the spinlock for the TX send queue
+	/* Initialize the spinlock for the TX send queue */
 	spin_lock_init(&peer->send_queue_lock);
 
-	// Initialize the list head for pending connection list
+	/* Initialize the list head for pending connection list */
 	INIT_LIST_HEAD(&peer->pending_connection_list);
 
-	// Initialize the work structure, associating it with the worker functions
+	/* Initialize the work structure, associating it with the worker functions */
 	INIT_WORK(&peer->tcp_read_work, wg_tcp_read_worker);
 	INIT_WORK(&peer->tcp_write_work, wg_tcp_write_worker);
 	if (wg->transport == WG_TRANSPORT_TCP) {
@@ -143,7 +143,7 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 		}
 	}
 
-	// Indicate this is a real peer not a temp peer
+	/* Indicate this is a real peer not a temp peer */
 	peer->temp_peer = false;
 	peer->peer_endpoint = peer->endpoint;
 
@@ -153,7 +153,7 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	list_add_tail(&peer->peer_list, &wg->peer_list);
 	INIT_LIST_HEAD(&peer->allowedips_list);
 	wg_pubkey_hashtable_add(wg->peer_hashtable, peer);
-	
+
 	++wg->num_peers;
 	pr_debug("%s: Peer %llu created\n", wg->dev->name, peer->internal_id);
 	wg_dbg("wg_peer_create: exit with peer=%px\n", peer);
@@ -197,7 +197,7 @@ static void peer_make_dead(struct wg_peer *peer)
 	wg_allowedips_remove_by_peer(&peer->device->peer_allowedips, peer,
 				     &peer->device->device_update_lock);
 	wg_pubkey_hashtable_remove(peer->device->peer_hashtable, peer);
-	
+
 	/* Mark as dead, so that we don't allow jumping contexts after. */
 	WRITE_ONCE(peer->is_dead, true);
 
@@ -220,35 +220,35 @@ static void peer_make_dead(struct wg_peer *peer)
 	cancel_delayed_work(&peer->tcp_retry_work);
 	peer->tcp_retry_scheduled = false;
 
-	// Check if the TCP read work is scheduled before canceling it
+	/* Check if the TCP read work is scheduled before canceling it */
 	if (peer->tcp_read_worker_scheduled) {
-        	cancel_work_sync(&peer->tcp_read_work);
-        	peer->tcp_read_worker_scheduled = false;  // Reset the flag after canceling
+		cancel_work_sync(&peer->tcp_read_work);
+		peer->tcp_read_worker_scheduled = false;
 	}
 
-	// Destroy the TCP read workqueue if it exists
+	/* Destroy the TCP read workqueue if it exists */
 	if (peer->tcp_read_wq) {
 		destroy_workqueue(peer->tcp_read_wq);
-		peer->tcp_read_wq = NULL; // Avoid dangling pointers
+		peer->tcp_read_wq = NULL; /* Avoid dangling pointers */
 	}
 
-	// Check if the TCP write work is scheduled before canceling it
+	/* Check if the TCP write work is scheduled before canceling it */
 	if (peer->tcp_write_worker_scheduled) {
 		cancel_work_sync(&peer->tcp_write_work);
-		peer->tcp_write_worker_scheduled = false;  // Reset the flag after canceling
+		peer->tcp_write_worker_scheduled = false; /* Reset the flag after canceling */
     	}
 
-	// Destroy the TCP write workqueue if it exists
+	/* Destroy the TCP write workqueue if it exists */
 	if (peer->tcp_write_wq) {
 		destroy_workqueue(peer->tcp_write_wq);
-		peer->tcp_write_wq = NULL; // Avoid dangling pointers
+		peer->tcp_write_wq = NULL; /* Avoid dangling pointers */
 	}
 
-	// clean up any partial TCP data if it exists
+	/* clean up any partial TCP data if it exists */
 	if (peer->partial_skb) {
 		kfree_skb(peer->partial_skb);
 	    	peer->partial_skb = NULL;
-	}	
+	}
 
 	/* The caller must now synchronize_net() for this to take effect. */
 	wg_dbg("peer_make_dead: exit\n");

@@ -57,9 +57,9 @@ static const struct nla_policy allowedip_policy[WGALLOWEDIP_A_MAX + 1] = {
 
 
 #ifdef DIAGNOSTIC
-// Diagnostic functions for decoding netlink attributes and messages
+/* Diagnostic functions for decoding netlink attributes and messages */
 
-// Function to print the libmnl formatted netlink message header
+/* Function to print the libmnl formatted netlink message header */
 static void wg_print_netlink_header_libmnl(const struct nlmsghdr *nlh)
 {
     wg_dbg("----------------\t------------------\n");
@@ -75,7 +75,7 @@ static void wg_print_netlink_header_libmnl(const struct nlmsghdr *nlh)
     wg_dbg("----------------\t------------------\n");
 }
 
-// Function to print the libmnl formatted netlink message payload
+/* Function to print the libmnl formatted netlink message payload */
 static void wg_print_netlink_payload_libmnl(const struct nlmsghdr *nlh, size_t extra_header_size)
 {
     unsigned int i;
@@ -123,14 +123,14 @@ static void wg_print_netlink_payload_libmnl(const struct nlmsghdr *nlh, size_t e
     wg_dbg("----------------\t------------------\n");
 }
 
-// Print the netlink message using libmnl format
+/* Print the netlink message using libmnl format */
 static void wg_print_netlink_message_libmnl(const struct nlmsghdr *nlh)
 {
     wg_print_netlink_header_libmnl(nlh);
     wg_print_netlink_payload_libmnl(nlh, 0);
 }
 
-// Routine to parse and print flags with verbose values
+/* Routine to parse and print flags with verbose values */
 static void wg_print_flags_verbose(uint32_t flags)
 {
     wg_dbg("Flags: 0x%08x (", flags);
@@ -145,7 +145,7 @@ static void wg_print_flags_verbose(uint32_t flags)
     wg_dbg(")\n");
 }
 
-// Routine to parse and print peer flags with verbose labels
+/* Routine to parse and print peer flags with verbose labels */
 static void wg_print_peer_flags_verbose(uint32_t flags)
 {
     wg_dbg("Peer Flags: 0x%08x (", flags);
@@ -155,7 +155,7 @@ static void wg_print_peer_flags_verbose(uint32_t flags)
     wg_dbg(")\n");
 }
 
-// Functions to print the allowed IP attributes
+/* Functions to print the allowed IP attributes */
 static void wg_print_allowedip_attr(const struct nlattr *attr)
 {
     int type = nla_type(attr);
@@ -186,7 +186,7 @@ static void wg_print_peer_allowedips(const struct nlattr *attr)
     }
 }
 
-// Functions to print the peer attributes
+/* Functions to print the peer attributes */
 static void wg_print_peer_attr(const struct nlattr *attr)
 {
     int type = nla_type(attr);
@@ -230,7 +230,7 @@ static void wg_print_peer_attr(const struct nlattr *attr)
     }
 }
 
-// Functions to print the device attributes
+/* Functions to print the device attributes */
 static void wg_print_device_peers(const struct nlattr *attr)
 {
     struct nlattr *nested_attr;
@@ -289,7 +289,7 @@ static void wg_print_netlink_message_verbose(const struct nlmsghdr *nlh)
     wg_dbg("  nlmsg_len: %u\n", nlh->nlmsg_len);
     wg_dbg("  nlmsg_type: %u\n", nlh->nlmsg_type);
 
-    // Print command
+    /* Print command */
     switch (nlh->nlmsg_type) {
     case WG_CMD_GET_DEVICE:
         wg_dbg("  Command: WG_CMD_GET_DEVICE\n");
@@ -323,7 +323,7 @@ static void wg_print_netlink_message_verbose(const struct nlmsghdr *nlh)
     wg_dbg("%*phN\n", nlh->nlmsg_len, nlh);
 }
 
-// Add a function to print the entire buffer of netlink messages
+/* Add a function to print the entire buffer of netlink messages */
 static void wg_print_netlink_buffer(const void *buf, size_t len)
 {
     const struct nlmsghdr *nlh = buf;
@@ -335,7 +335,7 @@ static void wg_print_netlink_buffer(const void *buf, size_t len)
     }
 }
 
-#endif // DIAGNOSTIC
+#endif /* DIAGNOSTIC */
 
 static struct wg_device *lookup_interface(struct nlattr **attrs, struct sk_buff *skb)
 {
@@ -629,7 +629,7 @@ static int wg_get_device_done(struct netlink_callback *cb)
 static int set_port(struct wg_device *wg, u16 port)
 {
 	struct wg_peer *peer;
-	
+
 	wg_dbg("Entering set_port: wg = %px, port = %u\n", wg, port);
 
 	if (wg->incoming_port == port)
@@ -669,8 +669,6 @@ static int set_allowedip(struct wg_peer *peer, struct nlattr **attrs)
 	else if (family == AF_INET6 && cidr <= 128 &&
 		 nla_len(attrs[WGALLOWEDIP_A_IPADDR]) == sizeof(struct in6_addr))
 		ret = wg_allowedips_insert_v6(&peer->device->peer_allowedips, nla_data(attrs[WGALLOWEDIP_A_IPADDR]), cidr, peer, &peer->device->device_update_lock);
-
-//	wg_dbg("Exiting set_allowedip\n");
 
 	return ret;
 }
@@ -800,8 +798,6 @@ out:
 	if (attrs[WGPEER_A_PRESHARED_KEY])
 		memzero_explicit(nla_data(attrs[WGPEER_A_PRESHARED_KEY]), nla_len(attrs[WGPEER_A_PRESHARED_KEY]));
 
-//	wg_dbg("Exiting set_peer\n");
-
 	return ret;
 }
 
@@ -813,11 +809,11 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	wg_dbg("Entering wg_set_device: skb = %px, info = %px\n", skb, info);
 
-#ifdef DIAGNOSTC	
-	// Decode and print the netlink message received
+#ifdef DIAGNOSTC
+	/* Decode and print the netlink message received */
 	wg_print_netlink_buffer(skb, skb->len);
 #endif
-	
+
 	wg = lookup_interface(info->attrs, skb);
 	if (IS_ERR(wg)) {
 		ret = PTR_ERR(wg);
@@ -830,7 +826,6 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	if (info->attrs[WGDEVICE_A_FLAGS]) {
 		flags = nla_get_u32(info->attrs[WGDEVICE_A_FLAGS]);
-//		wg_dbg("Parsed WGDEVICE_A_FLAGS: %u\n", flags);
 	}
 	ret = -EOPNOTSUPP;
 	if (flags & ~__WGDEVICE_F_ALL)
@@ -876,7 +871,6 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 		const bool changed = fwmark != wg->fwmark;
 
 		wg->fwmark = fwmark;
-//		wg_dbg("Parsed WGDEVICE_A_FWMARK: %u\n", wg->fwmark);
 		if (wg->transport == WG_TRANSPORT_TCP)
 			wg_tcp_set_device_mark(wg, fwmark);
 		list_for_each_entry(peer, &wg->peer_list, peer_list) {
@@ -888,13 +882,11 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	if (info->attrs[WGDEVICE_A_LISTEN_PORT]) {
 		ret = set_port(wg, nla_get_u16(info->attrs[WGDEVICE_A_LISTEN_PORT]));
-//		wg_dbg("Parsed WGDEVICE_A_LISTEN_PORT: %u, result: %d\n", nla_get_u16(info->attrs[WGDEVICE_A_LISTEN_PORT]), ret);
 		if (ret)
 			goto out;
 	}
 
 	if (flags & WGDEVICE_F_REPLACE_PEERS) {
-//		wg_dbg("Replacing all peers\n");
 		wg_peer_remove_all(wg);
 	}
 
@@ -904,8 +896,6 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 		u8 public_key[NOISE_PUBLIC_KEY_LEN];
 		struct wg_peer *peer, *temp;
 		bool send_staged_packets;
-
-//		wg_dbg("Parsed WGDEVICE_A_PRIVATE_KEY\n");
 
 		if (!crypto_memneq(wg->static_identity.static_private, private_key, NOISE_PUBLIC_KEY_LEN))
 			goto skip_set_private_key;
@@ -940,8 +930,6 @@ skip_set_private_key:
 	if (info->attrs[WGDEVICE_A_PEERS]) {
 		struct nlattr *attr, *peer[WGPEER_A_MAX + 1];
 		int rem;
-
-//		wg_dbg("Processing WGDEVICE_A_PEERS\n");
 
 		nla_for_each_nested(attr, info->attrs[WGDEVICE_A_PEERS], rem) {
 			ret = nla_parse_nested(peer, WGPEER_A_MAX, attr, peer_policy, NULL);

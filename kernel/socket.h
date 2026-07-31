@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved. 
+ * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
  */
 
 #ifndef _WG_SOCKET_H
@@ -54,7 +54,7 @@ struct wg_tcp_frag_header {
  */
 #define WG_TCP_RESERVED_HEADER_SIZE 128
 #define WG_TCP_RECORD_DATA 0
-// Flags 
+/* Flags */
 #define WG_TCP_FRAG_FLAG 0x1
 
 #if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)

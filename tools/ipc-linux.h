@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 /*
  * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
  * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
@@ -128,7 +128,8 @@ another:
 		 * during the dump. That's unfortunate, but is pretty common on busy
 		 * systems that are adding and removing tunnels all the time. Rather
 		 * than retrying, potentially indefinitely, we just work with the
-		 * partial results. */
+		 * partial results.
+		 */
 		if (errno != EINTR) {
 			ret = -errno;
 			goto cleanup;
@@ -283,7 +284,7 @@ toobig_peers:
 	goto send;
 send:
 
-	// Print the netlink message before sending it
+	/* Print the netlink message before sending it */
 
 	if (mnlg_socket_send(nlg, nlh) < 0) {
 		ret = -errno;

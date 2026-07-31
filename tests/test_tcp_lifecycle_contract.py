@@ -258,7 +258,7 @@ class TcpLifecycleContract(unittest.TestCase):
         unwind = section(
             self.socket,
             "static void wg_tcp_connect_unwind(",
-            "// Attempt to establish a TCP connection",
+            "int wg_tcp_connect(struct wg_peer *peer)",
         )
         connect = section(
             self.socket,
@@ -490,7 +490,7 @@ class TcpLifecycleContract(unittest.TestCase):
         unwind = section(
             self.socket,
             "static void wg_tcp_connect_unwind(",
-            "// Attempt to establish a TCP connection",
+            "int wg_tcp_connect(struct wg_peer *peer)",
         )
         worker = section(
             self.socket,

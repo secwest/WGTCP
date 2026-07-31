@@ -31,11 +31,11 @@ bool endpoint_eq(const struct endpoint *a, const struct endpoint *b);
 void log_wireguard_endpoint(struct endpoint *ep);
 
 struct wg_tcp_socket_list_entry {
-	struct socket *tcp_socket;		// Socket associated with the connection
-	struct sockaddr_storage src_addr;	// Source address for the connection
-	struct wg_peer *temp_peer;		// temporary peer for dataready
-	struct list_head tcp_connection_ll;	// List pointer for the linked list
-	ktime_t timestamp;			// Timestamp when the connection was added
+	struct socket *tcp_socket; /* Socket associated with the connection */
+	struct sockaddr_storage src_addr; /* Source address for the connection */
+	struct wg_peer *temp_peer; /* temporary peer for dataready */
+	struct list_head tcp_connection_ll; /* List pointer for the linked list */
+	ktime_t timestamp; /* Timestamp when the connection was added */
 };
 
 struct wg_socket_data {
@@ -55,7 +55,8 @@ static void update_rx_stats(struct wg_peer *peer, size_t len)
 }
 
 /* FIX: removed unused forward declarations for wg_print_wireguard_skb()
- * and wg_print_wireguard_packet() — functions are static in send.c */
+ * and wg_print_wireguard_packet() — functions are static in send.c
+ */
 
 #define SKB_TYPE_LE32(skb) (((struct message_header *)(skb)->data)->type)
 
@@ -80,16 +81,17 @@ static size_t validate_header_len(struct sk_buff *skb)
 	wg_dbg("Exiting validate_header_len\n");
 	return 0;
 }
-#endif // ORIGINAL
+#endif /* ORIGINAL */
 
 static size_t validate_header_len(struct sk_buff *skb)
 {
 	wg_dbg("Entering validate_header_len: skb=%px\n", skb);
 	/* FIX: -Wformat — skb->tail/end are sk_buff_data_t (unsigned int),
-	 * not pointers; use %u instead of %px throughout this function */
+	 * not pointers; use %u instead of %px throughout this function
+	 */
 	wg_dbg("SKB state: len=%d, head=%px, data=%px, tail=%u, end=%u\n",
 		skb->len, skb->head, skb->data, skb->tail, skb->end);
-	
+
 	wg_dbg("sizeof(struct message_header)=%zu\n", sizeof(struct message_header));
 	if (unlikely(skb->len < sizeof(struct message_header))) {
 		wg_dbg("Exiting validate_header_len: skb len (%d) is less "
@@ -166,11 +168,11 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	       skb->head, skb->data, skb->tail, skb->end);
 
 	/* FIX: -Wformat — skb->tail/end are sk_buff_data_t (unsigned int) */
-	// Initial SKB state diagnostics
+	/* Initial SKB state diagnostics */
 	wg_dbg("Initial skb state: head=%px, data=%px, tail=%u, end=%u, len=%d, headroom=%d\n",
 		skb->head, skb->data, skb->tail, skb->end, skb->len, skb_headroom(skb));
 
-	// Check packet protocol and header validity
+	/* Check packet protocol and header validity */
 	if (unlikely(!wg_check_packet_protocol(skb) ||
 		     skb_transport_header(skb) < skb->head ||
 		     (skb_transport_header(skb) + sizeof(struct udphdr)) >
@@ -182,7 +184,7 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	wg_dbg("wg: prepare_skb_header: protocol checks "
 	       "passed.\n");
 
-	// Safely access UDP header using skb_header_pointer
+	/* Safely access UDP header using skb_header_pointer */
 	udp = skb_header_pointer(skb, skb_transport_offset(skb), sizeof(_udp), &_udp);
 	if (!udp) {
 		wg_dbg("Exiting prepare_skb_header with error "
@@ -194,7 +196,7 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	wg_dbg("UDP header source=%u, dest=%u\n",
 	       ntohs(udp->source), ntohs(udp->dest));
 
-	// Calculate data offset and validate
+	/* Calculate data offset and validate */
 	data_offset = skb_transport_offset(skb) + sizeof(struct udphdr);
 	wg_dbg("Data offset calculated: data_offset=%zu\n",
 	       data_offset);
@@ -207,11 +209,11 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Get the UDP length field
+	/* Get the UDP length field */
 	data_len = ntohs(udp->len);
 	wg_dbg("UDP length field: data_len=%zu\n", data_len);
 
-	// Validate data length
+	/* Validate data length */
 	if (unlikely(data_len < sizeof(struct udphdr) ||
 		     data_len > skb->len - skb_transport_offset(skb))) {
 		wg_dbg("Exiting prepare_skb_header with error "
@@ -221,13 +223,13 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Adjust data length to exclude UDP header
+	/* Adjust data length to exclude UDP header */
 	data_len -= sizeof(struct udphdr);
 	data_offset = skb_transport_offset(skb) + sizeof(struct udphdr);
 	wg_dbg("Adjusted data_len=%zu, adjusted data_offset=%zu\n",
 	       data_len, data_offset);
 
-	// Check pull and trim capabilities
+	/* Check pull and trim capabilities */
 	if (unlikely(!pskb_may_pull(skb,
 				data_offset + sizeof(struct message_header)) ||
 		     pskb_trim(skb, data_len + data_offset) < 0)) {
@@ -238,15 +240,15 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Diagnostics before pulling SKB data
+	/* Diagnostics before pulling SKB data */
 	wg_dbg("Before skb_pull: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 	skb_pull(skb, data_offset);
-	// Diagnostics after pulling SKB data
+	/* Diagnostics after pulling SKB data */
 	wg_dbg("After skb_pull: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 
-	// Validate the SKB length against calculated data length
+	/* Validate the SKB length against calculated data length */
 	if (unlikely(skb->len != data_len)) {
 		wg_dbg("Exiting prepare_skb_header with error -EINVAL: "
 		       "Final length does not match calculated length. len=%d, expected data_len=%zu\n",
@@ -254,7 +256,7 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Validate header length
+	/* Validate header length */
 	header_len = validate_header_len(skb);
 	wg_dbg("Header length validated: header_len=%zu\n", header_len);
 
@@ -263,15 +265,15 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Diagnostics before pushing SKB data back
+	/* Diagnostics before pushing SKB data back */
 	wg_dbg("Before __skb_push: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 	__skb_push(skb, data_offset);
-	// Diagnostics after pushing SKB data back
+	/* Diagnostics after pushing SKB data back */
 	wg_dbg("After __skb_push: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 
-	// Check pull capabilities after push
+	/* Check pull capabilities after push */
 	if (unlikely(!pskb_may_pull(skb, data_offset + header_len))) {
 		wg_dbg("Exiting prepare_skb_header with error -EINVAL: "
 		       "pskb_may_pull failed after __skb_push. data_offset=%zu, header_len=%zu\n",
@@ -279,11 +281,11 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 		return -EINVAL;
 	}
 
-	// Diagnostics before pulling SKB data again
+	/* Diagnostics before pulling SKB data again */
 	wg_dbg("Before __skb_pull: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 	__skb_pull(skb, data_offset);
-	// Diagnostics after pulling SKB data again
+	/* Diagnostics after pulling SKB data again */
 	wg_dbg("After __skb_pull: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 
@@ -296,7 +298,7 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 }
 
 /* FIX: -Wmissing-prototypes — made static (file-local only) */
-// Function to extract source and destination sockaddr_storage from an skb
+/* Function to extract source and destination sockaddr_storage from an skb */
 static int extract_sockaddr_from_skb(struct sk_buff *skb, struct sockaddr_storage *source,
 			      struct sockaddr_storage *dest)
 {
@@ -306,14 +308,14 @@ static int extract_sockaddr_from_skb(struct sk_buff *skb, struct sockaddr_storag
 	struct udphdr *udp_header;
 
 	if (!skb) {
-		return -1; // Invalid skb
+		return -1; /* Invalid skb */
 	}
 
-	// Handle IPv4 packets
+	/* Handle IPv4 packets */
 	if (skb->protocol == htons(ETH_P_IP)) {
 		ip_header = ip_hdr(skb);
 			if (!ip_header) {
-			return -1; // Failed to get IP header
+			return -1; /* Failed to get IP header */
 		}
 
 		struct sockaddr_in *src_in = (struct sockaddr_in *)source;
@@ -328,32 +330,32 @@ static int extract_sockaddr_from_skb(struct sk_buff *skb, struct sockaddr_storag
 		src_in->sin_addr.s_addr = ip_header->saddr;
 		dest_in->sin_addr.s_addr = ip_header->daddr;
 
-		// Determine transport protocol
+		/* Determine transport protocol */
 		if (ip_header->protocol == IPPROTO_TCP) {
 			tcp_header = tcp_hdr(skb);
 			if (!tcp_header) {
-				return -1; // Failed to get TCP header
+				return -1; /* Failed to get TCP header */
 			}
 			src_in->sin_port = tcp_header->source;
 			dest_in->sin_port = tcp_header->dest;
 		} else if (ip_header->protocol == IPPROTO_UDP) {
 			udp_header = udp_hdr(skb);
 			if (!udp_header) {
-				return -1; // Failed to get UDP header
+				return -1; /* Failed to get UDP header */
 			}
 			src_in->sin_port = udp_header->source;
 			dest_in->sin_port = udp_header->dest;
 		} else {
-			return -1; // Unsupported protocol
+			return -1; /* Unsupported protocol */
 		}
 	}
 
 #if IS_ENABLED(CONFIG_IPV6)
-	// Handle IPv6 packets
+	/* Handle IPv6 packets */
 	else if (skb->protocol == htons(ETH_P_IPV6)) {
 		ipv6_header = ipv6_hdr(skb);
 		if (!ipv6_header) {
-			return -1; // Failed to get IPv6 header
+			return -1; /* Failed to get IPv6 header */
 		}
 
 		struct sockaddr_in6 *src_in6 = (struct sockaddr_in6 *)source;
@@ -368,32 +370,32 @@ static int extract_sockaddr_from_skb(struct sk_buff *skb, struct sockaddr_storag
 		src_in6->sin6_addr = ipv6_header->saddr;
 		dest_in6->sin6_addr = ipv6_header->daddr;
 
-		// Determine transport protocol
+		/* Determine transport protocol */
 		if (ipv6_header->nexthdr == IPPROTO_TCP) {
 			tcp_header = tcp_hdr(skb);
 			if (!tcp_header) {
-				return -1; // Failed to get TCP header
+				return -1; /* Failed to get TCP header */
 			}
 			src_in6->sin6_port = tcp_header->source;
 			dest_in6->sin6_port = tcp_header->dest;
 		} else if (ipv6_header->nexthdr == IPPROTO_UDP) {
 			udp_header = udp_hdr(skb);
 			if (!udp_header) {
-				return -1; // Failed to get UDP header
+				return -1; /* Failed to get UDP header */
 			}
 			src_in6->sin6_port = udp_header->source;
 			dest_in6->sin6_port = udp_header->dest;
 		} else {
-			return -1; // Unsupported protocol
+			return -1; /* Unsupported protocol */
 		}
 	}
 #endif
 
 	else {
-		return -1; // Unsupported packet type
+		return -1; /* Unsupported packet type */
 	}
 
-	return 0; // Success
+	return 0; /* Success */
 }
 
 void print_peer_socket_info(struct wg_peer *peer);
@@ -415,13 +417,13 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 	wg_dbg("Validating handshake packet with len=%u\n", skb->len);
 	wg_dbg("Received Handshake Packet: %*ph\n", (int)skb->len, skb->data);
 
-	if(wg->transport == WG_TRANSPORT_TCP) { 
-		// For TCP, skip cookie check
+	if(wg->transport == WG_TRANSPORT_TCP) {
+		/* For TCP, skip cookie check */
 		packet_needs_cookie = false;
 		goto nocookie;
 	}
 
-	// Handle handshake cookie response
+	/* Handle handshake cookie response */
 	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_COOKIE)) {
 		net_dbg_skb_ratelimited("%s: Receiving cookie response from %pISpfsc\n", wg->dev->name, skb);
 		wg_cookie_message_consume((struct message_handshake_cookie *)skb->data, wg);
@@ -429,7 +431,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 		return;
 	}
 
-	// Load calculation to decide if system is under load
+	/* Load calculation to decide if system is under load */
 	under_load = atomic_read(&wg->handshake_queue_len) >= MAX_QUEUED_INCOMING_HANDSHAKES / 8;
 	if (under_load) {
 		last_under_load = ktime_get_coarse_boottime_ns();
@@ -442,7 +444,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 		}
 	}
 
-	// Validate packet's MAC and set packet_needs_cookie flag
+	/* Validate packet's MAC and set packet_needs_cookie flag */
 	mac_state = wg_cookie_validate_packet(&wg->cookie_checker, skb, under_load);
 	wg_dbg("MAC validation result: %d\n", mac_state);
 	cookie_action = wg_cookie_validation_action(under_load, mac_state);
@@ -457,7 +459,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 	}
 
 nocookie:
-	// Process handshake packets
+	/* Process handshake packets */
 	switch (SKB_TYPE_LE32(skb)) {
 	case cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION): {
 		struct message_handshake_initiation *message = (struct message_handshake_initiation *)skb->data;
@@ -469,7 +471,7 @@ nocookie:
 			return;
 		}
 
-		// Handle handshake initiation
+		/* Handle handshake initiation */
 		peer = wg_noise_handshake_consume_initiation(message, wg);
 		if (unlikely(!peer)) {
 			net_dbg_skb_ratelimited("%s: Invalid handshake initiation from %pISpfsc\n", wg->dev->name, skb);
@@ -495,7 +497,7 @@ nocookie:
 			return;
 		}
 
-		// Handle handshake response
+		/* Handle handshake response */
 		peer = wg_noise_handshake_consume_response(message, wg);
 		if (unlikely(!peer)) {
 			wg_dbg("Peer object is NULL. Dropping packet.\n");
@@ -526,14 +528,14 @@ nocookie:
 		break;
 	}
 
-	// Final check to ensure peer is valid
+	/* Final check to ensure peer is valid */
 	if (unlikely(!peer)) {
 		WARN(1, "Unexpected state: No valid peer found after handshake processing\n");
 		wg_dbg("Exiting wg_receive_handshake_packet\n");
 		return;
 	}
 
-	// Update statistics and state
+	/* Update statistics and state */
 	local_bh_disable();
 	update_rx_stats(peer, skb->len);
 	local_bh_enable();
@@ -650,7 +652,7 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	wg_dbg("Exiting decrypt_packet with true\n");
 	return true;
 }
-#endif // ORIGINAL
+#endif /* ORIGINAL */
 
 void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);
 
@@ -684,8 +686,8 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	PACKET_CB(skb)->nonce = le64_to_cpu(((struct message_data *)skb->data)->counter);
 	wg_dbg("Extracted nonce from skb: nonce=%llu\n", PACKET_CB(skb)->nonce);
 	wg_dbg("skb->data (before decryption): %*ph\n", skb->len, skb->data);
-	
-	// Ensure network header is part of the packet
+
+	/* Ensure network header is part of the packet */
 	offset = skb->data - skb_network_header(skb);
 	wg_dbg("Pushing skb to preserve network header, offset=%u\n", offset);
 	skb_push(skb, offset);
@@ -711,7 +713,7 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	wg_dbg("Scattergather segments prepared, starting decryption\n");
 #define NOISE_KEY_LEN	32
 	wg_dbg("Decryption key: %*ph\n", NOISE_KEY_LEN, keypair->receiving.key);
-	
+
 	if (!chacha20poly1305_decrypt_sg_inplace(sg, skb->len, NULL, 0,
                                              PACKET_CB(skb)->nonce,
                                              keypair->receiving.key)) {
@@ -724,8 +726,8 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 #ifdef WG_TCP_VERBOSE
 	decode_and_print_packet(skb, "[decrypt]");
 #endif
-	
-	// Ensure endpoint information remains intact
+
+	/* Ensure endpoint information remains intact */
 	wg_dbg("Pushing skb to preserve endpoint information\n");
 	skb_push(skb, offset);
 	if (pskb_trim(skb, skb->len - noise_encrypted_len(0))) {
@@ -739,7 +741,7 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	       skb->len, skb->data);
 	wg_dbg("Pulled skb to offset: %u, skb->len=%u, skb->data=%px\n",
 	       offset, skb->len, skb->data);
-	
+
 
 	wg_dbg("Exiting decrypt_packet with true, skb->len=%u\n", skb->len);
 	return true;
@@ -805,7 +807,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
     		return;
 	}
 
-	
+
 	if (peer->device->transport == WG_TRANSPORT_TCP &&
 	    authenticated_over_tcp)
 		wg_socket_set_peer_endpoint_authenticated(
@@ -877,7 +879,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
     		return;
 	}
 
-	
+
 	if (unlikely(pskb_trim(skb, len)))
 		goto packet_processed;
 
@@ -940,7 +942,7 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 		wg_prev_queue_drop_peeked(&peer->rx_queue);
 		keypair = PACKET_CB(skb)->keypair;
 		free = true;
-		
+
 		if (unlikely(state != PACKET_STATE_CRYPTED))
 			goto next;
 
@@ -1086,7 +1088,7 @@ err:
 	dev_kfree_skb(skb);
 	wg_dbg("Exiting wg_packet_receive\n");
 }
-#endif // ORIGINAL
+#endif /* ORIGINAL */
 
 void wg_packet_receive(struct wg_device *wg, struct sk_buff *skb)
 {

@@ -21,7 +21,7 @@ struct string_list {
 static int string_list_add(struct string_list *list, const char *str)
 {
 	DEBUG_PRINT("Entering string_list_add\n");
-	
+
 	size_t len = strlen(str) + 1;
 	DEBUG_PRINT("string_list_add: Adding string '%s' of length %zu\n", str, len);
 

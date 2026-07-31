@@ -317,16 +317,11 @@ static inline bool parse_endpoint(struct sockaddr *endpoint, const char *value)
 		if (!ret) {
 			break;
 		}
-		/* The set of return codes that are "permanent failures". All other possibilities are potentially transient.
--		 *
--		 * This is according to https://sourceware.org/glibc/wiki/NameResolver which states:
--		 *	"From the perspective of the application that calls getaddrinfo() it perhaps
--		 *	 doesn't matter that much since EAI_FAIL, EAI_NONAME and EAI_NODATA are all
--		 *	 permanent failure codes and the causes are all permanent failures in the
--		 *	 sense that there is no point in retrying later."
--		 *
--		 * So this is what we do, except FreeBSD removed EAI_NODATA some time ago, so that's conditional.
--		 */
+		/*
+		 * Treat permanent resolver failures as final and retry all
+		 * others. EAI_NODATA is conditional because FreeBSD removed it.
+		 * See https://sourceware.org/glibc/wiki/NameResolver.
+		 */
 		if (ret == EAI_NONAME || ret == EAI_FAIL ||
 			#ifdef EAI_NODATA
 				ret == EAI_NODATA ||
@@ -387,7 +382,7 @@ static inline bool parse_persistent_keepalive(uint16_t *interval, uint32_t *flag
 
 	*interval = (uint16_t)ret;
 	*flags |= WGPEER_HAS_PERSISTENT_KEEPALIVE_INTERVAL;
-	
+
 	DEBUG_PRINT("Parsed persistent keepalive interval: %u. Flag WGPEER_HAS_PERSISTENT_KEEPALIVE_INTERVAL set\n", *interval);
 	DEBUG_PRINT("Exiting parse_persistent_keepalive with status: success\n");
 	return true;

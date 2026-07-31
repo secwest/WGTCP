@@ -35,7 +35,7 @@ class TcpListenerContract(unittest.TestCase):
         listener_init = section(
             self.socket,
             "int wg_tcp_listener_socket_init(",
-            "// Attempt to establish a TCP connection",
+            "static void wg_tcp_connect_unwind(",
         )
 
         self.assertNotIn("listener_active", worker)
@@ -86,7 +86,7 @@ class TcpListenerContract(unittest.TestCase):
         listener_init = section(
             self.socket,
             "int wg_tcp_listener_socket_init(",
-            "// Attempt to establish a TCP connection",
+            "static void wg_tcp_connect_unwind(",
         )
 
         self.assertEqual(listener_init.count("PTR_ERR("), 2)

@@ -28,7 +28,7 @@ __attribute__((constructor)) static void init(void)
 
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 
-	stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE); // We don't close this.
+	stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE); /* We don't close this. */
 	if (stdout_handle == INVALID_HANDLE_VALUE)
 		goto no_color;
 	if (!GetConsoleMode(stdout_handle, &console_mode))
