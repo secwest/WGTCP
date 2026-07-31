@@ -10,6 +10,73 @@ WireGuard message in a small record carried over a long-lived TCP connection.
 This can provide connectivity where raw UDP is blocked while preserving a
 familiar WireGuard configuration workflow.
 
+## Why use WireguardTCP?
+
+WireguardTCP adds a practical second carrier to WireGuard. The tunnel, keys,
+routes, and security model stay familiar; the main configuration change is one
+line:
+
+```ini
+Transport = tcp
+```
+
+This is useful when:
+
+- **UDP is blocked or unreliable.** The tunnel can use an allowed raw TCP port
+  instead of depending on UDP reachability.
+- **Firewalls and NAT devices favor established TCP flows.** Persistent
+  connections and keepalives fit common stateful network policies. The tested
+  dual-reachable NAT44 topology passed explicit port forwarding, bidirectional
+  traffic, idle keepalives, and recovery after the NAT source port changed.
+- **Reliable delivery matters more than minimum latency.** TCP retransmits lost
+  outer data, which can preserve inner TCP and UDP payload delivery on some
+  lossy paths.
+- **You want normal WireGuard administration.** Public/private keys,
+  `AllowedIPs`, endpoints, preshared keys, `wg`, `wg-quick`, and systemd service
+  management retain their normal roles.
+- **You need modern routed configurations.** The regression suite passed IPv4,
+  IPv6, dual-stack, full-tunnel policy routing, asymmetric listen ports, live
+  route and address changes, `FwMark` reconnects, and `wg-quick` configuration
+  reloads.
+
+### Performance advantages seen in testing
+
+TCP mode is not always faster, but it has shown useful strengths in the
+repository's measured scenarios:
+
+- On a clean, low-latency x64 test, four-stream bulk TCP reached
+  **2789.4 Mbps over TCP-WG versus 2588.2 Mbps over UDP-WG**.
+- In selected synthetic-loss tests, outer TCP retransmission preserved much
+  more application throughput and inner UDP delivery than the UDP carrier.
+- All 82 clean calibration and finite-queue/RTT screening cells in the newer
+  physical-carrier campaign were stable. No-loss 16-flow TCP controls at
+  200-400 ms delivered about 47 Mbps with essentially no zero-delivery stalls.
+- The full two-VM functional campaign passed all runtime tunnel cases,
+  including NAT44, IPv4/IPv6, full-tunnel routing, reconnects, keepalives,
+  configuration persistence, and forced short-write recovery.
+
+These are measured examples, not a promise that TCP mode will outperform UDP
+on every path. High latency, sustained congestion, or severe loss can make an
+ordered TCP stream slower through head-of-line blocking. The detailed test
+conditions and limitations are in
+[`perf-test/REPORT.md`](perf-test/REPORT.md) and
+[`docs/TCP_MELTDOWN.md`](docs/TCP_MELTDOWN.md).
+
+### The setup in plain language
+
+The complete first-tunnel procedure below is:
+
+1. Install a compiler, matching kernel headers, and WireGuard tools.
+2. Run two build commands for the modified `wg` tool and kernel module.
+3. Install and load the module on both Linux hosts.
+4. Generate ordinary WireGuard keys.
+5. Add `Transport = tcp` to two familiar `wg-quick` configuration files.
+6. Allow one TCP port, start `wg0`, and verify it with `ping`.
+
+No relay, proxy, userspace tunnel daemon, certificate authority, or new key
+format is required. Both endpoints do need this modified Linux module and
+modified `wg` tool.
+
 TCP mode is experimental. It is not HTTP or TLS camouflage, both endpoints must
 run this implementation, and TCP retransmission can increase latency through
 head-of-line blocking. Prefer normal WireGuard UDP when it works and use TCP

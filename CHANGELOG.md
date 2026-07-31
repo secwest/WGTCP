@@ -120,6 +120,9 @@ affects design and externally visible behavior.
 
 ### Changed
 
+- Expanded the root QuickStart with a plain-language benefits summary, tested
+  performance examples, NAT and feature support, and a concise first-tunnel
+  workflow.
 - Calibrated user-facing meltdown wording: all clean finite-queue/RTT screening
   cells were stable, severe degradation appeared only in the deliberately
   extreme persistent-loss breadth envelope, and the unrun onset sweep prevents
