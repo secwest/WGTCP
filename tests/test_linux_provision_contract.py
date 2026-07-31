@@ -54,6 +54,7 @@ class LinuxProvisionContractTests(unittest.TestCase):
     def test_root_provisioner_uses_the_callers_explicit_private_key(self):
         self.assertIn("--ssh-private-key", PROVISION)
         self.assertGreaterEqual(PROVISION.count('-i "$SSH_PRIVATE_KEY"'), 3)
+        self.assertIn('"SshPrivateKey": env["STATE_SSH_PRIVATE_KEY"]', PROVISION)
 
     def test_verified_base_image_is_staged_for_libvirt_access(self):
         self.assertIn("stage_base_image()", PROVISION)

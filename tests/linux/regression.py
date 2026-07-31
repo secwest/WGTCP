@@ -67,6 +67,8 @@ class Suite(HYPERV.Suite):
             "StrictHostKeyChecking=yes",
             "-o",
             f"UserKnownHostsFile={known_hosts}",
+            "-i",
+            str(self.args.ssh_private_key),
             self.target(vm),
             *remote_command,
         ]
@@ -185,6 +187,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--vm-b-host", required=True)
     result.add_argument("--ssh", help="path to the OpenSSH client")
     result.add_argument("--ssh-user", default="ubuntu")
+    result.add_argument("--ssh-private-key", type=Path, required=True)
     result.add_argument(
         "--known-hosts-dir",
         type=Path,
@@ -221,6 +224,8 @@ def main() -> int:
         args = parser().parse_args()
         if not args.known_hosts_dir.is_dir():
             raise Failure(f"known-hosts directory does not exist: {args.known_hosts_dir}")
+        if not args.ssh_private_key.is_file():
+            raise Failure(f"SSH private key does not exist: {args.ssh_private_key}")
         return Suite(args).run()
     except (Failure, OSError) as error:
         print(f"regression: FAIL: {error}", file=sys.stderr)

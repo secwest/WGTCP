@@ -50,9 +50,16 @@ if len(guests) != 2:
     raise SystemExit("provisioning state does not contain exactly two guests")
 for guest in guests:
     print(guest["Name"])
+private_key = configuration.get("SshPrivateKey")
+if not isinstance(private_key, str) or not private_key:
+    raise SystemExit("provisioning state does not contain an SSH private key")
+print(private_key)
 PY
 )
-(( ${#state[@]} == 2 )) || die "state parser did not return two guests"
+(( ${#state[@]} == 3 )) || die "state parser did not return two guests and an SSH private key"
+ssh_private_key=${state[2]}
+[[ -f $ssh_private_key && -r $ssh_private_key ]] ||
+	die "SSH private key is not readable: $ssh_private_key"
 
 guest_ip() {
 	local guest=$1 ip
@@ -73,6 +80,7 @@ exec python3 "$SCRIPT_DIR/regression.py" \
 	--vm-b "${state[1]}" \
 	--vm-a-host "$(guest_ip "${state[0]}")" \
 	--vm-b-host "$(guest_ip "${state[1]}")" \
+	--ssh-private-key "$ssh_private_key" \
 	--known-hosts-dir "$known_hosts_dir" \
 	--results-dir "$RESULTS_DIR/runs" \
 	"$@"

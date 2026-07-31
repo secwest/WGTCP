@@ -177,11 +177,11 @@ PY
 
 validate_state() {
 	[[ -r $STATE_PATH ]] || return 0
-	python3 - "$STATE_PATH" "$OWNER" "$VM_A" "$VM_B" "$PATH0_NETWORK" "$PATH1_NETWORK" <<'PY'
+	python3 - "$STATE_PATH" "$OWNER" "$VM_A" "$VM_B" "$PATH0_NETWORK" "$PATH1_NETWORK" "$SSH_PRIVATE_KEY" <<'PY'
 import json
 import sys
 
-path, owner, vm_a, vm_b, network_a, network_b = sys.argv[1:]
+path, owner, vm_a, vm_b, network_a, network_b, ssh_private_key = sys.argv[1:]
 with open(path, encoding="utf-8") as stream:
     document = json.load(stream)
 if document.get("Owner") != owner:
@@ -191,6 +191,8 @@ if configuration.get("VmNames") != [vm_a, vm_b]:
     raise SystemExit("provisioning state VM names differ from the requested lab")
 if configuration.get("Networks") != [network_a, network_b]:
     raise SystemExit("provisioning state network names differ from the requested lab")
+if configuration.get("SshPrivateKey") not in (None, ssh_private_key):
+    raise SystemExit("provisioning state SSH private key differs from the requested lab")
 PY
 }
 
@@ -208,6 +210,7 @@ write_state() {
 	STATE_VM_B_DISK=$STORAGE_DIR/$VM_B.qcow2 \
 	STATE_VM_A_SEED=$STORAGE_DIR/$VM_A-seed.img \
 	STATE_VM_B_SEED=$STORAGE_DIR/$VM_B-seed.img \
+	STATE_SSH_PRIVATE_KEY=$SSH_PRIVATE_KEY \
 	STATE_SNAPSHOT_MANIFEST=$snapshot_manifest \
 	python3 - "$STATE_PATH" "$STATE_PATH.tmp" <<'PY'
 import datetime
@@ -255,6 +258,7 @@ document = {
     "Configuration": {
         "VmNames": [env["STATE_VM_A"], env["STATE_VM_B"]],
         "Networks": [env["STATE_PATH0_NETWORK"], env["STATE_PATH1_NETWORK"]],
+        "SshPrivateKey": env["STATE_SSH_PRIVATE_KEY"],
         "Guests": guests,
     },
     "VmIdentities": [

@@ -25,6 +25,7 @@ class Harness(REGRESSION.Suite):
             vm_a_host="192.0.2.10",
             vm_b_host="192.0.2.11",
             ssh_user="ubuntu",
+            ssh_private_key=Path("/tmp/id_ed25519"),
             known_hosts_dir=Path("/tmp/known-hosts"),
             timeout=180,
             repo="/home/ubuntu/WireguardTCP",
@@ -70,6 +71,8 @@ class LinuxRunnerContractTests(unittest.TestCase):
             f"UserKnownHostsFile={suite.args.known_hosts_dir / 'wgtcp-a'}",
             argv,
         )
+        self.assertIn("-i", argv)
+        self.assertIn(str(suite.args.ssh_private_key), argv)
         self.assertIn("/home/ubuntu/WireguardTCP/tests/hyperv/guest-node.sh", argv)
         self.assertIn("sudo", argv)
 
