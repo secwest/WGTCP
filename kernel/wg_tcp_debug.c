@@ -31,6 +31,7 @@
 #include <linux/socket.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/icmp.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/version.h>

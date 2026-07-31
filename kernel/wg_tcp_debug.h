@@ -25,6 +25,7 @@
 #ifndef _WG_TCP_DEBUG_H
 #define _WG_TCP_DEBUG_H
 
+#include <linux/icmp.h>
 #include <linux/types.h>
 
 #ifdef WG_TCP_VERBOSE
@@ -58,5 +59,8 @@ void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);
 void print_wg_peer(struct wg_peer *peer);
 void print_crypt_queue(const char *label, struct crypt_queue *queue);
 void print_wg_device(struct wg_device *device);
+void print_skbuff_head_info(const char *label, struct sk_buff_head *queue);
+void print_tcp_socket_info(struct socket *sock, const char *label);
+void print_peer_socket_info(struct wg_peer *peer);
 
 #endif /* _WG_TCP_DEBUG_H */
