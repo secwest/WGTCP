@@ -27,7 +27,7 @@ experimental roaming and NAT behavior. It is not HTTP or TLS camouflage, and
 stock WireGuard UDP remains the preferred mode when it is available.
 
 New users should follow the
-**[WireGuard TCP QuickStart](docs/QUICKSTART.md)** to install the module and
+**[WireGuard TCP QuickStart](QUICKSTART.md)** to install the module and
 tool, configure a verified two-host tunnel, and adapt the advanced
 site-to-site, asymmetric-port, dual-stack, and NAT templates.
 
@@ -333,7 +333,7 @@ inventory.
 kernel/                       WireGuard kernel module with TCP transport
 tools/                        Modified WireGuard userland tools
 include/uapi/                 Additive Linux transport UAPI
-docs/QUICKSTART.md             Installation, first tunnel, and configuration templates
+QUICKSTART.md                  Installation, first tunnel, and configuration templates
 docs/TCP_TRANSPORT_DESIGN.md  Detailed architecture and parity design
 docs/TCP_MELTDOWN.md          Calibrated meltdown scope and replication index
 DESIGNLOG.md                  Chronological architectural decisions
@@ -481,7 +481,7 @@ counter deltas, resets every control, and verifies post-pressure traffic.
 
 ## Documentation
 
-- [Installation, basic tunnel, and advanced configuration QuickStart](docs/QUICKSTART.md)
+- [Installation, basic tunnel, and advanced configuration QuickStart](QUICKSTART.md)
 - [Design decision log](DESIGNLOG.md)
 - [Change log](CHANGELOG.md)
 - [TCP transport design, compatibility, roaming, and behavior](docs/TCP_TRANSPORT_DESIGN.md)
