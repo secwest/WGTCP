@@ -720,7 +720,9 @@ route)
 		echo "route replacement did not move TCP tunnel traffic to path1" >&2
 		exit 1
 	}
-	after=$(wait_tcp_endpoint "$ns_a" 4 198.51.100.2 "$port" 198.51.100.1: "$before")
+	# The configured destination remains 192.0.2.2; only its gateway and
+	# selected source address move to path1.
+	after=$(wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 198.51.100.1: "$before")
 	printf 'mode=route\ntraffic_path=path1\nreconnected=true\nold_tcp_endpoint=%s\nnew_tcp_endpoint=%s\n' \
 		"$before" "$after"
 	;;

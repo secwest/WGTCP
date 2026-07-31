@@ -83,6 +83,17 @@ class TcpParityNewModesContract(unittest.TestCase):
         self.assertIn("obsolete_dial_target_retired=pass", source_uplink)
         self.assertIn("uplink_dial_target=%s", source_uplink)
 
+    def test_route_change_preserves_the_configured_remote_address(self) -> None:
+        route = SCRIPT[SCRIPT.index("route)") : SCRIPT.index("source-uplink)")]
+        self.assertIn(
+            'wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 198.51.100.1:',
+            route,
+        )
+        self.assertNotIn(
+            'wait_tcp_endpoint "$ns_a" 4 198.51.100.2 "$port" 198.51.100.1:',
+            route,
+        )
+
     def test_fault_mode_proves_each_injected_path_and_recovers(self) -> None:
         self.assertIn('tcp_test_max_send_bytes"', SCRIPT)
         self.assertIn('tcp_test_garbage_prefix_bytes"', SCRIPT)
