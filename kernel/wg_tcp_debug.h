@@ -43,6 +43,11 @@
 #endif
 
 struct sk_buff;
+struct crypt_queue;
+struct sk_buff_head;
+struct socket;
+struct wg_device;
+struct wg_peer;
 
 void debug_skb(const struct sk_buff *askb);
 void debug_wireguard_packet(const unsigned char *data,

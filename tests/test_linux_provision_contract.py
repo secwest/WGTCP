@@ -5,6 +5,9 @@ import unittest
 PROVISION = (
     Path(__file__).parent / "linux" / "Provision-LinuxRegression.sh"
 ).read_text(encoding="utf-8")
+KERNEL_MAKEFILE = (
+    Path(__file__).parents[1] / "kernel" / "Makefile"
+).read_text(encoding="utf-8")
 
 
 class LinuxProvisionContractTests(unittest.TestCase):
@@ -40,6 +43,9 @@ class LinuxProvisionContractTests(unittest.TestCase):
         self.assertIn("OverlayArchiveSha256", PROVISION)
         self.assertIn("guest-bootstrap.sh", PROVISION)
         self.assertIn("guest-build.sh", PROVISION)
+
+    def test_split_tcp_debug_source_is_linked_into_the_module(self):
+        self.assertIn("wireguard-y += wg_tcp_debug.o", KERNEL_MAKEFILE)
 
     def test_root_snapshot_scopes_git_safe_directory_to_the_requested_repo(self):
         self.assertGreaterEqual(PROVISION.count('safe.directory="$REPO_ROOT"'), 6)
