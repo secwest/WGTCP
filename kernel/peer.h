@@ -19,13 +19,6 @@
 
 struct wg_device;
 
-
-struct wg_tcp_transfer_work {
-    struct work_struct work;
-    struct sk_buff *skb;
-    struct wg_peer *peer;
-};
-
 struct wg_peer {
 	struct wg_device *device;
 	struct prev_queue tx_queue, rx_queue;
@@ -128,8 +121,6 @@ struct wg_peer {
 
 };
 
-
-
 struct wg_peer *wg_peer_create(struct wg_device *wg,
 			       const u8 public_key[NOISE_PUBLIC_KEY_LEN],
 			       const u8 preshared_key[NOISE_SYMMETRIC_KEY_LEN]);
@@ -140,6 +131,13 @@ static inline struct wg_peer *wg_peer_get(struct wg_peer *peer)
 	kref_get(&peer->refcount);
 	return peer;
 }
+
+struct wg_tcp_transfer_work {
+    struct work_struct work;
+    struct sk_buff *skb;
+    struct wg_peer *peer;
+};
+
 void wg_peer_put(struct wg_peer *peer);
 void wg_peer_remove(struct wg_peer *peer);
 void wg_peer_remove_all(struct wg_device *wg);
@@ -147,8 +145,6 @@ void wg_peer_remove_all(struct wg_device *wg);
 int wg_peer_init(void);
 void wg_peer_uninit(void);
 
-void wg_peer_tcp_connect(struct work_struct *work);
-void wg_peer_tcp_send(struct work_struct *work);
 void wg_peer_tcp_receive(struct work_struct *work);
 void wg_tcp_inbound_remove_worker(struct work_struct *work);
 void wg_tcp_outbound_remove_worker(struct work_struct *work);

@@ -112,6 +112,8 @@ int wg_tcp_listener4_thread(void *data);
 int wg_tcp_listener6_thread(void *data);
 
 void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool inbound);
+void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
+
 void wg_tcp_peer_stop(struct wg_peer *peer);
 void wg_tcp_peer_request_reconnect(struct wg_peer *peer);
 void wg_tcp_set_device_mark(struct wg_device *wg, u32 mark);

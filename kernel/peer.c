@@ -4,26 +4,23 @@
  * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
  */
 
-#include "peer.h"
 #include "device.h"
-#include "queueing.h"
-#include "timers.h"
-#include "peerlookup.h"
 #include "noise.h"
+#include "peer.h"
+#include "peerlookup.h"
+#include "queueing.h"
 #include "socket.h"
+#include "timers.h"
+#include "wg_tcp_debug.h"
 
 #include <linux/kref.h>
 #include <linux/lockdep.h>
 #include <linux/rcupdate.h>
 #include <linux/list.h>
 #include <linux/wireguard.h>
-#include "wg_tcp_debug.h"
 
 static struct kmem_cache *peer_cache;
 static atomic64_t peer_counter = ATOMIC64_INIT(0);
-
-void wg_clean_peer_socket(struct wg_peer *peer, bool release, bool destroy, bool inbound);
-void wg_reset_tcp_socket_callbacks(struct wg_peer *peer, bool inbound);
 
 struct wg_peer *wg_peer_create(struct wg_device *wg,
 			       const u8 public_key[NOISE_PUBLIC_KEY_LEN],
@@ -181,8 +178,6 @@ struct wg_peer *wg_peer_get_maybe_zero(struct wg_peer *peer)
 	wg_dbg("wg_peer_get_maybe_zero: exit with peer=%px\n", peer);
 	return peer;
 }
-
-
 
 static void peer_make_dead(struct wg_peer *peer)
 {
