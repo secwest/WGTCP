@@ -1,2 +1,4 @@
 0e0b6f2eb0f7a59b4c2755f1be5b7ea6bcecdf1b2ddb11f0fd7c5531bbf448d4  WireguardTCP-source.zip
 1077c8f8b2357831e01af6589139262a26fbfef0794fdd641040489810ea1b4b  WireguardTCP-source.tar.gz
+99ac06479743b1cd61b27a8b52d842e4cc95ed26ed3788e73908dd7b47f7d012  WireguardTCP-ubuntu-24.04-amd64-6.8.0-136-generic.tar.gz
+a376daa979b33abb32097de70f564e72bb2b8837703de89e5b770b2ff227f0f5  WireguardTCP-ubuntu-24.04-arm64-6.8.0-136-generic.tar.gz
