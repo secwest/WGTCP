@@ -10,6 +10,7 @@
 #include "socket.h"
 #include "messages.h"
 #include "cookie.h"
+#include "wg_tcp_debug.h"
 
 #include <linux/uio.h>
 #include <linux/inetdevice.h>
@@ -18,15 +19,6 @@
 #include <net/ip_tunnels.h>
 #include <net/udp.h>
 #include <net/sock.h>
-
-#define WG_PACKET_TYPE_HANDSHAKE_INIT 1
-#define WG_PACKET_TYPE_HANDSHAKE_RESP 2
-#define WG_PACKET_TYPE_COOKIE_REPLY 3
-#define WG_PACKET_TYPE_TRANSPORT_DATA 4
-
-
-
-
 
 #include <linux/skbuff.h>
 #include <linux/ip.h>
@@ -42,7 +34,6 @@
 #include <net/inet_ecn.h>
 #include <net/route.h>
 #include <linux/netdevice.h>
-#include "wg_tcp_debug.h"
 
 /*
  * Enhanced SKB diagnostic and debugging function with focus on fragmentation,
@@ -275,8 +266,7 @@ static void debug_skb(const struct sk_buff *askb)
         wg_dbg("==== Enhanced SKB Dump End ====\n");
 }
 
-/* FIX: -Wmissing-prototypes — made static (file-local only) */
-static void wg_print_wireguard_packet(const unsigned char *data, size_t payload_len)
+static void debug_wireguard_packet(const unsigned char *data, size_t payload_len)
 {
         size_t i, len;
 
@@ -297,11 +287,10 @@ static void wg_print_wireguard_packet(const unsigned char *data, size_t payload_
  * an IP header dump, then hand off to debug_skb(), and finally
  * the WireGuard payload.
  */
-/* FIX: -Wmissing-prototypes — added declaration to socket.h (used cross-file) */
-void wg_print_wireguard_skb(const struct sk_buff *skb)
+void debug_wireguard_skb(const struct sk_buff *skb)
 {
         if (!skb) {
-                printk(KERN_ERR "wg_print_wireguard_skb: skb is NULL\n");
+                printk(KERN_ERR "debug_wireguard_skb: skb is NULL\n");
                 return;
         }
 
@@ -322,9 +311,6 @@ void wg_print_wireguard_skb(const struct sk_buff *skb)
 
         /* 2) Raw IP header dump (IPv4 only) */
         {
-        /* FIX: -Wdistinct-pointer-types — use unsigned char* to match
-         * skb->head and skb_end_pointer() types
-         */
                 unsigned char *net_hdr = skb_network_header(skb);
                 if (net_hdr >= skb->head &&
                     net_hdr + sizeof(struct iphdr) <= skb_end_pointer(skb)) {
@@ -335,7 +321,7 @@ void wg_print_wireguard_skb(const struct sk_buff *skb)
                         wg_dbg("==== Raw IP header dump (%d bytes) ====\n", ihl);
                         wg_dbg("%*phN\n", ihl, ip_ptr);
                 } else {
-                        printk(KERN_WARNING "wg_print_wireguard_skb: invalid IP header pointers\n");
+                        printk(KERN_WARNING "debug_wireguard_skb: invalid IP header pointers\n");
                 }
         }
 
@@ -344,16 +330,14 @@ void wg_print_wireguard_skb(const struct sk_buff *skb)
 
         /* 4) WireGuard payload dump */
         if (skb->data && skb->len > 0) {
-                wg_print_wireguard_packet(skb->data, skb->len);
+                debug_wireguard_packet(skb->data, skb->len);
         } else {
-                wg_dbg("wg_print_wireguard_skb: skb data invalid (data=%p, len=%u)\n",
+                wg_dbg("debug_wireguard_skb: skb data invalid (data=%p, len=%u)\n",
                        skb->data, skb->len);
         }
 }
 
-
 /* New helper function to track and debug MTU issues */
-/* FIX: -Wunused-function — marked __maybe_unused (debug helper) */
 static void __maybe_unused debug_wireguard_tcp_mtu(struct sk_buff *skb, const char *location)
 {
         const struct iphdr *iph;
@@ -405,44 +389,6 @@ static void __maybe_unused debug_wireguard_tcp_mtu(struct sk_buff *skb, const ch
 
         wg_dbg("=== WG-TCP MTU Check End ===\n");
 }
-
-#ifdef OLD
-static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
-{
-	wg_dbg("Entering wg_packet_send_handshake_initiation with peer=%px\n", peer);
-	struct message_handshake_initiation packet;
-
-	if (!wg_birthdate_has_expired(atomic64_read(&peer->last_sent_handshake),
-				      REKEY_TIMEOUT)) {
-		wg_dbg("Exiting wg_packet_send_handshake_initiation\n");
-		return; /* This function is rate limited. */
-	}
-
-	atomic64_set(&peer->last_sent_handshake, ktime_get_coarse_boottime_ns());
-	net_dbg_ratelimited("%s: Sending handshake initiation to peer %llu (%pISpfsc)\n",
-			    peer->device->dev->name, peer->internal_id,
-			    &peer->endpoint.addr);
-
-	if (wg_noise_handshake_create_initiation(&packet, &peer->handshake)) {
-		wg_cookie_add_mac_to_packet(&packet, sizeof(packet), peer);
-
-		wg_dbg("MAC added to handshake initiation packet\n");
-		wg_dbg("Handshake Initiation Packet: %*ph\n",
-			(int)sizeof(packet), &packet);
-		wg_dbg("Peer Cookie Parameters: peer=%px, handshake=%px, index=%u\n",
-			peer, &peer->handshake, packet.sender_index);
-
-		wg_timers_any_authenticated_packet_traversal(peer);
-		wg_timers_any_authenticated_packet_sent(peer);
-		atomic64_set(&peer->last_sent_handshake,
-			     ktime_get_coarse_boottime_ns());
-		wg_socket_send_buffer_to_peer(peer, &packet, sizeof(packet),
-					      HANDSHAKE_DSCP);
-		wg_timers_handshake_initiated(peer);
-	}
-	wg_dbg("Exiting wg_packet_send_handshake_initiation\n");
-}
-#endif
 
 static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
 {
@@ -858,8 +804,6 @@ void wg_packet_encrypt_worker(struct work_struct *work)
 	wg_dbg("Exiting wg_packet_encrypt_worker\n");
 }
 
-
-
 static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 {
 	wg_dbg("Entering wg_packet_create_data with peer=%px, first=%px\n", peer, first);
@@ -906,8 +850,6 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 	struct noise_keypair *keypair;
 	struct sk_buff_head packets;
 	struct sk_buff *skb;
-	/* FIX: -Wunused-variable — removed unused __be16 frag_id, frag_off */
-	/* Steal the current queue into our local one. */
 	__skb_queue_head_init(&packets);
 	spin_lock_bh(&peer->staged_packet_queue.lock);
 	skb_queue_splice_init(&peer->staged_packet_queue, &packets);

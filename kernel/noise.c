@@ -9,6 +9,7 @@
 #include "messages.h"
 #include "queueing.h"
 #include "peerlookup.h"
+#include "wg_tcp_debug.h"
 
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
@@ -16,9 +17,6 @@
 #include <linux/scatterlist.h>
 #include <linux/highmem.h>
 #include <crypto/utils.h>
-#include "wg_tcp_debug.h"
-
-
 
 static void base64_encode(char *out, const u8 *in, size_t len)
 {
@@ -46,7 +44,6 @@ static void base64_encode(char *out, const u8 *in, size_t len)
 		out[j - 1 - k] = '=';
 	out[j] = '\0'; /* Null-terminate the output string */
 }
-
 
 /* This implements Noise_IKpsk2:
  *
@@ -762,82 +759,6 @@ static void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 
 	wg_dbg("Exiting tai64n_now with output: %p\n", output);
 }
-
-#ifdef ORIGINAL
-bool
-wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
-                                     struct noise_handshake *handshake)
-{
-	wg_dbg("Entering wg_noise_handshake_create_initiation with dst: %p, handshake: %p\n",
-	       dst, handshake);
-
-	u8 timestamp[NOISE_TIMESTAMP_LEN];
-	u8 key[NOISE_SYMMETRIC_KEY_LEN];
-	bool ret = false;
-
-	/* We need to wait for crng _before_ taking any locks, since
-	 * curve25519_generate_secret uses get_random_bytes_wait.
-	 */
-	wait_for_random_bytes();
-
-	down_read(&handshake->static_identity->lock);
-	down_write(&handshake->lock);
-
-	if (unlikely(!handshake->static_identity->has_identity))
-		goto out;
-
-	dst->header.type = cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION);
-
-	handshake_init(handshake->chaining_key, handshake->hash,
-		       handshake->remote_static);
-
-	/* e */
-	curve25519_generate_secret(handshake->ephemeral_private);
-	if (!curve25519_generate_public(dst->unencrypted_ephemeral,
-					handshake->ephemeral_private))
-		goto out;
-	message_ephemeral(dst->unencrypted_ephemeral,
-			  dst->unencrypted_ephemeral, handshake->chaining_key,
-			  handshake->hash);
-
-	/* es */
-	if (!mix_dh(handshake->chaining_key, key, handshake->ephemeral_private,
-		    handshake->remote_static))
-		goto out;
-
-	/* s */
-	message_encrypt(dst->encrypted_static,
-			handshake->static_identity->static_public,
-			NOISE_PUBLIC_KEY_LEN, key, handshake->hash);
-
-	/* ss */
-	if (!mix_precomputed_dh(handshake->chaining_key, key,
-				handshake->precomputed_static_static))
-		goto out;
-
-	/* {t} */
-	tai64n_now(timestamp);
-	message_encrypt(dst->encrypted_timestamp, timestamp,
-			NOISE_TIMESTAMP_LEN, key, handshake->hash);
-
-	dst->sender_index = wg_index_hashtable_insert(
-		handshake->entry.peer->device->index_hashtable,
-		&handshake->entry);
-
-	handshake->state = HANDSHAKE_CREATED_INITIATION;
-	ret = true;
-
-out:
-	up_write(&handshake->lock);
-	up_read(&handshake->static_identity->lock);
-	memzero_explicit(key, NOISE_SYMMETRIC_KEY_LEN);
-
-	wg_dbg("Exiting wg_noise_handshake_create_initiation with dst: %p, handshake: %p, result: %d\n",
-	       dst, handshake, ret);
-
-	return ret;
-}
-#endif
 
 bool
 wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,

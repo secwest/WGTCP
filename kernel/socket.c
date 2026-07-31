@@ -546,9 +546,6 @@ void decode_icmp_other(const struct icmphdr *icmp_header)
 }
 
 
-/* FIX: -Wmissing-prototypes — added declaration to socket.h (used cross-file);
- * also removed unused udp_header_length and icmp_header_length (-Wunused-variable)
- */
 /*
  * Function to decode and print TCP, UDP, and ICMP parameters
  * Now accepts 'const char *prefix' and conditionally linearizes fragmented packets
@@ -972,7 +969,6 @@ void print_wg_device(struct wg_device *device)
 }
 
 
-/* FIX: -Wmissing-prototypes — made static (file-local diagnostic) */
 /* Diagnostic function to print TCP state and sk_user_data */
 #ifdef WG_TCP_VERBOSE
 static void print_tcp_socket_info(struct socket *sock, const char *label) {
@@ -997,7 +993,6 @@ static void print_tcp_socket_info(struct socket *sock, const char *label) {
 }
 #endif
 
-/* FIX: -Wmissing-prototypes — added declaration to socket.h (used cross-file) */
 /* Function to print compact diagnostic information for all sockets in a peer */
 void print_peer_socket_info(struct wg_peer *peer) {
 #ifndef WG_TCP_VERBOSE
@@ -1046,9 +1041,6 @@ void print_peer_socket_info(struct wg_peer *peer) {
 
 
 
-/* FIX: -Wmissing-prototypes, -Wunused-function — made static,
- * marked __maybe_unused (utility helper)
- */
 /* Function to create and return an endpoint from source and destination sockaddr_in */
 static struct endpoint __maybe_unused create_endpoint(const struct sockaddr_in *source, const struct sockaddr_in *destination) {
     struct endpoint ep;
@@ -1517,7 +1509,6 @@ int wg_socket_endpoint_from_skb(struct endpoint *endpoint, const struct sk_buff 
 {
 	wg_dbg("Entering function wg_socket_endpoint_from_skb\n");
 
-	/* FIX: -Wformat — %*ph field width expects int; limit dump to 128 bytes */
 	wg_dbg("skb data: %*ph\n", min_t(int, skb->len, 128), skb->data);
 
 	memset(endpoint, 0, sizeof(*endpoint));
@@ -1546,7 +1537,6 @@ int wg_socket_endpoint_from_skb(struct endpoint *endpoint, const struct sk_buff 
 	return 0;
 }
 
-/* FIX: -Wmissing-prototypes — added declaration to socket.h (used cross-file) */
 bool endpoint_eq(const struct endpoint *a, const struct endpoint *b)
 {
 	wg_dbg("Entering function endpoint_eq\n");
@@ -2422,9 +2412,6 @@ int wg_add_tcp_socket_to_list(struct wg_device *wg,
 
 
 /* Function to copy source and destination addresses from a TCP socket */
-
-
-/* FIX: -Wmissing-prototypes — made static (file-local only) */
 static int copy_sock_addresses(struct socket *tcp_socket,
 			       struct sockaddr_storage *inbound_source,
 			       struct sockaddr_storage *inbound_dest)
@@ -2454,7 +2441,6 @@ static int copy_sock_addresses(struct socket *tcp_socket,
 	return 0;
 }
 
-/* FIX: -Wmissing-prototypes — made static (file-local only) */
 static struct wg_peer *wg_find_peer_by_endpoints(struct wg_device *wg, const struct endpoint *endpoint)
 {
     struct wg_peer *peer = NULL;
@@ -3384,8 +3370,6 @@ fail:
 	return ret;
 }
 
-
-/* FIX: -Wunused-function — marked __maybe_unused (cleanup helper) */
 /* Function to release and clean up an old peer TCP connection - clean the active connection */
 static void __maybe_unused wg_release_peer_tcp_connection(struct wg_peer *peer)
 {
@@ -3858,7 +3842,6 @@ int wg_tcp_queuepkt(struct wg_peer *peer, const void *data,
 	wg_dbg("Entering function wg_tcp_queuepkt peer=%px\n", peer);
 
 	struct endpoint current_endpoint;
-	/* FIX: -Wunused-variable — removed unused socket_iter, found, inbound */
 	/* BUG FIX: current_endpoint was never initialized — reads garbage in log_wireguard_endpoint */
 	memset(&current_endpoint, 0, sizeof(current_endpoint));
 
@@ -4018,8 +4001,6 @@ static void wg_tcp_arm_write_space(struct socket *socket)
 	 */
 	smp_mb__after_atomic();
 }
-
-void wg_print_wireguard_skb(const struct sk_buff *);
 
 void wg_tcp_write_worker(struct work_struct *work)
 {
@@ -4256,10 +4237,6 @@ bool wg_check_potential_header_validity(struct wg_tcp_encap_header *hdr, size_t 
 	return total_len >= minimum_len && total_len <= WG_MAX_PACKET_SIZE;
 }
 
-/* FIX: -Wmissing-prototypes — made static (file-local only);
- * also removed unused 'int ret' variable (-Wunused-variable) and
- * changed tail=%px/end=%px to %u for sk_buff_data_t (-Wformat)
- */
 static int wg_tcp_build_fake_headers(struct sk_buff *skb, struct wg_peer *peer,
 				     struct socket *socket)
 {
@@ -4604,9 +4581,6 @@ void wg_tcp_read_worker(struct work_struct *work)
 
 			/* Enhanced header diagnostics */
 			wg_dbg("wg_tcp_read_worker: Processing TCP Encap Header\n");
-			/* FIX: -Wformat — field width for %*phN expects int;
-			 * WG_TCP_ENCAP_HDR_LEN is sizeof() (size_t)
-			 */
 			wg_dbg("wg_tcp_read_worker: Raw header bytes: %*phN\n",
 				(int)WG_TCP_ENCAP_HDR_LEN, &header);
 			wg_dbg("wg_tcp_read_worker: Header fields - length=0x%08x (%u),"
@@ -4668,7 +4642,6 @@ void wg_tcp_read_worker(struct work_struct *work)
 				has_frag_header = false;
 				packet_header_length = WG_TCP_ENCAP_HDR_LEN;
 			}
-			/* FIX: -Wformat — packet_header_length is size_t, use %zu */
 			wg_dbg("wg_tcp_read_worker: Set expected_len=%zu "
 				"(includes %zu byte header)\n", peer->expected_len,
 				packet_header_length);

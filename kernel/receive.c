@@ -35,10 +35,6 @@ static void update_rx_stats(struct wg_peer *peer, size_t len)
 	wg_dbg("Exiting update_rx_stats\n");
 }
 
-/* FIX: removed unused forward declarations for wg_print_wireguard_skb()
- * and wg_print_wireguard_packet() — functions are static in send.c
- */
-
 #define SKB_TYPE_LE32(skb) (((struct message_header *)(skb)->data)->type)
 
 static size_t validate_header_len(struct sk_buff *skb)
@@ -57,7 +53,6 @@ static size_t validate_header_len(struct sk_buff *skb)
 
 	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_DATA)) {
 		wg_dbg("SKB_TYPE_LE32(skb) matches MESSAGE_DATA, checking length.\n");
-		/* FIX: -Wformat — MESSAGE_MINIMUM_LENGTH is enum (int), not size_t */
 		wg_dbg("MESSAGE_MINIMUM_LENGTH=%d, sizeof(struct message_data)=%zu\n",
 		       MESSAGE_MINIMUM_LENGTH, sizeof(struct message_data));
 		if (skb->len >= MESSAGE_MINIMUM_LENGTH) {
@@ -242,7 +237,6 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	wg_dbg("After __skb_pull: len=%d, data=%px, tail=%u\n", skb->len,
 	       skb->data, skb->tail);
 
-	/* FIX: -Wunused-label — removed unused 'out:' label (no goto out) */
 	wg_dbg("Exiting prepare_skb_header successfully: "
 	       "final len=%d, data=%px, head=%px, tail=%u, end=%u, headroom=%d, "
 	       "tailroom=%d\n", skb->len, skb->data, skb->head, skb->tail,

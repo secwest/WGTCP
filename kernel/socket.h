@@ -131,7 +131,6 @@ void wg_tcp_read_worker(struct work_struct *work);
 void wg_tcp_cleanup_worker(struct work_struct *work);
 void wg_tcp_retry_worker(struct work_struct *work);
 
-/* FIX: -Wmissing-prototypes — cross-file function declarations */
 bool endpoint_eq(const struct endpoint *a, const struct endpoint *b);
 void print_peer_socket_info(struct wg_peer *peer);
 void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);

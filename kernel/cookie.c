@@ -9,13 +9,13 @@
 #include "messages.h"
 #include "ratelimiter.h"
 #include "timers.h"
+#include "wg_tcp_debug.h"
 
 #include <crypto/blake2s.h>
 #include <crypto/chacha20poly1305.h>
 #include <crypto/utils.h>
 
 #include <net/ipv6.h>
-#include "wg_tcp_debug.h"
 
 void wg_cookie_checker_init(struct cookie_checker *checker,
 			    struct wg_device *wg)
@@ -82,18 +82,6 @@ void wg_cookie_init(struct cookie *cookie)
 	init_rwsem(&cookie->lock);
 	wg_dbg("Exiting: wg_cookie_init\n");
 }
-
-#ifdef ORIGINAL
-static void compute_mac1(u8 mac1[COOKIE_LEN], const void *message, size_t len,
-			 const u8 key[NOISE_SYMMETRIC_KEY_LEN])
-{
-	wg_dbg("Entering: compute_mac1 with mac1=%p, message=%p, len=%zu, key=%p\n", mac1, message, len, key);
-	len = len - sizeof(struct message_macs) +
-	      offsetof(struct message_macs, mac1);
-	blake2s(mac1, message, key, COOKIE_LEN, len, NOISE_SYMMETRIC_KEY_LEN);
-	wg_dbg("Exiting: compute_mac1\n");
-}
-#endif
 
 static void compute_mac1(u8 mac1[COOKIE_LEN], const void *message, size_t len,
                          const u8 key[NOISE_SYMMETRIC_KEY_LEN])
