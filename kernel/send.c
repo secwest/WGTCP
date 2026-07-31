@@ -753,8 +753,6 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 }
 #endif /* ORIGINAL */
 
-void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);
-
 static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 {
     unsigned int padding_len, plaintext_len, trailer_len;

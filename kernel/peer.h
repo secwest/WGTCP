@@ -132,23 +132,11 @@ static inline struct wg_peer *wg_peer_get(struct wg_peer *peer)
 	return peer;
 }
 
-struct wg_tcp_transfer_work {
-    struct work_struct work;
-    struct sk_buff *skb;
-    struct wg_peer *peer;
-};
-
 void wg_peer_put(struct wg_peer *peer);
 void wg_peer_remove(struct wg_peer *peer);
 void wg_peer_remove_all(struct wg_device *wg);
 
 int wg_peer_init(void);
 void wg_peer_uninit(void);
-
-void wg_peer_tcp_receive(struct work_struct *work);
-void wg_tcp_inbound_remove_worker(struct work_struct *work);
-void wg_tcp_outbound_remove_worker(struct work_struct *work);
-
-void wg_tcp_retry_worker(struct work_struct *work);
 
 #endif /* _WG_PEER_H */

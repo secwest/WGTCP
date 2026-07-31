@@ -154,21 +154,6 @@ static unsigned int wg_tcp_test_take_write_delay_ms(void)
 }
 #endif
 
-
-
-struct wg_tcp_socket_list_entry {
-    struct socket *tcp_socket; /* Socket associated with the connection */
-    struct sockaddr_storage src_addr; /* Source address for the connection */
-    struct wg_peer *temp_peer; /* temporary peer for dataready */
-    struct list_head tcp_connection_ll; /* List pointer for the linked list */
-    ktime_t created_at; /* Absolute pre-authentication deadline base */
-    ktime_t timestamp; /* Most recent pre-authentication activity */
-	u64 connection_id; /* Stable carrier identity across async auth */
-	bool authenticated; /* Exact stream carried valid Noise traffic */
-	bool admission_counted; /* Owns one pre-authentication reservation */
-    bool initializing; /* Listener still owns callback handoff */
-};
-
 #define WG_TCP_MAX_PENDING_CONNECTIONS 128
 #define WG_TCP_MAX_TRACKED_CONNECTIONS 1024
 #define WG_TCP_AUTH_IDLE_TIMEOUT_MS 5000
@@ -182,6 +167,14 @@ struct wg_socket_data {
 	struct wg_device *device;
 	struct wg_peer *peer;
 	bool inbound;
+};
+
+struct wg_tcp_socket_list_entry {
+	struct socket *tcp_socket; /* Socket associated with the connection */
+	struct sockaddr_storage src_addr; /* Source address for the connection */
+	struct wg_peer *temp_peer; /* temporary peer for dataready */
+	struct list_head tcp_connection_ll; /* List pointer for the linked list */
+	ktime_t timestamp; /* Timestamp when the connection was added */
 };
 
 static void wg_finish_tcp_connection_init(struct wg_device *wg,
