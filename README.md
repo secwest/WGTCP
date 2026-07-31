@@ -365,14 +365,45 @@ tool output, stock-tool control, bidirectional UDP traffic, absence of a TCP
 listener in UDP mode, and a TCP tunnel whose underlay exists only inside the
 two device creation namespaces.
 
-For the full stock/fork cross-host matrix, use the repeatable two-VM Ubuntu
-24.04 Hyper-V lab. The complete creation and recovery record is in
-[`tests/hyperv/HYPERV_SETUP.md`](tests/hyperv/HYPERV_SETUP.md), with the shorter
-operating guide in [`tests/hyperv/README.md`](tests/hyperv/README.md). The lab
-provisions isolated outer paths, builds production, DEBUG, and isolated
-fault-injection modules, and records timestamped JSON, Markdown, and per-command
-logs. The latest committed
-summary is in [`tests/hyperv/RESULTS.md`](tests/hyperv/RESULTS.md); run
+For the full stock/fork cross-host matrix, use either repeatable two-VM Ubuntu
+24.04 lab. Both paths provision isolated outer carrier networks, build
+production, DEBUG, and isolated fault-injection modules on both guests, and
+record timestamped JSON, Markdown, and per-command logs.
+
+**Linux (libvirt/QEMU):** On a Linux KVM host, install the dependencies and
+verify a Canonical Ubuntu cloud image as described in
+[`tests/linux/README.md`](tests/linux/README.md), then run:
+
+```bash
+sudo ./tests/linux/Provision-LinuxRegression.sh \
+  --base-image "$PWD/noble-server-cloudimg-amd64.img" \
+  --ssh-public-key "$HOME/.ssh/id_ed25519.pub"
+./tests/linux/Run-LinuxRegression.sh
+```
+
+The Linux harness creates `wgtcp-a` and `wgtcp-b` on the existing libvirt
+management network plus private `wgtcp-path0` and `wgtcp-path1` networks. It
+uses verified SSH host keys for management, transfers the exact Git-visible
+snapshot, then delegates to the same complete case list and guest helpers as
+the Hyper-V runner.
+
+**Windows (Hyper-V):** On Windows 10/11 Pro, Enterprise, or Education, enable
+Hyper-V and install the verified Multipass package as described in
+[`tests/hyperv/HYPERV_SETUP.md`](tests/hyperv/HYPERV_SETUP.md). From an elevated
+PowerShell 7 session:
+
+```powershell
+.\tests\hyperv\Enable-HyperV.ps1 `
+  -MultipassMsi C:\Installers\multipass-installer.msi `
+  -StatePath .\tests\hyperv\results\host-enable.json
+# Reboot if the script reports RestartNeeded, then:
+.\tests\hyperv\Provision-HyperV.ps1
+.\tests\hyperv\Run-HyperVRegression.ps1
+```
+
+The shorter Windows operating guide is
+[`tests/hyperv/README.md`](tests/hyperv/README.md). The latest committed
+Hyper-V campaign summary is in [`tests/hyperv/RESULTS.md`](tests/hyperv/RESULTS.md); run
 `wg20260714T010310Z` passed all 36 cases with no failures or skips in 558.520
 seconds across 541 logged commands. Its tested snapshot used HEAD
 `83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
@@ -433,6 +464,7 @@ counter deltas, resets every control, and verifies post-pressure traffic.
 - [Design decision log](DESIGNLOG.md)
 - [Change log](CHANGELOG.md)
 - [TCP transport design, compatibility, roaming, and behavior](docs/TCP_TRANSPORT_DESIGN.md)
+- [Linux libvirt regression lab](tests/linux/README.md)
 - [Hyper-V host and VM creation guide](tests/hyperv/HYPERV_SETUP.md)
 - [Hyper-V regression results](tests/hyperv/RESULTS.md)
 - [Performance campaign report](perf-test/REPORT.md)
