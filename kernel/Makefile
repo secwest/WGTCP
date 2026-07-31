@@ -18,6 +18,7 @@ wireguard-y += queueing.o
 wireguard-y += send.o
 wireguard-y += receive.o
 wireguard-y += socket.o
+wireguard-y += wg_tcp.o
 wireguard-y += peerlookup.o
 wireguard-y += allowedips.o
 wireguard-y += ratelimiter.o

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
+ * TCP Support Copyright (c) 2024-2026 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
  */
 
 #include "allowedips.h"
@@ -12,6 +12,7 @@
 #include "messages.h"
 #include "cookie.h"
 #include "socket.h"
+#include "wg_tcp.h"
 #include "wg_tcp_debug.h"
 
 #include <linux/in.h>

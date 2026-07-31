@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (c) 2024-2026 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
+ */
 /*
  * WireGuard TCP Debug Macros
  *
@@ -22,6 +25,8 @@
 #ifndef _WG_TCP_DEBUG_H
 #define _WG_TCP_DEBUG_H
 
+#include <linux/types.h>
+
 #ifdef WG_TCP_VERBOSE
 #define wg_dbg(fmt, ...)	printk(KERN_INFO fmt, ##__VA_ARGS__)
 #else
@@ -35,5 +40,23 @@
 #define wg_diag(fmt, ...)	do {} while (0)
 #define WG_TCP_DIAG_ENABLED	0
 #endif
+
+struct sk_buff;
+
+void debug_skb(const struct sk_buff *askb);
+void debug_wireguard_packet(const unsigned char *data,
+                                   size_t payload_len);
+void debug_wireguard_skb(const struct sk_buff *skb);
+void debug_wireguard_tcp_mtu(struct sk_buff *skb, const char *location);
+
+void decode_icmp_echo(const struct icmphdr *icmp_header);
+void decode_icmp_dest_unreachable(const struct icmphdr *icmp_header);
+void decode_icmp_time_exceeded(const struct icmphdr *icmp_header);
+void decode_icmp_other(const struct icmphdr *icmp_header);
+void decode_and_print_packet(const struct sk_buff *skb, const char *prefix);
+
+void print_wg_peer(struct wg_peer *peer);
+void print_crypt_queue(const char *label, struct crypt_queue *queue);
+void print_wg_device(struct wg_device *device);
 
 #endif /* _WG_TCP_DEBUG_H */

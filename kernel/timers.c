@@ -8,6 +8,7 @@
 #include "peer.h"
 #include "queueing.h"
 #include "socket.h"
+#include "wg_tcp.h"
 #include "wg_tcp_debug.h"
 
 /*
