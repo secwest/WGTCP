@@ -49,6 +49,28 @@ class HyperVProvisionContractTests(unittest.TestCase):
         self.assertIn("ExpectedPath0SwitchId", configure)
         self.assertIn("ExpectedPath1SwitchId", configure)
 
+    def test_guest_stop_is_bounded_without_misusing_multipass_time(self):
+        stop = function_body("Stop-MultipassInstance")
+        configure = function_body("Ensure-GuestVmConfiguration")
+
+        self.assertIn('-ArgumentList @("stop", $Name)', stop)
+        self.assertIn("WaitForExit($TimeoutSeconds * 1000)", stop)
+        self.assertIn("Stop-Process -Id $process.Id", stop)
+        self.assertIn("only client PID", stop)
+        self.assertIn("Stop-MultipassInstance -Name $Name", configure)
+        self.assertNotIn('@("stop", "--timeout"', PROVISION)
+
+    def test_guest_build_retains_guest_and_host_transcripts(self):
+        build = function_body("Invoke-MultipassGuestBuild")
+
+        self.assertIn('"/tmp/wgtcp-build.log"', build)
+        self.assertIn('("guest-build-{0}.log" -f $Name)', build)
+        self.assertIn("set -o pipefail", build)
+        self.assertIn("2>&1 | tee $guestLogPath", build)
+        self.assertIn("[System.IO.File]::WriteAllLines", build)
+        self.assertIn("[System.IO.File]::WriteAllText", build)
+        self.assertIn("Invoke-MultipassGuestBuild -Name $guest.Name", PROVISION)
+
     def test_vm_worker_recovery_rechecks_cim_and_vm_identity(self):
         recovery = SETUP.split("### Exceptional stuck VM worker recovery", 1)[1]
         recovery = recovery.split("### Management SSH wait", 1)[0]

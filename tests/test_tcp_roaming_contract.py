@@ -14,7 +14,8 @@ def source(relative_path: str) -> str:
 
 
 def section(text: str, start: str, end: str) -> str:
-    return text[text.index(start) : text.index(end)]
+    start_index = text.index(start)
+    return text[start_index : text.index(end, start_index + len(start))]
 
 
 class TcpRoamingContract(unittest.TestCase):
@@ -54,7 +55,7 @@ class TcpRoamingContract(unittest.TestCase):
         cls.connect = section(
             cls.socket,
             "int wg_tcp_connect(struct wg_peer *peer)",
-            "static void __maybe_unused wg_release_peer_tcp_connection(",
+            "void wg_extract_endpoint_from_sock(",
         )
 
     def test_handshake_receive_does_not_own_provisional_entries(self) -> None:
@@ -114,7 +115,7 @@ class TcpRoamingContract(unittest.TestCase):
         mark = section(
             self.socket,
             "static void wg_tcp_mark_connection_authenticated(",
-            "void wg_free_peer_socket_data(",
+            "void wg_tcp_set_device_mark(",
         )
 
         self.assertIn("atomic64_inc_return(", add)
@@ -197,6 +198,53 @@ class TcpRoamingContract(unittest.TestCase):
     def test_authenticated_update_does_not_promote_raw_skb_socket(self) -> None:
         self.assertNotIn("peer->peer_socket = skb->sk->sk_socket", self.handshake)
         self.assertNotIn("peer->inbound_socket = skb->sk->sk_socket", self.handshake)
+
+    def test_inbound_removal_claim_rejects_a_replacement_socket(self) -> None:
+        state_change = section(
+            self.socket,
+            "void wg_tcp_state_change(struct sock *sk)",
+            "void log_wireguard_endpoint(",
+        )
+        inbound_worker = section(
+            self.socket,
+            "void wg_tcp_inbound_remove_worker(struct work_struct *work)",
+            "void wg_destruct_tcp_connection_list(",
+        )
+
+        self.assertIn(
+            "struct socket *tcp_inbound_remove_socket;", self.peer_header
+        )
+        claim = state_change.index("peer->tcp_inbound_remove_scheduled = true;")
+        capture = state_change.index(
+            "peer->tcp_inbound_remove_socket =", claim
+        )
+        queue = state_change.index("&peer->tcp_inbound_remove_work, 0);", capture)
+        self.assertLess(claim, capture)
+        self.assertLess(capture, queue)
+        recheck = state_change.index(
+            "peer->tcp_inbound_remove_socket ==", capture
+        )
+        replacement = state_change.index("peer->inbound_socket", recheck)
+        self.assertLess(capture, recheck)
+        self.assertLess(recheck, replacement)
+        self.assertLess(replacement, queue)
+
+        snapshot = inbound_worker.index(
+            "socket = peer->tcp_inbound_remove_socket;"
+        )
+        exact = inbound_worker.index(
+            "peer->inbound_socket == socket", snapshot
+        )
+        detach = inbound_worker.index(
+            "wg_reset_exact_tcp_socket_callbacks(peer, socket);", exact
+        )
+        guarded_detach = inbound_worker.rindex(
+            "if (clean_claim && socket) {", exact, detach
+        )
+        self.assertLess(snapshot, exact)
+        self.assertLess(exact, guarded_detach)
+        self.assertLess(guarded_detach, detach)
+        self.assertNotIn("socket = peer->inbound_socket;", inbound_worker)
 
     def test_simultaneous_handshake_decision_and_commit_share_lock(self) -> None:
         consume = section(

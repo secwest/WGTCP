@@ -66,6 +66,7 @@ server_listen_port=52220
 forwarded_port=52241
 initial_snat_port=41001
 rebound_snat_port=41002
+initial_acquisition_timeout_seconds=90
 
 namespace_exists() {
 	ip netns list | awk -v target="$1" '$1 == target { found = 1 } END { exit found ? 0 : 1 }'
@@ -159,7 +160,13 @@ record_link_names() {
 
 wait_ping() {
 	local namespace=$1 iface=$2 destination=$3
-	local deadline=$(( SECONDS + 60 ))
+	local deadline=${4:-0} timeout_seconds=60
+	if (( deadline > 0 )); then
+		timeout_seconds=$(( deadline - SECONDS ))
+		(( timeout_seconds > 0 )) || timeout_seconds=0
+	else
+		deadline=$(( SECONDS + timeout_seconds ))
+	fi
 	while (( SECONDS < deadline )); do
 		if run "$namespace" ping -4 -I "$iface" -c 1 -W 2 \
 			"$destination" >/dev/null 2>&1; then
@@ -167,7 +174,7 @@ wait_ping() {
 		fi
 		sleep 1
 	done
-	echo "TCP tunnel did not reach $destination within 60 seconds" >&2
+	echo "TCP tunnel did not reach $destination within ${timeout_seconds} seconds" >&2
 	return 1
 }
 
@@ -189,20 +196,32 @@ tcp_tuple_present() {
 
 wait_tcp_tuple() {
 	local namespace=$1 local_endpoint=$2 remote_endpoint=$3
-	local deadline=$(( SECONDS + 60 ))
+	local deadline=${4:-0} timeout_seconds=60
+	if (( deadline > 0 )); then
+		timeout_seconds=$(( deadline - SECONDS ))
+		(( timeout_seconds > 0 )) || timeout_seconds=0
+	else
+		deadline=$(( SECONDS + timeout_seconds ))
+	fi
 	while (( SECONDS < deadline )); do
 		if tcp_tuple_present "$namespace" "$local_endpoint" "$remote_endpoint"; then
 			return 0
 		fi
 		sleep 1
 	done
-	echo "TCP tuple did not become established: $local_endpoint <-> $remote_endpoint" >&2
+	echo "TCP tuple did not become established within ${timeout_seconds} seconds: $local_endpoint <-> $remote_endpoint" >&2
 	return 1
 }
 
 wait_tcp_remote() {
 	local namespace=$1 remote_endpoint=$2
-	local deadline=$(( SECONDS + 60 ))
+	local deadline=${3:-0} timeout_seconds=60
+	if (( deadline > 0 )); then
+		timeout_seconds=$(( deadline - SECONDS ))
+		(( timeout_seconds > 0 )) || timeout_seconds=0
+	else
+		deadline=$(( SECONDS + timeout_seconds ))
+	fi
 	while (( SECONDS < deadline )); do
 		if run "$namespace" ss -H -tn4 state established | \
 			awk -v remote="$remote_endpoint" '
@@ -216,7 +235,7 @@ wait_tcp_remote() {
 		fi
 		sleep 1
 	done
-	echo "no established TCP stream to $remote_endpoint within 60 seconds" >&2
+	echo "no established TCP stream to $remote_endpoint within ${timeout_seconds} seconds" >&2
 	return 1
 }
 
@@ -328,10 +347,12 @@ wait_forward_syn_advance() {
 }
 
 assert_nat_state() {
-	local translated_port=$1 expected_endpoint conntrack_state dnat_packets snat_packets
+	local translated_port=$1 acquisition_deadline=${2:-0}
+	local expected_endpoint conntrack_state dnat_packets snat_packets
 	wait_tcp_tuple "$ns_server" "$server_address:$server_listen_port" \
-		"$router_public_address:$translated_port"
-	wait_tcp_remote "$ns_server" "$router_public_address:$forwarded_port"
+		"$router_public_address:$translated_port" "$acquisition_deadline"
+	wait_tcp_remote "$ns_server" "$router_public_address:$forwarded_port" \
+		"$acquisition_deadline"
 	expected_endpoint="$router_public_address:$forwarded_port"
 	[[ $(peer_endpoint "$ns_server" wgb "$client_pub") == "$expected_endpoint" ]] || {
 		echo "observed NAT source port replaced configured dial target $expected_endpoint" >&2
@@ -425,6 +446,17 @@ run "$ns_client" ip link set wga up
 run "$ns_server" ip link set wgb up
 run "$ns_client" ip route add "$server_tunnel_address/32" dev wga
 run "$ns_server" ip route add "$client_tunnel_address/32" dev wgb
+initial_snat_packets_before=$(nat_rule_packets postrouting \
+	"$server_listen_port" "snat")
+initial_dnat_packets_before=$(nat_rule_packets prerouting \
+	"$forwarded_port" "dnat")
+[[ $initial_snat_packets_before =~ ^[0-9]+$ && \
+	$initial_dnat_packets_before =~ ^[0-9]+$ ]] || {
+	echo "could not read initial NAT rule-packet baselines" >&2
+	exit 1
+}
+initial_acquisition_started=$SECONDS
+initial_acquisition_deadline=$(( SECONDS + initial_acquisition_timeout_seconds ))
 run "$ns_client" "$WG_FORK" set wga peer "$server_pub" \
 	allowed-ips "$server_tunnel_address/32" \
 	endpoint "$server_address:$server_listen_port" persistent-keepalive 2
@@ -432,9 +464,23 @@ run "$ns_server" "$WG_FORK" set wgb peer "$client_pub" \
 	allowed-ips "$client_tunnel_address/32" \
 	endpoint "$router_public_address:$forwarded_port" persistent-keepalive 2
 
-wait_ping "$ns_client" wga "$server_tunnel_address"
-wait_ping "$ns_server" wgb "$client_tunnel_address"
-assert_nat_state "$initial_snat_port"
+wait_ping "$ns_client" wga "$server_tunnel_address" \
+	"$initial_acquisition_deadline"
+wait_ping "$ns_server" wgb "$client_tunnel_address" \
+	"$initial_acquisition_deadline"
+assert_nat_state "$initial_snat_port" "$initial_acquisition_deadline"
+initial_acquisition_seconds=$(( SECONDS - initial_acquisition_started ))
+initial_snat_packets_after=$(nat_rule_packets postrouting \
+	"$server_listen_port" "snat")
+initial_dnat_packets_after=$(nat_rule_packets prerouting \
+	"$forwarded_port" "dnat")
+[[ $initial_snat_packets_after =~ ^[0-9]+$ && \
+	$initial_dnat_packets_after =~ ^[0-9]+$ && \
+	$initial_snat_packets_after -gt $initial_snat_packets_before && \
+	$initial_dnat_packets_after -gt $initial_dnat_packets_before ]] || {
+	echo "initial TCP carrier acquisition did not advance both NAT rules" >&2
+	exit 1
+}
 
 client_tx_before=$(sent_bytes "$ns_client" wga "$server_pub")
 server_tx_before=$(sent_bytes "$ns_server" wgb "$client_pub")
@@ -491,6 +537,13 @@ fi
 
 printf 'mode=dual-reachable\n'
 printf 'snat=pass\ndnat=pass\nbidirectional_traffic=pass\n'
+printf 'initial_acquisition_timeout_seconds=%s\n' \
+	"$initial_acquisition_timeout_seconds"
+printf 'initial_acquisition_seconds=%s\n' "$initial_acquisition_seconds"
+printf 'initial_snat_rule_packets=%s->%s\n' \
+	"$initial_snat_packets_before" "$initial_snat_packets_after"
+printf 'initial_dnat_rule_packets=%s->%s\n' \
+	"$initial_dnat_packets_before" "$initial_dnat_packets_after"
 printf 'persistent_keepalive=pass\nkeepalive_client_tx=%s->%s\n' \
 	"$client_tx_before" "$client_tx_after"
 printf 'keepalive_server_tx=%s->%s\n' "$server_tx_before" "$server_tx_after"

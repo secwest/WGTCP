@@ -57,6 +57,63 @@ function Invoke-Multipass {
     return Invoke-Checked -FilePath $script:Multipass -Arguments $Arguments
 }
 
+function Invoke-MultipassGuestBuild {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $hostLogPath = Join-Path $ResultsDirectory ("guest-build-{0}.log" -f $Name)
+    $guestLogPath = "/tmp/wgtcp-build.log"
+    $buildCommand = "set -o pipefail; bash /home/ubuntu/WireguardTCP/tests/hyperv/guest-build.sh 2>&1 | tee $guestLogPath"
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    Remove-Item -LiteralPath $hostLogPath -Force -ErrorAction SilentlyContinue
+    try {
+        $output = @(Invoke-Multipass -Arguments @(
+            "exec", $Name, "--", "sudo", "bash", "-c", $buildCommand
+        ))
+        [System.IO.File]::WriteAllLines(
+            $hostLogPath, [string[]]$output, $encoding
+        )
+    } catch {
+        [System.IO.File]::WriteAllText(
+            $hostLogPath,
+            $_.Exception.Message + [Environment]::NewLine,
+            $encoding
+        )
+        throw
+    }
+}
+
+function Stop-MultipassInstance {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 120
+    )
+    $stdoutPath = Join-Path $ResultsDirectory ("stop-{0}.stdout.log" -f $Name)
+    $stderrPath = Join-Path $ResultsDirectory ("stop-{0}.stderr.log" -f $Name)
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    # Multipass stop uses --time for a delayed shutdown, not a command timeout.
+    # Bound the exact client process here so a daemon/session failure cannot
+    # leave provisioning hung or require a broad Multipass process kill.
+    $process = Start-Process -FilePath $script:Multipass `
+        -ArgumentList @("stop", $Name) -NoNewWindow -PassThru `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    try {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
+            throw "Multipass stop for '$Name' timed out after $TimeoutSeconds seconds; only client PID $($process.Id) was terminated."
+        }
+        if ($process.ExitCode -ne 0) {
+            $failure = @(
+                Get-Content -LiteralPath $stdoutPath, $stderrPath `
+                    -ErrorAction SilentlyContinue
+            ) -join [Environment]::NewLine
+            throw "Multipass stop for '$Name' failed with exit $($process.ExitCode):`n$failure"
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-MultipassExecProbe {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -414,7 +471,7 @@ function Ensure-GuestVmConfiguration {
 
     $wasRunning = $vm.State -eq "Running"
     if ($wasRunning) {
-        Invoke-Multipass -Arguments @("stop", "--timeout", "120", $Name) | Out-Null
+        Stop-MultipassInstance -Name $Name
     }
     try {
         $identity = Assert-HyperVVmIdentity -Name $Name -ExpectedHyperVVmId $ExpectedHyperVVmId
@@ -869,7 +926,7 @@ foreach ($guest in $guests) {
     Invoke-Multipass -Arguments @("exec", $guest.Name, "--", "sudo", "bash", "/home/ubuntu/WireguardTCP/tests/hyperv/guest-bootstrap.sh") | Out-Null
     if (-not $SkipGuestBuild) {
         Write-Host "[build] Compiling tools and modules on $($guest.Name)"
-        Invoke-Multipass -Arguments @("exec", $guest.Name, "--", "sudo", "bash", "/home/ubuntu/WireguardTCP/tests/hyperv/guest-build.sh") | Out-Null
+        Invoke-MultipassGuestBuild -Name $guest.Name
     }
 }
 

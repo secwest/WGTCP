@@ -165,8 +165,16 @@ class TcpListenerContract(unittest.TestCase):
         queue = reconnect.index("mod_delayed_work(")
         self.assertLess(queue, reconnect.index("spin_unlock_bh(&peer->tcp_lock);", queue))
         self.assertIn("peer->tcp_reconnect_requested = false;", remove_worker)
+        reset = "ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);"
+        release = "ret = wg_release_peer_socket_locked(peer, socket);"
+        self.assertIn(reset, remove_worker)
+        self.assertIn(release, remove_worker)
+        self.assertLess(remove_worker.index(reset), remove_worker.index(release))
+        reset_result = remove_worker.index("if (!ret)", remove_worker.index(reset))
+        self.assertLess(remove_worker.index(reset), reset_result)
+        self.assertLess(reset_result, remove_worker.index(release))
         self.assertLess(
-            remove_worker.index("wg_clean_peer_socket(peer, true, false, false);"),
+            remove_worker.index(release),
             remove_worker.index("ret = wg_tcp_connect(peer);"),
         )
         self.assertIn(
@@ -201,7 +209,7 @@ class TcpListenerContract(unittest.TestCase):
         refresh = section(
             self.socket,
             "void wg_tcp_set_device_mark(",
-            "void wg_free_peer_socket_data(",
+            "static int wg_release_peer_socket_locked(",
         )
         fwmark = section(
             self.netlink,
@@ -335,14 +343,34 @@ class TcpListenerContract(unittest.TestCase):
         )
 
         dead = "WRITE_ONCE(peer->is_dead, true);"
-        cancel = "cancel_work_sync(&peer->tcp_read_work);"
-        reset = "wg_reset_tcp_socket_callbacks(peer, true);"
-        release = "sock_release(socket);"
-        for operation in (dead, cancel, reset, release):
+        delayed_cancellations = (
+            "cancel_delayed_work_sync(&peer->tcp_retry_work);",
+            "cancel_delayed_work_sync(&peer->tcp_outbound_remove_work);",
+            "cancel_delayed_work_sync(&peer->tcp_inbound_remove_work);",
+        )
+        owner = "mutex_lock(&peer->tcp_socket_lock);"
+        cancel = "wg_tcp_cancel_stream_workers(peer);"
+        reset = "ret = wg_reset_exact_tcp_socket_callbacks(peer, socket);"
+        release = "ret = wg_release_peer_socket_locked(peer, socket);"
+        owner_unlock = "mutex_unlock(&peer->tcp_socket_lock);"
+        for operation in (
+            dead,
+            owner,
+            cancel,
+            reset,
+            release,
+            owner_unlock,
+        ):
             self.assertIn(operation, destroy)
-        self.assertLess(destroy.index(dead), destroy.index(cancel))
+        for delayed_cancel in delayed_cancellations:
+            self.assertIn(delayed_cancel, destroy)
+            self.assertLess(destroy.index(dead), destroy.index(delayed_cancel))
+            self.assertLess(destroy.index(delayed_cancel), destroy.index(owner))
+        self.assertLess(destroy.index(owner), destroy.index(cancel))
         self.assertLess(destroy.index(cancel), destroy.index(reset))
+        self.assertIn("if (!ret && socket)", destroy)
         self.assertLess(destroy.index(reset), destroy.index(release))
+        self.assertLess(destroy.index(release), destroy.index(owner_unlock))
 
     def test_pending_connection_cleanup_has_one_owner(self) -> None:
         claim = section(
@@ -402,8 +430,31 @@ class TcpListenerContract(unittest.TestCase):
         )
         self.assertIn("cancel_delayed_work_sync(&peer->tcp_retry_work);", peer_stop)
         self.assertLess(
+            peer_stop.index("cancel_delayed_work_sync(&peer->tcp_retry_work);"),
+            peer_stop.index("mutex_lock(&peer->tcp_socket_lock);"),
+        )
+        self.assertLess(
             peer_stop.index("cancel_work_sync(&peer->tcp_read_work);"),
-            peer_stop.index("wg_reset_tcp_socket_callbacks(peer, false);"),
+            peer_stop.index(
+                "ret = wg_reset_exact_tcp_socket_callbacks(peer, outbound);"
+            ),
+        )
+        self.assertLess(
+            peer_stop.index(
+                "ret = wg_reset_exact_tcp_socket_callbacks(peer, outbound);"
+            ),
+            peer_stop.index(
+                "ret = wg_release_peer_socket_locked(peer, outbound);"
+            ),
+        )
+        outbound_reset = peer_stop.index(
+            "ret = wg_reset_exact_tcp_socket_callbacks(peer, outbound);"
+        )
+        outbound_release = peer_stop.index(
+            "ret = wg_release_peer_socket_locked(peer, outbound);"
+        )
+        self.assertLess(
+            peer_stop.index("if (!ret)", outbound_reset), outbound_release
         )
         self.assertIn("wg_tcp_peer_stop", self.header)
 

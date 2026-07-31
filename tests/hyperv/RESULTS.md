@@ -1,5 +1,49 @@
 # Hyper-V Regression Results
 
+## Current follow-up status (2026-07-15)
+
+The integrated callback-owner and roaming-startup tree passes **205 local
+source contracts** and all three guest shell harnesses pass syntax validation. Both
+Ubuntu guests compiled the production tools and modules on
+`6.8.0-134-generic` after the main ownership refactor. The last successful
+build snapshot had overlay SHA-256
+`18e3aab15eb64257e73f491849133f9a332d2467c66777214cd2481e459252a7`;
+the subsequent remote writer/parser/handoff integration, callback module pin,
+and device-reopen quarantine guard still need a fresh synchronized build.
+
+Two expanded diagnostic campaigns reached 38 passing cases and one failure:
+`wg20260715T180738Z` exposed an obsolete source/uplink target expectation, and
+`wg20260715T183416Z` exposed the old simple-NAT 60-second acquisition boundary.
+The corrected source/uplink case passed alone in `wg20260715T183342Z`. The NAT
+case now uses one shared 90-second absolute acquisition deadline and records
+elapsed time plus SNAT/DNAT counter deltas; isolated runs
+`wg20260715T190428Z` and `wg20260715T190505Z` both passed, with the latter
+making 17 seconds of startup churn visible.
+
+The elevated child of an intentionally interrupted focused command continued
+and ultimately completed run `wg20260715T214038Z` with **6 PASS, 0 FAIL**:
+policy reconnect churn in 253.324 seconds, authenticated carrier lifetime in
+95.334 seconds, dual-reachable NAT44 in 39.892 seconds, dual-router address
+roam in 336.688 seconds, half-open recovery in 52.062 seconds, and hostile
+stream recovery in 24.568 seconds. This is useful focused evidence, but that
+snapshot predates the final second-stage callback-owner, quarantine, and
+device-reopen guard changes. It is not a current-source acceptance result.
+
+Two overlapping follow-up attempts are excluded as infrastructure-contaminated
+runs. `wg20260715T215619Z` recorded **2 PASS, 2 FAIL** before an SSH cleanup
+abort; policy setup found a missing `wgb` device and dual-router cleanup timed
+out over SSH. `wg20260715T215932Z` recorded **0 PASS, 6 FAIL**, with all six
+cases immediately refused because a leftover `wgb` kept module unload from
+completing. Neither run is counted as product evidence or as a final-source
+pass/fail result.
+
+Restarting the managed VMs cleared the orphaned ownership, but the Multipass
+daemon then stopped answering its local gRPC socket. The administrator service
+restart and fresh synchronized build, focused gate, and full gate remain
+pending. The current registry contains 39 cases, and no green current-source
+39-case campaign exists yet. Accordingly, the historical 36-case campaign
+below remains the latest complete green gate.
+
 ## Recorded campaign
 
 | Field | Value |
@@ -27,6 +71,66 @@ with the observed outcome. Host execution used an approved brokered
 administrator context after the invoking token could read the exact managed
 Hyper-V VM IDs, and bounded guest-command probes succeeded before the case
 loop.
+
+## Historical focused roaming verification
+
+| Field | Value |
+|---|---|
+| Run ID | `wg20260714T084959Z` |
+| Started | 2026-07-14 08:49:59 UTC |
+| Duration | 238.500 seconds |
+| Case | `tcp-nat44-dual-router-address-roam` |
+| Result | **1 PASS, 0 FAIL, 0 SKIP** |
+| Guests | `wgtcp-a`, `wgtcp-b` |
+| Source HEAD | `c1d898a1f48c09c8a64c32fe76b5d2ddb4737624` |
+| Base archive SHA-256 | `6dd8fe9466b068173f7aec42b7ce66100ab5aa563485ffeca55e261eb5406b7a` |
+| Dirty overlay SHA-256 | `899b5ec7f1126852b6147f41f39dc900807768365979ad547a66d95874d25fdc` |
+
+Both VM repetitions passed the same-identity, two-carrier surrogate. The new
+client device remained administratively up but keyless and peerless during
+preplumb because taking it down removes its device route. Both old and new
+inner routes used path-specific preferred source addresses. After one old
+encrypted ICMP record was submitted, the test polled WireGuard TX and selective
+netem backlog without sending another record, then explicitly brought the old
+device down and required its exact `ESTABLISHED` client tuple to disappear
+before activating the new identity.
+
+Both guests moved the authenticated server endpoint from
+`192.0.2.1:52241` to `192.0.2.129:52241`, preserving the configured forward
+port. The delayed old record was at least 59 seconds old at earliest release,
+advanced the dedicated old-inner ICMP counter, and did not roll the endpoint
+back or advance the old-router reverse-SYN counter. Each guest acquired the
+required 16-second stable state before stale release and again before the live
+server `FwMark 0x52241` transition. That transition created a distinct marked
+server outbound tuple through the new DNAT and removed the prior tuple from
+`ESTABLISHED`. A residual old tuple in a terminal state such as `TIME-WAIT` is
+permitted and recorded separately; it is not counted as an active carrier.
+
+The current managed Hyper-V identities were
+`69fcac18-eb3f-46c1-a32f-4aa421e54e42` (`wgtcp-a`) and
+`48902a17-0dfe-4bbb-ab4f-86bcfb97f96d` (`wgtcp-b`). Private-switch identities
+were `a795c92c-e6d9-4ece-ad04-f835cfd70e93` (`WGTCP-Path0`) and
+`2f6d2b77-2ade-42e7-af23-417eab54ec2f` (`WGTCP-Path1`). These GUIDs establish
+which objects this run used; they are not portable creation parameters.
+
+Earlier focused run `wg20260714T070320Z` passed
+`tcp-policy-reconnect-churn` and `tcp-nat44-half-open-recovery` on both guests.
+Policy churn completed 11 transitions with 20 distinct reconnect proofs and
+eight mark-specific SYN proofs per guest. The half-open case used a drop-only
+blackhole, proved exact-socket `TCP_INFO` and namespace retransmission advances,
+and established a distinct conntrack-correlated replacement with bidirectional
+traffic. Its namespace-only `tcp_retries2=5` and `tcp_syn_retries=3` settings
+make that case bounded; its 13-14 second detection observations are not
+production-default timing claims.
+
+The `070320` dual-router entry failed while queue parsing and keyless route
+preplumb were still test-mechanics work. Later isolated iterations exposed two
+more topology constraints: live listener changes return `EBUSY`, and taking
+the keyless new device down removes the route that must be preinstalled. These
+were infrastructure/harness findings, not product failures. The corrected
+`084959` pass above supersedes those failed entries as product evidence. A new
+combined focused run and a full regression campaign containing the expanded
+case list remain pending.
 
 ## Case results
 

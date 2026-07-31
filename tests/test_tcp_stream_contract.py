@@ -13,7 +13,8 @@ def source(relative_path: str) -> str:
 
 
 def section(text: str, start: str, end: str) -> str:
-    return text[text.index(start) : text.index(end)]
+    start_index = text.index(start)
+    return text[start_index : text.index(end, start_index + len(start))]
 
 
 class TcpStreamContract(unittest.TestCase):
@@ -37,7 +38,7 @@ class TcpStreamContract(unittest.TestCase):
         self.assertNotIn("kernel_sendmsg(", send_to_peer)
         self.assertIn("wg_tcp_build_frame(skb)", send_to_peer)
         self.assertIn("wg_tcp_enqueue_frame(peer, frame)", send_to_peer)
-        self.assertIn("wg_tcp_send_frame(socket, skb)", write_worker)
+        self.assertIn("wg_tcp_send_frame(peer, socket, skb)", write_worker)
 
     def test_frames_include_fragment_bytes_before_they_are_queued(self) -> None:
         build = section(
@@ -62,7 +63,7 @@ class TcpStreamContract(unittest.TestCase):
             "void wg_peer_discard_partial_read(",
         )
 
-        send = "sent = wg_tcp_send_frame(socket, skb);"
+        send = "sent = wg_tcp_send_frame(peer, socket, skb);"
         advance = "skb_pull(skb, sent);"
         requeue = "__skb_queue_head(&peer->send_queue, skb);"
         self.assertLess(worker.index(send), worker.index(advance))
@@ -132,7 +133,64 @@ class TcpStreamContract(unittest.TestCase):
         self.assertIn("struct socket *socket = NULL;", worker)
         self.assertIn("socket = peer->peer_socket;", worker)
         self.assertIn("peer->peer_socket == socket", worker)
-        self.assertIn("wg_tcp_send_frame(socket, skb)", worker)
+        self.assertIn("wg_tcp_send_frame(peer, socket, skb)", worker)
+
+    def test_inactive_direction_preserves_and_rearms_the_surviving_stream(self) -> None:
+        cancel = section(
+            self.socket,
+            "static void wg_tcp_cancel_stream_workers(",
+            "static void wg_tcp_rearm_surviving_stream_locked(",
+        )
+        rearm = section(
+            self.socket,
+            "static void wg_tcp_rearm_surviving_stream_locked(",
+            "static void wg_destroy_temp_peer(",
+        )
+        outbound = section(
+            self.socket,
+            "void wg_tcp_outbound_remove_worker(struct work_struct *work)",
+            "void wg_tcp_inbound_remove_worker(struct work_struct *work)",
+        )
+        inbound = section(
+            self.socket,
+            "void wg_tcp_inbound_remove_worker(struct work_struct *work)",
+            "void wg_destruct_tcp_connection_list(",
+        )
+
+        self.assertIn("cancel_work_sync(&peer->tcp_read_work);", cancel)
+        self.assertIn("cancel_work_sync(&peer->tcp_write_work);", cancel)
+        self.assertIn("lockdep_assert_held(&peer->tcp_socket_lock);", rearm)
+        self.assertIn("socket = peer->peer_socket;", rearm)
+        self.assertIn("!skb_queue_empty(&socket->sk->sk_receive_queue)", rearm)
+        self.assertIn("wg_tcp_schedule_write_locked(peer);", rearm)
+
+        for worker in (outbound, inbound):
+            active = worker.index(
+                "active = clean_claim && socket && peer->peer_socket == socket;"
+            )
+            cancel_guard = worker.index("if (active)", active)
+            cancel_call = worker.index(
+                "wg_tcp_cancel_stream_workers(peer);", cancel_guard
+            )
+            reset = worker.index(
+                "wg_reset_exact_tcp_socket_callbacks(peer, socket);", cancel_call
+            )
+            completion = worker.index("if (!detach_failed)", reset)
+            rearm_call = worker.index(
+                "wg_tcp_rearm_surviving_stream_locked(peer);", completion
+            )
+            unlock = worker.index(
+                "mutex_unlock(&peer->tcp_socket_lock);", rearm_call
+            )
+            self.assertEqual(
+                worker.count("wg_tcp_cancel_stream_workers(peer);"), 1
+            )
+            self.assertLess(active, cancel_guard)
+            self.assertLess(cancel_guard, cancel_call)
+            self.assertLess(cancel_call, reset)
+            self.assertLess(reset, completion)
+            self.assertLess(completion, rearm_call)
+            self.assertLess(rearm_call, unlock)
 
     def test_queue_pressure_drops_new_frames_not_the_stream_head(self) -> None:
         enqueue = section(
@@ -326,7 +384,7 @@ class TcpStreamContract(unittest.TestCase):
         connect = section(
             self.socket,
             "int wg_tcp_connect(struct wg_peer *peer)",
-            "static void __maybe_unused wg_release_peer_tcp_connection(",
+            "void wg_extract_endpoint_from_sock(",
         )
 
         call = connect.index("ret = kernel_connect(socket, addr,")

@@ -18,6 +18,27 @@ MAC addresses and addresses make roaming and path-transition tests repeatable.
 The management NIC remains available for package installation and Multipass
 control.
 
+### Current follow-up status
+
+The 2026-07-15 integrated exact-owner tree passes 205 local source contracts.
+Both managed guests built the main ownership refactor on Ubuntu kernel
+`6.8.0-134-generic`; the remote writer/parser/handoff integration, callback
+module pin, and final device-reopen quarantine guard still require a fresh
+provision/build. The current registry contains 39 cases, and no green
+39-case campaign exists for the final source yet. The current full and focused
+runtime gates therefore remain pending, and [`RESULTS.md`](RESULTS.md)
+continues to treat the earlier 36-case campaign as the latest complete green
+run.
+
+Do not interrupt a focused runner by stopping only its visible parent and then
+immediately start another run. An elevated child `python regression.py` and its
+`multipass exec` may still own a guest case. Inspect the exact host process tree
+and guest harness, allow the bounded guest timeout/trap to finish or terminate
+only the verified tree, and confirm both guests have no WireGuard test links
+before rerunning. If the orphan is gone but `multipass list` cannot connect,
+the targeted Windows `Multipass` service restart requires administrator UAC;
+see the recovery guide rather than deleting VMs or switches.
+
 ## Prerequisites
 
 - Windows 10/11 Pro, Enterprise, or Education with hardware virtualization
@@ -89,6 +110,14 @@ tests the exact Git-visible snapshot described by the captured status. Ignored
 and other Git-unreported filesystem content is excluded. The recorded commit,
 status, and SHA-256 hashes are written beneath `tests/hyperv/results/`.
 
+The tested Multipass 1.16.3 `stop` command has no command-timeout option.
+Its `--time` option schedules a delayed shutdown, and `stop --timeout` is not
+supported. The provisioner therefore starts exactly `multipass stop <name>` as
+a child process, waits up to 120 seconds, and, on timeout, terminates only that
+exact client PID. Standard output and error are retained as
+`stop-<name>.stdout.log` and `stop-<name>.stderr.log`. Do not replace this with
+`--time 120`, which would delay the shutdown, or with a process-name-wide kill.
+
 Each guest build produces three fork kernel artifacts. `wireguard-fork.ko` is
 the production build, `wireguard-fork-debug.ko` enables initialization
 selftests, and `wireguard-fork-fault.ko` additionally enables the isolated
@@ -109,6 +138,26 @@ managed guests from clean Ubuntu images with:
 `-ForceRecreateUnmanaged` is deliberately separate and should only be used
 after manually confirming that colliding `wgtcp-a` or `wgtcp-b` instances are
 disposable. `-SkipGuestBuild` transfers and bootstraps without compiling.
+
+The currently recorded managed identities are listed below. These GUIDs are a
+record of this lab, not names to reuse when creating another lab; the
+provisioner must persist the IDs returned by that host and compare them before
+each managed change.
+
+| Object | Recorded Hyper-V identity |
+|---|---|
+| `wgtcp-a` | `69fcac18-eb3f-46c1-a32f-4aa421e54e42` |
+| `wgtcp-b` | `48902a17-0dfe-4bbb-ab4f-86bcfb97f96d` |
+| `WGTCP-Path0` | `a795c92c-e6d9-4ece-ad04-f835cfd70e93` |
+| `WGTCP-Path1` | `2f6d2b77-2ade-42e7-af23-417eab54ec2f` |
+
+For the successful dual-router run, the transferred source snapshot was HEAD
+`c1d898a1f48c09c8a64c32fe76b5d2ddb4737624`, base archive SHA-256
+`6dd8fe9466b068173f7aec42b7ce66100ab5aa563485ffeca55e261eb5406b7a`, and
+Git-visible overlay SHA-256
+`899b5ec7f1126852b6147f41f39dc900807768365979ad547a66d95874d25fdc`.
+The overlay is rebuilt on every provision from modified and untracked
+Git-visible files, so the hash changes as worktree changes are incorporated.
 
 ## Run regressions
 
@@ -191,13 +240,95 @@ process termination, inspect the module variant before resuming. The fault
 artifact is not a general TCP kernel variant and should not be used for
 unrelated cases.
 
+### TCP roaming and half-open cases
+
+Provision the current worktree, then run the roaming cases independently or as
+part of the focused hardening set:
+
+```powershell
+python .\tests\hyperv\regression.py `
+    --keep-going `
+    --only-case tcp-policy-reconnect-churn `
+    --only-case tcp-nat44-dual-router-address-roam `
+    --only-case tcp-nat44-half-open-recovery `
+    --only-case tcp-debug-hostile-stream
+```
+
+The roaming helper reserves at least 600 seconds of host command time, which
+becomes a 570-second bounded guest command after the runner's cleanup margin.
+The dual-router case delays one old-path record for 110 seconds, requires a
+12-second exact-tuple pre-stage baseline and separate 12-second
+automatic-authentication gates after initial and post-`FwMark` establishment,
+and retains continuous 16-second quiet windows before stale release and before
+the live mark transition. Each automatic gate exceeds twice the five-second
+provisional idle timeout.
+
+The dual-router topology reports `independent-outbound-pair` and is a
+same-identity, two-carrier surrogate. It creates
+old and new client routers with distinct private and public paths, a public
+server, two client WireGuard devices sharing one private key, and one server
+peer accepting both client tunnel addresses. Both routers forward public TCP
+port `52241`; old and new source translations use ports `41001` and `41002`.
+Both streams are independently dialed; no accepted socket is promoted or
+deduplicated. Static-key ordering selects Noise initiation only and is not
+instrumented here as physical TCP-carrier arbitration.
+Outer policy and inner device routes are installed before the new identity is
+activated. Each inner route has a path-specific preferred source so a route
+lookup cannot silently select the other device's tunnel address.
+
+The new device is brought up with its TCP listener and `FwMark` configured but
+with no private key and no peer. It must remain up during preplumb because
+Linux removes its device route when the interface is brought down. After one
+old encrypted echo request is submitted, the test polls both WireGuard TX and
+the selective netem backlog until that single record is confirmed queued. It
+then explicitly brings the old WireGuard device down and proves its exact
+client-side `ESTABLISHED` tuple has disappeared before installing the shared
+key and peer on the new device. This cutoff prevents new old-path handshake
+records from overtaking the staged record.
+
+After the new path becomes quiet, the delayed old record is released. The test
+requires the server's authenticated endpoint to remain on the new public
+address while preserving configured port `52241`, requires the old router's
+reverse-SYN counter not to advance, and proves the delayed record reached the
+old tunnel address with a dedicated nftables inner-ICMP counter. A subsequent
+live server `FwMark` change must create a distinct marked outbound tuple through
+the new DNAT and retire the old tuple from `ESTABLISHED`. An old tuple may still
+appear in a terminal state such as `TIME-WAIT`; that is normal TCP lifecycle
+residue and is recorded separately rather than treated as an active carrier.
+
+The quiet-window sampler emits compact state signatures only when acquisition
+fails, including first, previous, and last valid samples plus the last invalid
+sample. This keeps passing logs readable without withholding endpoint, socket,
+mark, handshake, NAT-counter, or transfer-counter evidence on a failure.
+
+The half-open topology keeps the original NAT path in place and installs an
+owned, drop-only nftables table that silently blackholes the established
+carrier. Before the blackhole it requires a stable four-second window with no
+`SYN-SENT` sockets and captures the complete accepted and outbound tuple sets.
+It then correlates advancing `TCP_INFO` retransmission fields for the exact old
+socket with namespace `RetransSegs`, observes a reconnect SYN, removes only the
+owned drop table, and requires a distinct, conntrack-correlated replacement
+tuple plus bidirectional counter movement. `tcp_retries2=5` and
+`tcp_syn_retries=3` apply only inside the disposable namespaces to bound test
+time; the observed recovery time is not evidence for production-default Linux
+failure-detection timing.
+
+Focused run `wg20260714T084959Z` passed
+`tcp-nat44-dual-router-address-roam` on both guests for **1 PASS, 0 FAIL,
+0 SKIP** in 238.500 seconds. Earlier run `wg20260714T070320Z` independently
+passed policy churn and half-open recovery on both guests. Its dual-router
+entry failed while the topology and queue-accounting mechanics were still
+being corrected, so that entry is excluded from product evidence. A new
+combined focused run and a full regression campaign for the final snapshot are
+still pending.
+
 On a managed-pair failure the runner captures both guests before cleanup. The
 failure logs include public WireGuard state, listening and connected TCP
 sockets, and the kernel log emitted after the per-case reset; private keys are
 never collected.
 
-The registered cases include preflight validation; all 16 combinations of
-stock/fork kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
+The current 39-case registry includes preflight validation; all 16 combinations
+of stock/fork kernels and stock/fork tools in UDP mode; focused UDP/TCP namespace,
 authenticated roaming, random-port, and output tests; DEBUG initialization
 selftests; stock kernel capability and live-mode-change guards, including TCP
 listen-port mutation and random-port coupling; and TCP cases covering static
@@ -240,8 +371,9 @@ per-guest counter deltas were `80/4/4/437` on `wgtcp-a` and `80/4/4/442` on
 `wgtcp-b` for short writes/prefixes/resyncs/drops; normal traffic recovered on
 both guests after the controls were cleared.
 
-Run `wg20260714T010310Z` passed all registered checks for **36 PASS, 0 FAIL,
-0 SKIP** in 558.520 seconds, recording 541 commands. Its source identity is
+Run `wg20260714T010310Z` passed all 36 checks registered in that historical
+snapshot for **36 PASS, 0 FAIL, 0 SKIP** in 558.520 seconds, recording 541
+commands. Its source identity is
 HEAD `83d424cb0191bc2b90090c071728db6348f7b983`, base archive SHA-256
 `2de2c670dba76cac01dd1bd35f9de99605d36b032070048d6b94f5e6f3ec0d12`, and
 dirty overlay SHA-256

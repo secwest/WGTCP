@@ -47,6 +47,18 @@ site-to-site, asymmetric-port, dual-stack, and NAT templates.
 > remains experimental and is not a claim of complete WireGuard feature parity.
 > Focused follow-up `wg20260713T225629Z` then passed a real `wg-quick` down/up
 > reload and the guest-owned fault-module lifecycle on both VMs.
+> The current follow-up source bootstraps an established carrier into normal
+> Noise authentication,
+> future dial-IP learning with configured-port preservation, exact per-socket
+> callback ownership, repeated policy churn, exact half-open recovery, and a
+> same-identity two-carrier roaming surrogate. The policy and half-open cases
+> passed on both VMs in focused run `wg20260714T070320Z`; corrected dual-router
+> run `wg20260714T084959Z` passed its one case on both VMs. The integrated tree
+> passes 205 source contracts. The final exact-owner, remote writer/parser,
+> provisional-handoff, module-pin, and reopen-quarantine source still awaits a
+> synchronized guest build, after which a fresh combined focused run and full
+> regression remain required; the earlier 36-case campaign remains the latest
+> complete green gate.
 > See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
 > [design document](docs/TCP_TRANSPORT_DESIGN.md). Investigation decisions and
@@ -61,13 +73,13 @@ site-to-site, asymmetric-port, dual-stack, and NAT templates.
 | UAPI | Appends `WGDEVICE_A_TRANSPORT` to the Linux generic-netlink device attributes |
 | Wire format | Adds an 8-byte TCP record header with total length, type, flags, and a framing checksum |
 | Cryptography | Reuses the standard WireGuard Noise handshake, AEAD data messages, replay checks, and key rotation |
-| TCP lifecycle | Adds listeners, nonblocking outbound connect, socket callbacks, per-peer read/write workers, cleanup, and retry |
+| TCP lifecycle | Adds listeners, nonblocking outbound connect, first-established Noise bootstrap, per-peer read/write workers, exact callback-owner tokens, exact-socket terminal-I/O cleanup, and single-owner retry |
 | Receive integration | Reconstructs endpoint metadata and feeds decoded records into the existing WireGuard receive pipeline |
 | Provisional inbound path | Accepts unknown TCP connections before identity is known with device/per-source caps, per-source throttling, and authentication deadlines; authenticated carriers are retained, but socket promotion is not implemented |
 | Endpoint mobility | Keeps the configured peer listen port separate from an observed ephemeral source port, learns a future dial IP only from authenticated traffic, and reconnects after relevant endpoint, route, address, uplink, and `FwMark` changes |
 | Connection collision | Uses a deterministic public-key tie-break when simultaneous TCP Noise initiations collide |
 | Configuration persistence | Canonical TCP state round-trips through `showconf`, `setconf`, and `syncconf`; the tested Ubuntu `wg-quick` also serializes it through SaveConfig |
-| Diagnostics | Optional TCP metrics include cwnd, RTT/RTO, retransmission state, and queue pressure; destructive stream faults exist only in a separate lab module |
+| Diagnostics | Optional TCP metrics include cwnd, RTT/RTO, retransmission state, and queue pressure; destructive stream faults, including an exact IPv4 4-tuple one-shot send failure, exist only in a separate lab module |
 
 The transport is selected below WireGuard's encryption layer:
 
@@ -88,6 +100,47 @@ an emitted prefix. The receiver rejects unknown types/flags and lengths outside
 the WireGuard message minimum and `WG_MAX_PACKET_SIZE` before resizing. Send
 queues are capped at 1024 frames per peer and reject the newest frame under
 pressure, preserving any partially emitted stream head.
+
+### Callback and terminal-I/O recovery
+
+TCP socket callbacks hold the socket callback lock for reading while they load
+and use `sk_user_data`, queue peer work, and invoke the saved callback. A
+per-peer mutex serializes exact socket publication, callback setup/reset, and
+release. Each direction retains its own owner token; setup installs the wrapper
+and callbacks before publishing `callbacks_set`, while reset checks that flag
+before interpreting `sk_user_data`, restores the saved callbacks from the owner
+token, detaches only its own wrapper, and clears ownership last. A setup failure
+therefore cannot make cleanup free foreign socket data. Every published wrapper
+also owns a module reference acquired before callback publication and released
+only after successful callback restoration and detachment.
+
+Inbound and outbound removal work also records the exact socket it claimed. A
+stale worker cannot remove a replacement, one release clears every alias of the
+same physical socket exactly once, and removing an inactive direction re-arms
+queued work on the surviving active stream. If an internal detach invariant is
+ever violated, teardown fails closed: the socket is retained behind permanent
+stop gates and the peer keeps one quarantine reference instead of risking a
+callback use-after-free. Its wrapper retains the module reference, so module
+unload is refused rather than leaving a live callback into unloaded text.
+Device reopen preserves that quarantine: it does not clear the stop gate or
+queue retry, staged packets, or keepalives for the retained peer.
+
+EOF, hard receive failures, zero-byte sends, and hard send failures now converge
+on exact-socket recovery. The worker discards incomplete parser state or the
+uncertain outbound frame, then claims cleanup only if that exact socket is still
+the peer's published outbound socket or tracked temporary inbound socket. It
+does not replay a frame whose prefix may already have entered the stream.
+Outbound removal and delayed retry have one owner. Synchronous connect failure
+uses the same exact reset/release helper, purges partial parser and send-queue
+state, and publishes retry only after releasing the failed socket and
+rechecking the stop barrier.
+
+The one-shot send-failure selector is compiled only into
+`wireguard-fork-fault.ko`. It matches network-namespace inode, WireGuard
+ifindex, and the complete local/remote IPv4 address and port tuple before
+injecting `EPIPE`; production and ordinary DEBUG modules expose none of these
+parameters. The current source contracts and VM builds cover that isolation,
+but its refreshed runtime case remains part of the pending focused gate.
 
 ## Configuration
 
@@ -224,6 +277,51 @@ Focused follow-up `wg20260713T225629Z` removed and recreated `wga` in each
 guest's isolated pair from the saved file, recovered bidirectional traffic, and
 reproduced the exact canonical WireGuard configuration.
 
+Focused policy-churn coverage now repeats route, source-address, uplink, and
+`FwMark` changes with asymmetric listen ports. On each VM it completed 11
+transitions with 20 distinct replacement-carrier proofs and eight
+mark-specific SYN proofs. Every mutation follows a quiet exact-tuple baseline,
+and the `FwMark` phases prove socket-mark propagation and reconnect; the
+separate full-tunnel `fwmark` mode remains the owner of mark-selected routing
+coverage.
+
+The half-open case blackholes only the established carrier, observes increasing
+`TCP_INFO` retransmission metrics and namespace `RetransSegs`, and correlates a
+distinct replacement pair through router conntrack before proving that the old
+client tuple is absent and traffic works in both directions. It deliberately
+sets namespace-local `tcp_retries2=5` and `tcp_syn_retries=3`. Those accelerated
+values make failure detection practical in regression and are not evidence for
+production-default detection time.
+
+Run `wg20260714T084959Z` passed a narrower same-identity two-carrier surrogate
+on both VMs. Two client devices share one private key but use independent
+listen ports, marks, carrier routes, and path-specific inner source routes. The
+new device is preplumbed up, routed, keyless, and peerless; after one encrypted
+old-path data record is queued behind a 60-second delay, the old device is cut
+off and the new peer is activated. The endpoint moves to the second router
+while configured forward port `52241` is preserved. When the delayed
+authenticated data record arrives, both WireGuard RX and an exact inner-echo
+counter advance, but the endpoint does not roll back and the old router sees no
+new reverse SYN. After a 16-second stable-state barrier, a live server `FwMark`
+change creates a different marked outbound tuple through the new DNAT, retires
+the prior established tuple, and preserves bidirectional traffic.
+
+That test is intentionally a same-identity **two-device carrier surrogate**.
+It validates generation ordering, configured-port preservation, delayed-data
+rollback resistance, and reconnect targeting across two carriers. It does not
+move one live WireGuard device, atomically promote an accepted socket, or prove
+general responder-only NAT roaming.
+
+The current strengthened harness calls this physical topology
+`independent-outbound-pair`. It uses a 110-second staged-record delay, a
+12-second exact-tuple pre-stage baseline, 12-second automatic-authentication
+gates after initial and post-`FwMark` establishment, and separate 16-second
+quiet barriers before stale release and mark change. The 12-second gates exceed
+twice the five-second provisional idle timeout. These are still two
+independently dialed streams, not accepted-socket promotion or deduplication;
+static-key ordering selects Noise initiation and does not elect a physical TCP
+carrier.
+
 Important remaining TCP parity work includes:
 
 - implementing atomic authenticated carrier-to-peer binding and promotion,
@@ -236,6 +334,11 @@ Important remaining TCP parity work includes:
 - completing MTU accounting, longer hostile-network soaks, and broader kernel,
   controller, topology, physical-carrier impairment, malformed-stream, and
   multi-flow coverage before claiming production or all-modes parity.
+- combining a partial write followed by a terminal send failure to prove that
+  no emitted prefix is replayed, and injecting EOF after a partial receive to
+  prove parser-state disposal and reconnect under that exact sequence;
+- rerunning the combined focused gate and full suite, including IPv6 and
+  dual-stack cases, against the current recovery and roaming source.
 
 The full roaming state model and acceptance checklist are in the
 [design document](docs/TCP_TRANSPORT_DESIGN.md#roaming-and-endpoint-mobility).
@@ -250,7 +353,7 @@ TCP mode is a deployment option, not a universal replacement for UDP.
 | Reuse of WireGuard security model | Same peer keys, Noise sessions, AllowedIPs, replay checks, keepalives, and rekey | Both endpoints need the modified Linux implementation |
 | Potential outer-loss recovery | Non-congestive loss where completeness matters more than timeliness | Ordered recovery can create latency and head-of-line blocking; the published campaign did not validate physical-carrier loss |
 | Reliable carriage of inner UDP | Bulk or transactional datagrams | Late packets may be worse than loss for voice, gaming, or real-time video |
-| Stateful firewall/NAT friendliness | Dual-reachable NAT44 with explicit reverse port-forwarding, keepalives, and one forced source-port remap passed on both guests | Ordinary one-sided NAT still needs accepted-carrier promotion; stale accepted sockets are not yet retired deterministically |
+| Stateful firewall/NAT friendliness | Dual-reachable NAT44, exact half-open recovery, and a same-identity two-carrier address-change surrogate passed on both guests | The half-open timers are test-accelerated; ordinary one-sided NAT and same-device roaming still need authenticated carrier promotion |
 | Per-deployment choice | Separate UDP and TCP interfaces can serve different routes | Additional configuration and operational testing |
 
 Use UDP when it works and low latency, datagram semantics, or minimal state are
@@ -455,6 +558,20 @@ counted a new SYN through that forward. Run it independently with:
 python .\tests\hyperv\regression.py --only-case tcp-nat44-dual-reachable
 ```
 
+Focused run `wg20260714T070320Z` passed the policy-churn and half-open cases on
+both guests. The policy case recorded 11 transitions, 20 exact reconnect
+proofs, and eight mark-specific SYN proofs per guest. The half-open case used
+accelerated namespace-local TCP retry policy, corroborated the dropped
+carrier with exact `TCP_INFO` and `RetransSegs` movement, and proved a
+conntrack-correlated replacement tuple. That mixed run also contained an older
+failing revision of the dual-router case, so it is not a complete green gate.
+
+Corrected run `wg20260714T084959Z` then passed
+`tcp-nat44-dual-router-address-roam` on both guests for **1 PASS, 0 FAIL, 0
+SKIP** in 238.103 seconds. It is scoped as a same-identity two-carrier
+surrogate. A broader focused rerun and full regression, including fresh IPv6
+coverage, remain pending for the current source.
+
 ## Diagnostics
 
 Optional kernel diagnostic builds are available:
@@ -478,7 +595,10 @@ Deterministic destructive tests use the separately built
 `wireguard-fork-fault.ko`. Its root-only `tcp_test_*` parameters are an unstable
 lab interface, module-global across namespaces, and absent from production and
 ordinary DEBUG artifacts. The committed runner serializes those tests, compares
-counter deltas, resets every control, and verifies post-pressure traffic.
+counter deltas, resets every control, and verifies post-pressure traffic. Its
+terminal-send fault arms last and matches the network namespace, WireGuard
+ifindex, and exact IPv4 4-tuple, preventing an unrelated stream from consuming
+the one-shot `EPIPE` injection.
 
 ## Documentation
 

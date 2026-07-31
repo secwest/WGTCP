@@ -43,6 +43,44 @@ def parse_fields(output: str) -> dict[str, str]:
     return fields
 
 
+_REPORT_ERROR_TRACE = re.compile(
+    r"^\S+\.sh failed at line \d+: .+ \(status \d+\)$"
+)
+_MULTIPASS_GRPC_BOILERPLATE = re.compile(
+    r"^[EWI]\d{4}\s+.*grpc_wait_for_shutdown_with_timeout\(\) timed out\.?$"
+)
+_DUMP_SECTION = re.compile(r"^--- .+ ---$")
+_QDISC_STATE = re.compile(
+    r"^(?:qdisc\s|Sent \d+ bytes \d+ pkt\b|backlog \d+b \d+p\b)",
+    re.IGNORECASE,
+)
+
+
+def failure_reason(completed: subprocess.CompletedProcess[str]) -> str:
+    """Choose a concise assertion while leaving complete output in the command log."""
+    trace_fallback: str | None = None
+    for output in (completed.stderr or "", completed.stdout or ""):
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if _DUMP_SECTION.fullmatch(line):
+                # Guest helpers append structured state dumps after their assertion.
+                break
+            if line == "Failed to find cgroup2 mount":
+                continue
+            if _MULTIPASS_GRPC_BOILERPLATE.fullmatch(line):
+                continue
+            if _QDISC_STATE.match(line):
+                continue
+            if _REPORT_ERROR_TRACE.fullmatch(line):
+                if trace_fallback is None:
+                    trace_fallback = line
+                continue
+            return line
+    return trace_fallback or f"exit {completed.returncode}"
+
+
 def find_multipass(explicit: str | None) -> str:
     candidates = [
         explicit,
@@ -137,9 +175,8 @@ class Suite:
             )
         combined_output = f"{completed.stdout}\n{completed.stderr}".lower()
         if completed.returncode != 0 and "ssh connection failed:" in combined_output:
-            reason = completed.stderr.strip() or completed.stdout.strip()
             raise self.mark_infrastructure_failure(
-                f"{vm} {label}: {reason.splitlines()[-1]}"
+                f"{vm} {label}: {failure_reason(completed)}"
             )
         return completed
 
@@ -179,8 +216,7 @@ class Suite:
         if completed.returncode == 77:
             raise Skip(f"{context}: {completed.stderr.strip() or completed.stdout.strip()}")
         if completed.returncode != 0:
-            reason = completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}"
-            raise Failure(f"{context}: {reason.splitlines()[-1]}")
+            raise Failure(f"{context}: {failure_reason(completed)}")
         return completed.stdout
 
     def helper(
@@ -651,7 +687,33 @@ class Suite:
                     mode,
                     self.args.repo,
                     label=f"tcp-parity-{mode}",
-                    timeout=max(self.args.timeout, 240),
+                    timeout=max(
+                        self.args.timeout,
+                        900 if mode == "policy-churn" else 240,
+                    ),
+                )
+                guest_details[vm] = parse_fields(output)
+            details["guests"] = guest_details
+            details["kernel_variant"] = self.args.tcp_kernel_variant
+            return details
+
+    def tcp_roaming_netns_case(self, mode: str) -> dict[str, object]:
+        case_id = f"tcp-roaming-{mode}"
+        details: dict[str, object] = {"mode": mode, "guests": {}}
+        with self.managed_pair(case_id):
+            guest_details: dict[str, dict[str, str]] = {}
+            for vm in (self.args.vm_a, self.args.vm_b):
+                self.module(vm, self.args.tcp_kernel_variant)
+                output = self.helper(
+                    vm,
+                    "guest-node.sh",
+                    "tcp-roaming-netns",
+                    self.run_id,
+                    case_id,
+                    mode,
+                    self.args.repo,
+                    label=f"tcp-roaming-{mode}",
+                    timeout=max(self.args.timeout, 600),
                 )
                 guest_details[vm] = parse_fields(output)
             details["guests"] = guest_details
@@ -941,6 +1003,10 @@ class Suite:
                     lambda: self.tcp_parity_netns_case("source-uplink"),
                 ),
                 (
+                    "tcp-policy-reconnect-churn",
+                    lambda: self.tcp_parity_netns_case("policy-churn"),
+                ),
+                (
                     "tcp-ipv6-dual-stack",
                     lambda: self.tcp_parity_netns_case("ipv6"),
                 ),
@@ -955,6 +1021,14 @@ class Suite:
                 (
                     "tcp-nat44-dual-reachable",
                     lambda: self.tcp_nat_netns_case("dual-reachable"),
+                ),
+                (
+                    "tcp-nat44-dual-router-address-roam",
+                    lambda: self.tcp_roaming_netns_case("dual-router"),
+                ),
+                (
+                    "tcp-nat44-half-open-recovery",
+                    lambda: self.tcp_roaming_netns_case("half-open"),
                 ),
                 ("tcp-debug-hostile-stream", self.tcp_fault_injection_case),
             ]
