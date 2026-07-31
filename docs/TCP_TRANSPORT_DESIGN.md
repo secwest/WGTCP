@@ -209,9 +209,12 @@ The regression mode guard confirms that a rejected live update leaves both
 listeners present, then confirms that a link-down port-zero reconfiguration
 selects one random port shared by the TCP listener and companion UDP socket.
 
-Both peers need bidirectional inbound TCP reachability or an explicit port
-forward to each peer's configured listen port. The ports may differ;
-asymmetric listen ports passed in the recorded campaign. Focused run
+For ordinary one-sided NAT, only the private peer needs the reachable peer's
+TCP endpoint. The reachable peer can authenticate and promote the accepted
+carrier, reply over that stream, and follow later authenticated NAT mappings
+without a reverse port forward. If both peers are reachable, either
+authenticated TCP direction may win. The ports may differ; asymmetric listen
+ports passed in the recorded campaign. Historical focused run
 `wg20260714T005957Z` also passed a guest-local, dual-reachable NAT44 topology:
 the private peer listened on `10.240.0.2:52221`, the router DNATed public
 `192.0.2.1:52241` to that configured listener, and the private peer's outbound
@@ -224,16 +227,12 @@ observed SNAT source port replaced it. A live mark change then forced the
 public peer's outbound reconnect owner to dial again, and the router counted a
 new SYN through the preserved `52241` forward before traffic was revalidated.
 
-This is deliberately a narrow result. The topology gave the private peer an
-explicit inbound DNAT, so both peers remained independently dialable. The
-handshake path can initiate a reverse connection instead of replying solely on
-the accepted stream. Conventional responder-only operation behind NAT, with no
-inbound forward, still requires authenticated accepted-socket promotion and is
-unsupported. The run also retained the server's stale accepted `41001` carrier
-after the replacement `41002` carrier was established. Recovery therefore does
-not establish duplicate-carrier retirement, arbitrary NAT roaming, or general
-NAT parity. A replacement configuration may change transport while link-down
-because it removes the old peers before creating peers for the new carrier.
+That historical result was deliberately narrow because the topology gave the
+private peer an explicit inbound DNAT. Current run `wg20260731T074807Z` adds
+outbound-only single NAT and address-plus-port roaming without DNAT, using
+authenticated accepted-socket promotion. General provider NAT behavior is
+still deployment-specific, but the run proved retirement of the old accepted
+carrier after both source-port and source-address changes.
 
 TCP mode also opens the normal WireGuard UDP sockets on the same numeric
 `ListenPort` as the TCP listener. Operators seeking TCP-only exposure must block

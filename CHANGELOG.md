@@ -634,7 +634,7 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 
 ### Latest-tree integration
 
-- Rebased the NAT work through WireguardTCP commit `a1f93da`, retaining the
+- Rebased the NAT work through WireguardTCP commit `58441e1`, retaining the
   upstream TCP source split and the latest history, contract, prototype, and
   Linux image-verification changes.
 - Migrated lifecycle, listener, namespace, port, framing, roaming, fault, and
@@ -670,10 +670,19 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 - Replaced the NAT source port from `41001` to `41002`, flushed conntrack, and
   verified authenticated reacquisition, bidirectional recovery, and retirement
   of the old accepted carrier.
+- Added outbound-only source-address roaming from `192.0.2.1:41001` to
+  `192.0.2.129:41002`.
+- Made dual-reachable validation accept either authenticated simultaneous-
+  initiation winner while requiring exactly usable bidirectional tunnel
+  behavior.
+- Made half-open recovery outbound-only and verified either valid authenticated
+  replacement direction after exact old-carrier loss and retirement.
+- Removed a redundant pre-ownership listener call to `wg_tcp_data_ready()`
+  which could observe a NULL callback wrapper before installation.
 
 ### Validation
 
-- Passed all 209 local source and contract tests.
+- Passed all 213 local source and contract tests.
 - Built the production module with `W=1` against the prepared WSL 6.6 tree.
 - Built production, DEBUG, and fault-injection modules on both Hyper-V Ubuntu
   guests running `6.8.0-136-generic`.
@@ -684,12 +693,10 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 - Final rebased Hyper-V run `wg20260731T070427Z` passed hostile-stream parsing, short-write,
   fatal-send, exact-target retirement, recovery, and production-module restore
   checks on both guests.
-- Follow-up run `wg20260731T064611Z` kept clean kernel logs but failed three
-  older dual-reachable tuple-direction assertions. Immediate bootstrap allows
-  the public peer's valid outbound/DNAT carrier to win when both peers are
-  reachable, while those tests require the private peer's `41001` SNAT carrier.
-  This is an unresolved simultaneous-initiation policy/test expectation, not
-  evidence against the outbound-only single-NAT result.
+- Final focused run `wg20260731T074807Z` passed single-private NAT,
+  dual-reachable initiation, outbound-only address-and-port roaming, and
+  half-open recovery: 4 PASS, 0 FAIL, 0 SKIP on both guests with clean kernel
+  logs.
 
 ## Maintainer update policy
 

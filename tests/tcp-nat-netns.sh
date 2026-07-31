@@ -649,26 +649,32 @@ wait_ping "$ns_server" wgb "$client_tunnel_address"
 assert_nat_state "$rebound_snat_port"
 rebound_carrier_direction=$active_carrier_direction
 
-# Prove the preserved configured target is usable for a future reverse dial,
-# rather than checking only its netlink representation. A live mark change uses
-# the normal reconnect owner; a namespace-local counter must observe a new SYN
-# through the NAT's configured forwarded port. The local TCP port is diagnostic
-# only because Linux may legally reuse a closed four-tuple.
+# If reverse/DNAT won, prove its configured target remains usable across a live
+# mark reconnect. If SNAT won, the authenticated accepted carrier is the active
+# owner and a server-side outbound reconnect is intentionally not required.
 reverse_remote="$router_public_address:$forwarded_port"
-reverse_before=$(tcp_local_endpoint "$ns_server" "$reverse_remote")
-[[ -n $reverse_before ]] || reverse_before=none
 reverse_syn_before=$(forward_syn_packets)
 [[ $reverse_syn_before =~ ^[0-9]+$ ]] || {
 	echo "could not read the reverse-dial SYN counter" >&2
 	exit 1
 }
-run "$ns_server" "$WG_FORK" set wgb fwmark 0x52241
-reverse_syn_after=$(wait_forward_syn_advance "$reverse_syn_before")
-wait_tcp_remote "$ns_server" "$reverse_remote"
-reverse_after=$(tcp_local_endpoint "$ns_server" "$reverse_remote")
-wait_ping "$ns_client" wga "$server_tunnel_address"
-wait_ping "$ns_server" wgb "$client_tunnel_address"
-assert_nat_state "$rebound_snat_port"
+if [[ $rebound_carrier_direction == dnat ]]; then
+	reverse_before=$(tcp_local_endpoint "$ns_server" "$reverse_remote")
+	[[ -n $reverse_before ]] || reverse_before=none
+	run "$ns_server" "$WG_FORK" set wgb fwmark 0x52241
+	reverse_syn_after=$(wait_forward_syn_advance "$reverse_syn_before")
+	wait_tcp_remote "$ns_server" "$reverse_remote"
+	reverse_after=$(tcp_local_endpoint "$ns_server" "$reverse_remote")
+	wait_ping "$ns_client" wga "$server_tunnel_address"
+	wait_ping "$ns_server" wgb "$client_tunnel_address"
+	assert_nat_state "$rebound_snat_port"
+	reverse_dial_reconnect=pass
+else
+	reverse_before=not-active
+	reverse_after=not-run
+	reverse_syn_after=$reverse_syn_before
+	reverse_dial_reconnect=not-applicable-snat-winner
+fi
 if tcp_tuple_present "$ns_server" "$server_address:$server_listen_port" \
 	"$router_public_address:$initial_snat_port"; then
 	old_carrier_state=retained
@@ -695,7 +701,7 @@ printf 'persistent_keepalive=pass\nkeepalive_client_tx=%s->%s\n' \
 printf 'keepalive_server_tx=%s->%s\n' "$server_tx_before" "$server_tx_after"
 printf 'source_port_rebind=%s->%s\n' "$initial_snat_port" "$rebound_snat_port"
 printf 'configured_forward_port=%s\nconfigured_port_preserved=pass\n' "$forwarded_port"
-printf 'reverse_dial_reconnect=pass\nreverse_dial_syns=%s->%s\n' \
-	"$reverse_syn_before" "$reverse_syn_after"
+printf 'reverse_dial_reconnect=%s\nreverse_dial_syns=%s->%s\n' \
+	"$reverse_dial_reconnect" "$reverse_syn_before" "$reverse_syn_after"
 printf 'reverse_dial_tuple=%s->%s\n' "$reverse_before" "$reverse_after"
 printf 'old_accepted_carrier=%s\n' "$old_carrier_state"

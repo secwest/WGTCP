@@ -150,15 +150,13 @@ when the interface comes up. For TCP, the companion UDP socket selects the
 concrete port first and the TCP listener binds the same number; configure the
 peer endpoint with that selected port.
 
-Give both peers bidirectional inbound TCP reachability or port forwarding on
-each peer's configured listen port. The ports may differ; the recorded
-asymmetric-listen-port case passed. A namespace-isolated NAT44 case also passed
-with a private peer behind SNAT, a stable external DNAT port for the reverse
-carrier, and a configured endpoint in both directions. It recovered when the
-private peer's translated source port changed from 41001 to 41002 without
-replacing the configured forwarded port. This is a dual-reachable topology;
-ordinary one-sided client-behind-NAT responder behavior without a reverse
-port-forward still requires authenticated accepted-carrier promotion.
+At minimum, the dialing peer needs the other peer's reachable TCP listen port.
+The ports may differ; the recorded asymmetric-listen-port case passed. For a
+private peer behind NAT, configure only its reachable peer endpoint: the public
+peer can authenticate and promote the accepted carrier without a reverse port
+forward. The focused Hyper-V gate passed source-port and source-address changes
+from `192.0.2.1:41001` to `192.0.2.129:41002`. When both peers are reachable,
+either authenticated TCP direction may become the active carrier.
 
 TCP mode currently binds a TCP listener and the normal WireGuard UDP sockets on
 the same numeric `ListenPort`. A TCP-only deployment must block that UDP port at
@@ -253,12 +251,13 @@ private peer to dial a reachable peer through ordinary SNAT without a reverse
 DNAT or forwarded listen port. A device-monotonic connection ID prevents a
 retained older carrier from reverting the authenticated winner.
 
-Final rebased Hyper-V run `wg20260731T070252Z` passed this outbound-only model on both Ubuntu
+Final rebased Hyper-V run `wg20260731T074807Z` passed this outbound-only model on both Ubuntu
 guests. It verified accepted-carrier promotion, bidirectional traffic,
 keepalive activity, a forced `41001`-to-`41002` source-port change,
-authenticated reacquisition, and retirement of the old accepted carrier.
-General provider NAT behavior and simultaneous publicly reachable initiation
-still require deployment-specific validation.
+authenticated reacquisition, source-address roaming to `192.0.2.129`,
+retirement of the old accepted carrier, and clean kernel logs. When both peers
+are reachable, either authenticated TCP direction may win and the tunnel
+continues over that carrier.
 
 TCP listeners, accepted sockets, and outbound sockets use the WireGuard
 device's retained creation namespace and carry its `FwMark`. Route, netdevice,
@@ -283,9 +282,9 @@ separate full-tunnel `fwmark` mode remains the owner of mark-selected routing
 coverage.
 
 The half-open case blackholes only the established carrier, observes increasing
-`TCP_INFO` retransmission metrics and namespace `RetransSegs`, and correlates a
-distinct replacement pair through router conntrack before proving that the old
-client tuple is absent and traffic works in both directions. It deliberately
+`TCP_INFO` retransmission metrics and namespace `RetransSegs`, and validates a
+new authenticated carrier before proving that the old client tuple is absent
+and traffic works in both directions. It deliberately
 sets namespace-local `tcp_retries2=5` and `tcp_syn_retries=3`. Those accelerated
 values make failure detection practical in regression and are not evidence for
 production-default detection time.
@@ -321,9 +320,6 @@ carrier.
 
 Important remaining TCP parity work includes:
 
-- defining a canonical simultaneous-initiation winner when both peers are
-  reachable; immediate bootstrap currently permits either authenticated TCP
-  direction to win;
 - adding exact-stream handshake/cookie replies, TCP cookie-response
   consumption, MAC1 validation, and a staged MAC2 challenge rollout so
   pre-Noise cost defense does not break older TCP peers under load;
@@ -334,8 +330,8 @@ Important remaining TCP parity work includes:
 - combining a partial write followed by a terminal send failure to prove that
   no emitted prefix is replayed, and injecting EOF after a partial receive to
   prove parser-state disposal and reconnect under that exact sequence;
-- rerunning the combined focused gate and full suite, including IPv6 and
-  dual-stack cases, against the current recovery and roaming source.
+- rerunning the complete cross-platform suite, including IPv6 and dual-stack
+  cases, against the merged recovery and roaming source.
 
 The full roaming state model and acceptance checklist are in the
 [design document](docs/TCP_TRANSPORT_DESIGN.md#roaming-and-endpoint-mobility).

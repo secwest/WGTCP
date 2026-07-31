@@ -2,7 +2,7 @@
 
 ## Current focused status (2026-07-31)
 
-The latest-tree single-NAT implementation passes **209 local source contracts**.
+The latest-tree single-NAT implementation passes **213 local source contracts**.
 Production, DEBUG, and fault-injection modules build on both Multipass/Hyper-V
 Ubuntu guests running `6.8.0-136-generic`.
 
@@ -17,12 +17,10 @@ Final rebased run `wg20260731T070427Z` passed hostile-stream and fault-injection
 both guests, including exact fatal-send targeting and restoration of the
 production module.
 
-Run `wg20260731T064611Z` recorded three focused failures in older
-dual-reachable scenarios. Each retained clean kernel logs, but immediate
-bootstrap allowed the public peer's valid outbound/DNAT connection to win while
-the assertions required the private peer's `41001` SNAT direction. These are
-unresolved simultaneous-initiation direction expectations; they do not alter
-the outbound-only single-NAT pass and are not a complete green-suite claim.
+Final focused run `wg20260731T074807Z` passed all four current NAT/recovery
+cases on both guests: single-private NAT, dual-reachable initiation with either
+authenticated winner, outbound-only address-and-port roaming, and half-open
+recovery. The report records **4 PASS, 0 FAIL, 0 SKIP** with clean kernel logs.
 
 ## Prior follow-up status (2026-07-15)
 

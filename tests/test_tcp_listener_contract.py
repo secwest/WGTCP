@@ -259,6 +259,18 @@ class TcpListenerContract(unittest.TestCase):
         self.assertLess(read_worker.rindex(clear), read_worker.index(pending))
         self.assertLess(read_worker.index(pending), read_worker.index(requeue))
 
+    def test_listener_never_calls_data_ready_before_callback_ownership(self) -> None:
+        listener = section(
+            self.socket,
+            "int wg_tcp_listener_worker(",
+            "int wg_tcp_listener4_thread(",
+        )
+        setup = "wg_setup_tcp_socket_callbacks("
+        data_ready = "wg_tcp_data_ready(new_peer_connection->sk);"
+
+        self.assertEqual(listener.count(data_ready), 1)
+        self.assertLess(listener.index(setup), listener.index(data_ready))
+
     def test_tcp_read_scheduling_is_serialized_with_socket_removal(self) -> None:
         read_worker = section(
             self.socket,

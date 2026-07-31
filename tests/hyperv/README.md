@@ -249,14 +249,20 @@ part of the focused hardening set:
 python .\tests\hyperv\regression.py `
     --keep-going `
     --only-case tcp-policy-reconnect-churn `
-    --only-case tcp-nat44-dual-router-address-roam `
+    --only-case tcp-nat44-single-private-address-roam `
     --only-case tcp-nat44-half-open-recovery `
     --only-case tcp-debug-hostile-stream
 ```
 
 The roaming helper reserves at least 600 seconds of host command time, which
 becomes a 570-second bounded guest command after the runner's cleanup margin.
-The dual-router case delays one old-path record for 110 seconds, requires a
+The current address-roam case uses one outbound-only private peer, no DNAT, and
+changes the observed NAT tuple from `192.0.2.1:41001` to
+`192.0.2.129:41002`. Historical dual-router evidence below describes an older
+two-device surrogate and is not the current default case.
+
+The historical dual-router helper reserves at least 600 seconds of host command
+time. It delays one old-path record for 110 seconds, requires a
 12-second exact-tuple pre-stage baseline and separate 12-second
 automatic-authentication gates after initial and post-`FwMark` establishment,
 and retains continuous 16-second quiet windows before stale release and before

@@ -1465,13 +1465,6 @@ int wg_tcp_listener_worker(struct wg_device *wg, struct socket *tcp_socket)
 				matched_peer = NULL;
 			rcu_read_unlock();
 		}
-		if (found)
-			if (!skb_queue_empty(&new_peer_connection->sk->sk_receive_queue)) {
-				wg_dbg("wg_tcp_listener_worker found lingering data, calling wg_tcp_data_ready()\n");
-				wg_tcp_data_ready(new_peer_connection->sk);
-			}
-
-
 		/* FIX: Both matched and unmatched peers need temp peer creation.
 		 * Original code dropped unmatched connections as "martians" which
 		 * prevented first TCP handshakes (endpoint unknown before handshake).

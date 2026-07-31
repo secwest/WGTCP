@@ -647,7 +647,7 @@ Run the focused reconnect, roaming, half-open, and hostile-stream set with:
 python ./tests/hyperv/regression.py `
     --keep-going `
     --only-case tcp-policy-reconnect-churn `
-    --only-case tcp-nat44-dual-router-address-roam `
+    --only-case tcp-nat44-single-private-address-roam `
     --only-case tcp-nat44-half-open-recovery `
     --only-case tcp-debug-hostile-stream
 ```

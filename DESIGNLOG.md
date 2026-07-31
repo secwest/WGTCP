@@ -269,7 +269,7 @@ roaming claims.
 
 ### 2026-07-31 - Authenticated accepted-carrier ownership
 
-The NAT branch was integrated through WireguardTCP `a1f93da`, preserving the
+The NAT branch was integrated through WireguardTCP `58441e1`, preserving the
 latest TCP source split. The operational topology removes the earlier reverse-DNAT
 requirement: a private peer creates the only connection, while the reachable
 peer identifies and adopts that accepted stream after WireGuard authentication.
@@ -550,17 +550,18 @@ The `single-private` topology is the stronger operational model:
 - when the SNAT source port changes, the next authenticated generation replaces
   the carrier and the prior accepted socket is retired.
 
-Final rebased Hyper-V run `wg20260731T070252Z` passed this model independently on both Ubuntu
+Final rebased Hyper-V run `wg20260731T074807Z` passed this model independently on both Ubuntu
 guests. The test observed `41001` to `41002` source-port rebinding,
 bidirectional traffic before and after the change, accepted-carrier promotion,
 old-carrier retirement, and no severe kernel messages.
 
 When both peers are publicly reachable, immediate bootstrap permits either
-valid TCP direction to win. The older dual-reachable assertions require the
-SNAT direction specifically, so run `wg20260731T064611Z` observed established
-reverse/DNAT carriers but failed those direction-specific checks. A future
-simultaneous-initiation policy must either select a canonical carrier direction
-or those tests must accept either authenticated winner.
+valid TCP direction to win. The active authenticated carrier is authoritative;
+the other direction is not required to remain established. The dual-reachable
+regression detects the winner, validates its matching NAT/conntrack evidence,
+and requires bidirectional tunnel traffic. The same final run also passed
+outbound-only address-and-port roaming from `192.0.2.1:41001` to
+`192.0.2.129:41002`.
 
 ## Network namespaces, routes, and socket marks
 
