@@ -12,8 +12,10 @@
 | NAT44 follow-up | `wg20260714T005957Z`: strengthened guest-local dual-reachable SNAT/DNAT case passed on both guests |
 | Policy/half-open follow-up | In mixed focused run `wg20260714T070320Z`, policy churn and half-open recovery each passed on both guests; that run was not a complete green gate because an older dual-router case revision failed |
 | Dual-router follow-up | `wg20260714T084959Z`: corrected same-identity two-carrier surrogate passed on both guests, 1 PASS, 0 FAIL, 0 SKIP in 238.103 seconds |
-| Current source validation | 205 local source contracts pass; the last two-guest build predates the final remote writer/parser/handoff integration, module pin, and reopen-quarantine guard |
-| Current validation boundary | The runner registers 39 cases. A fresh synchronized guest build, combined focused gate, and green 39-case full regression remain pending for the final source, including IPv6 and dual-stack coverage |
+| Current source validation | 213 local source and contract tests pass; production `W=1` WSL build passes; production, DEBUG, and fault variants build on both Hyper-V guests |
+| Current NAT/recovery validation | `wg20260731T074807Z`: single-private NAT, dual-reachable initiation, outbound-only address/port roaming, and half-open recovery passed; 4 PASS, 0 FAIL, 0 SKIP with clean kernel logs |
+| Current hostile-stream validation | `wg20260731T070427Z`: parser, short-write, exact fatal-send, replacement-carrier recovery, and production-module restoration passed on both guests |
+| Current validation boundary | The current source has a green focused NAT/recovery gate, not a rerun of every historical full-regression case; arbitrary provider NAT, long soaks, VRF/namespace move, and broader kernel/distribution coverage remain open |
 | Scope | Linux kernel module, Linux generic-netlink control path, modified `wg` tools |
 | Maturity | Experimental research prototype |
 | Default transport | UDP |
@@ -98,14 +100,13 @@ direction removal re-arms a surviving stream, and active release purges parser
 and send state before retry. An internal detach invariant failure retains an
 inert quarantined peer/socket instead of freeing callback-reachable memory.
 
-Focused runtime coverage now includes repeated policy churn, accelerated
-half-open recovery, and a dual-router address-change surrogate. The surrogate
-uses two WireGuard devices with the same private key and does not represent
-same-device movement or authenticated socket promotion. Run
-`wg20260714T084959Z` passed that narrower case on both VMs; the combined focused
-and full gates for this follow-up source, including fresh IPv6 coverage, remain
-pending. The current runner registers 39 cases; no green 39-case full result is
-claimed for this source.
+Current focused runtime coverage includes outbound-only accepted-carrier
+promotion, source-port and source-address roaming, simultaneous
+dual-reachable initiation, and accelerated half-open recovery. Run
+`wg20260731T074807Z` passed all four cases on both VMs with clean kernel logs.
+The historical 36-case campaign and dual-router surrogate remain useful for
+broader compatibility and stale-data context, but the current source has not
+rerun every case in one full campaign.
 
 ## Goals
 
@@ -147,7 +148,7 @@ uses the same carrier. The UDP implementation remains present and the send path
 branches immediately before outer transport transmission. See
 [`device.h`](../kernel/device.h#L62-L90),
 [`device.c`](../kernel/device.c#L37-L77), and
-[`socket.c`](../kernel/socket.c).
+[`wg_tcp.c`](../kernel/wg_tcp.c).
 
 ### Control plane
 
@@ -258,7 +259,7 @@ in a small record:
 
 The definitions are in [`socket.h`](../kernel/socket.h#L36-L58). The checksum
 is an XOR/rotate discriminator with a fixed constant, implemented in
-[`socket.c`](../kernel/socket.c). It helps locate record boundaries;
+[`wg_tcp.c`](../kernel/wg_tcp.c). It helps locate record boundaries;
 it is not a MAC and must never be treated as authentication. Only the enclosed
 WireGuard message receives cryptographic authentication.
 
@@ -289,7 +290,7 @@ WireGuard message receives cryptographic authentication.
    removal and reconnect scheduling.
 
 The record write path and callback-driven draining are in
-[`socket.c`](../kernel/socket.c).
+[`wg_tcp.c`](../kernel/wg_tcp.c).
 
 ### Receive path
 
@@ -317,7 +318,7 @@ The record write path and callback-driven draining are in
    failure for that exact socket. The same rule applies while synchronizing a
    header, so stale parser state cannot be carried into a replacement stream.
 
-See [`socket.c`](../kernel/socket.c) and
+See [`wg_tcp.c`](../kernel/wg_tcp.c) and
 [`receive.c`](../kernel/receive.c#L908-L960).
 
 ## Target connection lifecycle
@@ -367,7 +368,7 @@ socket. Reconnect requests are queue-only so they are
 safe from authenticated receive/NAPI context; teardown claims the exact socket
 being removed and a stopping barrier prevents retry work from resurrecting a
 peer during interface or device shutdown. See
-[`socket.c`](../kernel/socket.c).
+[`wg_tcp.c`](../kernel/wg_tcp.c).
 
 The terminal-I/O helper takes the peer TCP lock and compares the supplied
 socket with the currently published socket before claiming work. A matching
@@ -387,17 +388,18 @@ connection from an unknown source into a temporary peer object. That object has
 only the stream parser, queues, callbacks, and enough device context to process
 a WireGuard handshake. The receive path deliberately does not own or delete
 provisional list entries and does not adopt an arbitrary `skb->sk` socket.
-A valid Noise-authenticated packet carries a device-local connection ID used
-to attempt a tracked-carrier authentication mark and can update the configured
-peer's future dial IP. The current void lookup does not atomically bind that
-carrier to the peer or make endpoint learning conditional on a successful
-claim. It cannot replace the configured remote listen port with the observed
-ephemeral TCP source port. A future responder-only design still needs a new,
-explicitly synchronized ownership-transfer protocol before general NAT roaming
-can be supported.
+A valid Noise-authenticated packet carries a device-local connection ID. The
+receive path marks that tracked carrier authenticated, releases its
+pre-authentication accounting, preserves the configured remote listen port,
+and records only the authenticated IP for future dialing. It then queues
+process-context promotion. Promotion claims the exact provisional entry,
+rechecks its generation, transfers its socket, tuple, callbacks, and parser
+ownership to the configured peer, and retires any displaced inbound or outbound
+carrier. An older connection ID cannot displace a newer authenticated accepted
+carrier.
 
 The provisional accept and cleanup paths are in
-[`socket.c`](../kernel/socket.c). The transport-gated handshake endpoint logic
+[`wg_tcp.c`](../kernel/wg_tcp.c). The transport-gated handshake endpoint logic
 is in [`receive.c`](../kernel/receive.c).
 
 ### Concurrency model
@@ -409,7 +411,7 @@ protected by a spinlock and RCU operations. Claiming removes the entry once;
 the claimant is the sole owner that quiesces and destroys it. Cleanup cannot
 claim a newly published entry until the listener finishes installing callbacks,
 checking queued data, and releasing its initialization handoff. See
-[`peer.h`](../kernel/peer.h) and [`socket.c`](../kernel/socket.c).
+[`peer.h`](../kernel/peer.h) and [`wg_tcp.c`](../kernel/wg_tcp.c).
 
 `wg_tcp_state_change`, `wg_tcp_data_ready`, and `wg_tcp_write_space` take the
 read side of `sk_callback_lock` before their only `sk_user_data` load and retain
@@ -538,9 +540,9 @@ also contained an older failing dual-router revision.
 Corrected run `wg20260714T084959Z` passed the isolated
 `tcp-nat44-dual-router-address-roam` case on both guests: **1 PASS, 0 FAIL, 0
 SKIP** in 238.103 seconds. It is a same-identity two-carrier surrogate, not a
-same-device migration proof. A combined focused rerun and full regression,
-including fresh IPv6 and dual-stack coverage, remain pending for the current
-follow-up source.
+same-device migration proof. At that historical point, a combined focused
+rerun and full regression were still pending. The current focused results are
+recorded in the document-status table above.
 
 The current strengthened harness identifies the physical topology as
 `independent-outbound-pair`. It extends the staged-record delay to 110 seconds,
@@ -557,10 +559,11 @@ initiation rather than TCP-carrier ownership.
 1. **Make transitions transactional.** A live UDP-to-TCP or TCP-to-UDP change
    must create the new listeners and peer state before committing the mode, then
    tear down the old carrier. The kernel currently rejects live changes.
-2. **Implement authenticated carrier binding and promotion.** A live accepted
-   connection ID must bind once to exactly one configured peer before endpoint
-   learning, active-carrier publication, or duplicate retirement. General
-   responder-only and NAT ephemeral-port roaming remain incomplete.
+2. **Broaden authenticated promotion validation.** Exact accepted-carrier
+   promotion, generation ordering, source-port rebinding, address roaming, and
+   old-carrier retirement are implemented and pass the single-private focused
+   gate. Stress simultaneous candidates, repeated churn, provider NATs, and
+   teardown races before treating the mechanism as production-general.
 3. **Restore pre-authentication cost defense.** Add exact-stream handshake and
    cookie replies, TCP cookie-response consumption, MAC1 validation, and a
    staged MAC2 challenge rollout. Existing accept caps bound socket state but
@@ -583,7 +586,7 @@ initiation rather than TCP-carrier ownership.
 Current examples of these gaps are visible in
 [`netlink.c`](../kernel/netlink.c#L832-L909),
 [`receive.c`](../kernel/receive.c#L418-L484),
-[`socket.c`](../kernel/socket.c), and
+[`wg_tcp.c`](../kernel/wg_tcp.c), and
 [`peer.h`](../kernel/peer.h).
 
 ## Roaming and endpoint mobility
@@ -607,8 +610,11 @@ the address itself never authenticates the peer.
   throttle, a five-second idle deadline, and a 30-second absolute
   pre-authentication lifetime. Authentication releases admission accounting and
   exempts that carrier from those pre-authentication deadlines.
-- Socket promotion is absent. Learning a dial IP does not transfer the accepted
-  socket or make arbitrary NAT source ports usable as configured listen ports.
+- Authenticated accepted sockets are promoted in process context to the
+  configured peer. The observed IP may update the future dial target, while
+  the configured remote listen port remains separate from the ephemeral source
+  port. A newer device-local connection generation displaces older accepted
+  carriers.
 - Route cache state is reset when an endpoint changes.
 - Route, netdevice, source-address, uplink, and live `FwMark` changes schedule
   reconnect work; listener and accepted-stream marks are refreshed.
@@ -622,7 +628,7 @@ the address itself never authenticates the peer.
 References:
 [`receive.c`](../kernel/receive.c#L487-L536),
 [`receive.c`](../kernel/receive.c#L908-L935), and
-[`socket.c`](../kernel/socket.c).
+[`wg_tcp.c`](../kernel/wg_tcp.c).
 
 ### Current parity status
 
@@ -630,30 +636,29 @@ References:
 |---|---|---|
 | Static IPv4 endpoint | Cross-host smoke, stock-tool management, and deterministic stream-fault recovery passed | Longer soak, physical-carrier impairment, and kernel breadth |
 | Static IPv6 endpoint | Independent v4/v6 listeners plus ULA and scoped link-local IPv6 traffic passed | GUA breadth, namespace churn, VRF, and kernel breadth |
-| Responder with newly observed source | Unsupported; provisional sockets are bounded but never promoted | Implement atomic carrier-to-peer binding, publication, and retirement |
-| NAT with persistent keepalive | A short guest-local dual-reachable NAT44 case advanced two-second keepalives in both directions and recovered traffic after conntrack flush plus SNAT `41001` to `41002` replacement | Validate long-lived behavior, other NAT implementations, IPv6 translation, and responder-only/no-forward operation |
+| Responder with newly observed source | Authenticated accepted carrier is promoted to the configured peer and used bidirectionally; single-private NAT passed without DNAT | Stress repeated candidates, hostile churn, teardown races, and provider NATs |
+| NAT with persistent keepalive | Single-private SNAT-only NAT44 passed keepalive, bidirectional traffic, source-port rebinding, address roaming, reacquisition, and old-carrier retirement | Validate long-lived behavior, other NAT implementations, IPv6 translation, and provider timeouts |
 | Half-open established carrier | Pure-drop case passed exact `TCP_INFO`/`RetransSegs` loss observation, conntrack-correlated tuple replacement, old-tuple absence, and bidirectional recovery | Validate production-default timing, long-lived NATs, repeated failures, varied kernels, and physical networks; recorded timing used accelerated namespace retry sysctls |
 | Configured peer IP changes | Two-underlay migration passed; repeated policy churn added 11 transitions and 20 exact reconnect proofs per guest | Add long-duration operation, route-race stress, and the pending current-source full gate |
-| Authenticated peer IP changes | Future dial IP updates only after Noise authentication; a same-key two-device carrier surrogate blocked a delayed old-record rollback | Add same-device socket promotion, arbitrary NAT, repeated hostile churn, and shared-token duplicate retirement |
-| Peer source port changes | Forced SNAT `41001` to `41002` recovery preserved configured public port `52241`, but the stale accepted `41001` carrier remained established | Add atomic authenticated promotion, winner publication, and stale-carrier retirement for general NAT ephemeral-port parity |
+| Authenticated peer IP changes | Outbound-only single-device move from `192.0.2.1` to `192.0.2.129` passed authenticated promotion without stale rollback | Add arbitrary/provider NAT, repeated hostile churn, and longer soak |
+| Peer source port changes | SNAT `41001` to `41002` recovery promoted the new generation, preserved the configured listen port, and retired the old accepted carrier | Stress repeated rebinding and NAT timeout behavior |
 | Asymmetric listen ports | Passed with different configured ports | Broaden topology and failure-injection coverage |
 | Local uplink/address changes | Address and netdevice notifiers reconnect; repeated route/source/uplink/mark churn passed 11 transitions, 20 reconnect proofs, and eight mark-specific SYN proofs per guest | Add namespace teardown, route-race stress, and longer soak |
 | TCP network namespaces | Isolated IPv4, ULA IPv6, and scoped link-local IPv6 tunnels passed | Add GUA breadth, namespace teardown, device-move, and VRF coverage |
 | TCP full-tunnel policy routing | Marked sockets, recursion guard, and live `FwMark` reconnect passed | Validate distribution-specific `wg-quick` firewall/connmark policy and repeated changes |
-| Simultaneous inbound/outbound connect | Deterministic Noise-initiation tie-break implemented | Stress actual collision, retirement, and teardown races |
-| Terminal stream I/O | Exact-socket cleanup and retry ownership implemented for EOF, hard receive, zero send, and hard send; exact one-shot send fault is isolated to the fault artifact | Run the refreshed focused fault gate; add short-write-then-fatal and partial-receive-then-EOF injections |
+| Simultaneous inbound/outbound connect | Dual-reachable regression passes with either authenticated carrier direction retained and bidirectional tunnel traffic | Stress collision timing, duplicate retirement, and teardown races |
+| Terminal stream I/O | Exact-socket cleanup and retry ownership implemented for EOF, hard receive, zero send, and hard send; exact one-shot send fault is isolated to the fault artifact and passed its focused gate | Add short-write-then-fatal and partial-receive-then-EOF injections |
 | Mixed TCP/UDP peers | Not supported per interface | Separate interfaces, or a future per-peer UAPI revision |
 
-Explicit netlink endpoint configuration now calls
+Explicit netlink endpoint configuration calls
 `wg_socket_set_peer_endpoint_configured()`. It replaces `peer_endpoint` on every
 configured change and shuts down an active outbound stream; the existing close
 and retry workers then own cleanup and dial the new target. Authenticated
-endpoint learning currently records the observed tuple before a void
-connection-ID lookup attempts to mark a matching accepted carrier authenticated.
-It copies only the address into the next dial target, restores the configured
-listen port, and queues a safe reconnect when that target changes. This
-preserves operator port configuration, but the ordering is why the target
-design requires an atomic carrier claim before endpoint mutation.
+endpoint learning associates a nonzero device-monotonic connection ID with the
+accepted carrier. It copies only the authenticated address into the next dial
+target, preserves the configured listen port, and queues process-context
+promotion. Promotion rechecks the generation, transfers the exact socket and
+callback ownership, and retires the displaced carrier.
 
 Run `wg20260714T010310Z` completed with **36 PASS, 0 FAIL, 0 SKIP**. It passed
 configured two-underlay migration, authenticated address learning, asymmetric
@@ -674,9 +679,10 @@ SNAT rule. Two-second persistent keepalives advanced, bidirectional tunneled
 traffic recovered, and the configured `52241` peer port was preserved. The old
 accepted `41001` carrier remained visible after recovery. A forced reverse
 reconnect produced a new SYN through forward `52241` and kept traffic usable.
-This proves the specific dual-reachable, explicitly forwarded topology; it
-does not prove responder-only/no-forward promotion, stale-carrier retirement,
-arbitrary NAT roaming, or general NAT parity.
+That older run proves only its dual-reachable, explicitly forwarded topology;
+by itself it did not prove responder-only/no-forward promotion or
+stale-carrier retirement. The later current focused gate supplies those two
+results; arbitrary provider NAT behavior remains outside both runs.
 
 Focused run `wg20260714T070320Z` provides repeated local-policy and exact
 half-open evidence. Each guest's policy case established a quiet exact carrier
@@ -721,7 +727,7 @@ change. That change must create a different outbound tuple carrying the new
 mark through the new DNAT, remove the prior established tuple, avoid the old
 router, and preserve bidirectional traffic.
 
-This is explicitly a `same_identity_two_carrier_surrogate`. It exercises stale
+This historical case is explicitly a `same_identity_two_carrier_surrogate`. It exercises stale
 authenticated-data ordering, future dial-target protection, configured-port
 preservation, path-specific routing, and marked reconnect after an address
 change. It does not move one live WireGuard device, transfer a provisional
@@ -730,7 +736,14 @@ the target promotion algorithm below. A broader focused rerun and the full
 suite, including fresh IPv6 and dual-stack validation for this source, remain
 pending.
 
-### Target complete-roaming algorithm
+### Historical target complete-roaming algorithm
+
+The following proposal predates the 2026-07-31 promotion implementation. Its
+refcounted-carrier redesign and shared cross-peer arbitration token were not
+adopted. The current implementation instead transfers exact provisional-peer
+socket ownership in process context and orders accepted candidates with
+device-monotonic connection IDs. Keep this section as design history, not as a
+description of missing current functionality.
 
 The current implementation covers admission, authenticated address learning,
 endpoint-state separation, route-triggered reconnect, and the Noise-initiation
@@ -845,8 +858,9 @@ Implemented controls include:
   before returning `EPIPE`. The runner writes all selectors before arming the
   final one-shot flag, requires its counter and arm reset, and then requires a
   different replacement tuple. Production and ordinary DEBUG artifacts contain
-  neither the parameters nor their metadata. Runtime validation of this new
-  exact selector remains in the pending combined focused gate.
+  neither the parameters nor their metadata. Focused run
+  `wg20260731T070427Z` passed this exact selector and replacement recovery on
+  both guests.
 
 Remaining controls include:
 
@@ -856,10 +870,10 @@ Remaining controls include:
   successful Noise authentication; the gap increases pre-authentication
   CPU/resource denial-of-service exposure and is not an authentication bypass.
   Operators seeking TCP-only exposure must block the companion UDP port.
-- Implement authenticated carrier binding before promotion. Authenticated
-  provisional entries currently lose admission accounting but do not acquire a
-  peer identity or per-peer duplicate limit, so promotion must also bound and
-  retire authenticated duplicates.
+- Stress authenticated carrier binding and promotion with repeated competing
+  candidates, teardown races, provider NATs, and long-running duplicate
+  pressure. The focused single-private gate proves the implemented exact
+  handoff and retirement path, not every hostile concurrency pattern.
 - Extend the focused fault checks to repeated corrupt streams, adversarial
   segmentation, multi-flow pressure, teardown races, and long soaks under
   KASAN, KCSAN, and lockdep. Add a combined short-write-then-fatal send case to
@@ -872,7 +886,7 @@ Remaining controls include:
 
 These are design-closure requirements, not optional optimizations. Relevant
 current paths include [`receive.c`](../kernel/receive.c#L421-L484) and
-[`socket.c`](../kernel/socket.c).
+[`wg_tcp.c`](../kernel/wg_tcp.c).
 
 ### TCP cookie rollout
 
@@ -945,7 +959,8 @@ operating envelope and replication index.
   nonblocking short writes.
 - Connection close/error callbacks schedule cleanup and reconnect.
 - Optional diagnostics expose cwnd, ssthresh, RTT, RTO, retransmission state,
-  socket memory, and queue pressure. See [`socket.c`](../kernel/socket.c).
+  socket memory, and queue pressure. See
+  [`wg_tcp_debug.c`](../kernel/wg_tcp_debug.c).
 
 ### Required controls for bounded behavior
 
@@ -1111,7 +1126,7 @@ Before making a resilience claim, extend the fixed evidence contracts to:
 | Random-loss bulk/transactional traffic | Benchmark both modes on the actual path |
 | Many unrelated inner flows share one peer | Treat TCP mode as experimental until fairness and pressure stress are complete |
 | Production full-tunnel policy routing or complex TCP namespace/VRF layouts | The focused mark/recursion/reconnect test passed; still validate distribution-specific firewall, connmark, namespace, and VRF policy |
-| Production roaming or automatic endpoint mobility | The two-carrier surrogate protects a learned target from one delayed old record, but complete same-device promotion and reconnect-target parity first |
+| Production roaming or automatic endpoint mobility | Same-device accepted-carrier promotion and address/port roaming pass the focused namespace gate; validate provider NATs, repeated hostile races, IPv6 translation, long soaks, and broader kernels first |
 
 ## Implementation map
 
@@ -1119,8 +1134,9 @@ Before making a resilience claim, extend the fixed evidence contracts to:
 |---|---|
 | Transport UAPI | `include/uapi/linux/wireguard.h`, `tools/uapi/linux/linux/wireguard.h` |
 | Kernel device selection | `kernel/device.h`, `kernel/device.c`, `kernel/netlink.c` |
-| TCP framing and sockets | `kernel/socket.h`, `kernel/socket.c` |
-| Handshake/data integration | `kernel/send.c`, `kernel/receive.c` |
+| TCP framing and sockets | `kernel/socket.h`, `kernel/wg_tcp.h`, `kernel/wg_tcp.c` |
+| TCP diagnostics and isolated faults | `kernel/wg_tcp_debug.h`, `kernel/wg_tcp_debug.c` |
+| Handshake/data integration | `kernel/send.c`, `kernel/receive.c`, `kernel/wg_tcp.c` |
 | Peer TCP state | `kernel/peer.h`, `kernel/peer.c` |
 | Tool parsing and netlink | `tools/config.c`, `tools/containers.h`, `tools/ipc-linux.h` |
 | Display/config output | `tools/show.c`, `tools/showconf.c` |
@@ -1148,8 +1164,8 @@ parity claim still requires every remaining item.
 - [x] Callback wrapper lifetime is synchronized against teardown, terminal I/O
       claims only the exact published socket, and connect failure reserves one
       post-release retry owner.
-- [ ] The refreshed exact-4-tuple terminal-send fault passes the combined
-      focused runtime gate; short-write-then-fatal and
+- [x] The refreshed exact-4-tuple terminal-send fault passes its focused
+      runtime gate; short-write-then-fatal and
       partial-receive-then-EOF combinations are still not injected.
 - [ ] Repeated adversarial segmentation, multi-record coalescing, multi-flow
       churn, and long-duration teardown races pass across broader kernels.
@@ -1167,20 +1183,21 @@ parity claim still requires every remaining item.
       path-specific preplumb, explicit old-device cutoff, one delayed
       authenticated-data delivery, rollback blocking, configured-port
       preservation, and a marked replacement through the new DNAT.
-- [ ] Authenticated carrier binding/promotion, responder-only/no-forward NAT,
-      same-device movement, long-lived keepalive and production-timed half-open
-      behavior, and arbitrary ephemeral-port roaming pass across IPv4/IPv6 and
-      varied NATs.
+- [x] Authenticated accepted-carrier promotion, responder-only/no-forward NAT,
+      same-device source-address/port movement, and old-carrier retirement pass
+      the focused IPv4 SNAT-only topology.
+- [ ] Long-lived keepalive, production-timed half-open behavior, repeated
+      hostile churn, IPv6 translation, and varied provider NATs pass.
 - [x] Remote dial IP, remote listen port, observed ephemeral source, and local
       route/source are represented separately.
 - [x] Recorded `FwMark`, full-tunnel recursion, live route/source/uplink,
       random-port, IPv6, and dual-stack cases pass.
 - [x] Scoped link-local IPv6 endpoints, tool output, outer TCP tuples, and
       bidirectional traffic are validated at runtime.
-- [ ] The current callback/recovery/roaming follow-up source passes a fresh
-      combined focused and 39-case full regression, including IPv6 and
-      dual-stack cases. Earlier-source IPv6 evidence remains recorded but is
-      not this gate.
+- [x] The current callback/recovery/roaming source passes the four-case focused
+      NAT/recovery gate and the refreshed hostile-stream/fatal-send gate.
+- [ ] The current source passes a fresh complete regression across the entire
+      registry; earlier-source IPv6/full-suite evidence remains historical.
 - [x] Exact callback ownership has per-direction owner tokens, publish-last
       setup, flag-gated reset, exact inbound/outbound removal claims,
       alias-safe one-shot release, survivor re-arming, and fail-closed
@@ -1217,32 +1234,35 @@ For this snapshot:
    TCP persistence.
 8. Namespace-isolated IPv4/ULA IPv6/scoped link-local TCP, full-tunnel
    recursion avoidance, and live mark/route/source/uplink reconnect passed the
-   earlier focused lab. Validate target firewall, connmark, namespace, and VRF
-   rules; the current follow-up source still awaits its fresh IPv6/full gate.
-9. Do not rely on provisional peer promotion. The unsafe legacy block has been
-   removed and no authenticated socket-transfer protocol is implemented.
+   recorded lab. Validate target firewall, connmark, namespace, and VRF rules;
+   the current source has not rerun the entire historical full gate.
+9. A private peer may initiate through ordinary SNAT with no inbound forward.
+   The reachable peer promotes the exact accepted carrier only after WireGuard
+   authentication. Keep a persistent keepalive on the private peer when the
+   NAT mapping must survive idle periods.
 10. Treat configured migration, authenticated target learning, live reconnect,
     asymmetric ports, IPv6, configuration round trips, focused stream faults,
-    and dual-reachable NAT44 recovery as validated only for their recorded
-    topologies. The NAT case required explicit DNAT and retained a stale accepted
-    carrier. Do not infer authenticated carrier promotion, responder-only
-    operation, general NAT roaming, or hostile repeated-churn parity.
+    and NAT44 recovery as validated only for their recorded topologies. The
+    latest focused NAT gate used no DNAT and retired the displaced accepted
+    carrier. Do not infer arbitrary-provider NAT or hostile repeated-churn
+    parity.
 11. Keep optional kernel diagnostics off except during isolated debugging;
    `WG_TCP_VERBOSE` can expose secrets and `WG_TCP_DIAG` is unrate-limited and
    can perturb measurements. Load `wireguard-fork-fault.ko` only in a serialized
    lab; its module-global destructive controls are not a supported ABI.
 12. Treat the published performance tables as leads for replication, not as a
    production SLA or proof of TCP-over-TCP meltdown immunity.
-13. Provide bidirectional inbound TCP reachability on each peer's configured
-    port, using an explicit port forward for a NATed peer. Do not assume ordinary
-    one-sided NAT/responder behavior without that forward.
-14. Treat the two-carrier run as a stale-data and reconnect-target surrogate.
-    It used two devices sharing a private key, not one device moving between
-    uplinks, and does not prove accepted-socket promotion or same-device carrier
-    publication.
+13. At least the initiating peer must have a reachable TCP endpoint for its
+    remote peer. A responder that only accepts the authenticated carrier need
+    not have a configured endpoint or inbound reachability to the initiator.
+14. Treat the historical two-carrier run as a stale-data and reconnect-target
+    surrogate. It used two devices sharing a private key, not one device moving
+    between uplinks. The later single-private address-roam case, not that
+    surrogate, is the evidence for accepted-socket promotion and same-device
+    movement.
 15. Do not derive production half-open timeouts from the recorded regression.
     It intentionally used namespace-local `tcp_retries2=5` and
     `tcp_syn_retries=3` to shorten exact failure observation.
-16. The exact-4-tuple `EPIPE` selector reduces accidental fault consumption but
-    remains fault-artifact-only test machinery. The combined short-write/fatal
-    and partial-receive/EOF sequences remain unvalidated.
+16. The exact-4-tuple `EPIPE` selector remains fault-artifact-only test
+    machinery. Its focused fatal-send/recovery case passed; the combined
+    short-write/fatal and partial-receive/EOF sequences remain unvalidated.

@@ -94,8 +94,10 @@ perf-test/
 
 ## Comparing versions
 
-Each module/userland change should produce a fresh image version (see the
-parent repo's `azure-image/RUNBOOK.md`). To compare versions:
+Each module/userland change should produce a fresh image version. The
+historical parent repository's image-build runbook is not included in this
+standalone tree; use the gallery prerequisites in [`RUNBOOK.md`](RUNBOOK.md).
+To compare versions:
 
 1. Build & publish a new gallery image (`<ver+1>`).
 2. Re-run the campaign against the same RG with `-ImageVersion <ver+1>`,

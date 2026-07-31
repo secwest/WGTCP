@@ -23,8 +23,9 @@ messages in framed TCP streams. Operators select TCP per interface with
 
 The main benefit is TCP reachability while retaining familiar WireGuard
 administration. The tradeoffs are connection state, head-of-line blocking, and
-experimental roaming and NAT behavior. It is not HTTP or TLS camouflage, and
-stock WireGuard UDP remains the preferred mode when it is available.
+an experimental TCP roaming/NAT implementation. It is not HTTP or TLS
+camouflage, and stock WireGuard UDP remains the preferred mode when it is
+available.
 
 New users should follow the
 **[WireGuard TCP QuickStart](QUICKSTART.md)** to install the module and
@@ -33,32 +34,18 @@ site-to-site, asymmetric-port, dual-stack, and NAT templates.
 
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
-> The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260714T010310Z` passed
-> every recorded UDP and TCP case: **36 PASS, 0 FAIL, 0 SKIP** in 558.520
-> seconds across 541 logged commands. TCP coverage included asymmetric listen
-> ports, configured migration, authenticated target learning, live route,
-> source-address, uplink, and `FwMark` reconnects, full-tunnel recursion
-> avoidance, IPv6/dual-stack and scoped link-local carriers, live configuration
-> application and SaveConfig serialization, a 40-second authenticated-carrier lifetime, and
-> dual-reachable NAT44 with live source-port remapping, and isolated forced
-> short-write/parser/queue-pressure recovery. That evidence
-> covers the tested combinations and scenarios, not
-> every kernel release, controller, NAT, or hostile stream condition. TCP mode
-> remains experimental and is not a claim of complete WireGuard feature parity.
-> Focused follow-up `wg20260713T225629Z` then passed a real `wg-quick` down/up
-> reload and the guest-owned fault-module lifecycle on both VMs.
-> The current follow-up source bootstraps an established carrier into normal
-> Noise authentication,
-> future dial-IP learning with configured-port preservation, exact per-socket
-> callback ownership, repeated policy churn, exact half-open recovery, and a
-> same-identity two-carrier roaming surrogate. The policy and half-open cases
-> passed on both VMs in focused run `wg20260714T070320Z`; corrected dual-router
-> run `wg20260714T084959Z` passed its one case on both VMs. The integrated tree
-> passes 205 source contracts. The final exact-owner, remote writer/parser,
-> provisional-handoff, module-pin, and reopen-quarantine source still awaits a
-> synchronized guest build, after which a fresh combined focused run and full
-> regression remain required; the earlier 36-case campaign remains the latest
-> complete green gate.
+> The merged source passes **213 local source and contract tests**. Production,
+> DEBUG, and isolated fault modules built on both Ubuntu 24.04 Hyper-V guests,
+> and the production module also built with `W=1` against the prepared WSL
+> kernel tree. Final focused run `wg20260731T074807Z` passed all four current
+> NAT/recovery cases: outbound-only single-private NAT, dual-reachable
+> initiation with either authenticated direction retained, address-and-port
+> roaming, and exact half-open recovery (**4 PASS, 0 FAIL, 0 SKIP**) with clean
+> kernel logs. Run `wg20260731T070427Z` separately passed hostile-stream,
+> short-write, exact fatal-send, recovery, and production-module restoration.
+> The older 36-case full campaign remains useful broad compatibility evidence,
+> but it predates accepted-carrier promotion. These results cover the tested
+> Linux/nftables topologies, not every kernel, controller, NAT, or middlebox.
 > See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
 > [design document](docs/TCP_TRANSPORT_DESIGN.md). Investigation decisions and
@@ -73,11 +60,11 @@ site-to-site, asymmetric-port, dual-stack, and NAT templates.
 | UAPI | Appends `WGDEVICE_A_TRANSPORT` to the Linux generic-netlink device attributes |
 | Wire format | Adds an 8-byte TCP record header with total length, type, flags, and a framing checksum |
 | Cryptography | Reuses the standard WireGuard Noise handshake, AEAD data messages, replay checks, and key rotation |
-| TCP lifecycle | Adds listeners, nonblocking outbound connect, first-established Noise bootstrap, per-peer read/write workers, exact callback-owner tokens, exact-socket terminal-I/O cleanup, and single-owner retry |
+| TCP lifecycle | Adds listeners, nonblocking outbound connect, process-context authenticated bootstrap/promotion, per-peer read/write workers, exact callback-owner tokens, exact-socket terminal-I/O cleanup, and single-owner retry |
 | Receive integration | Reconstructs endpoint metadata and feeds decoded records into the existing WireGuard receive pipeline |
-| Provisional inbound path | Accepts unknown TCP connections before identity is known with device/per-source caps, per-source throttling, and authentication deadlines; authenticated carriers are retained, but socket promotion is not implemented |
+| Provisional inbound path | Accepts unknown TCP connections under device/per-source caps, throttling, and authentication deadlines; authenticated traffic promotes the exact accepted carrier to its configured peer |
 | Endpoint mobility | Keeps the configured peer listen port separate from an observed ephemeral source port, learns a future dial IP only from authenticated traffic, and reconnects after relevant endpoint, route, address, uplink, and `FwMark` changes |
-| Connection collision | Uses a deterministic public-key tie-break when simultaneous TCP Noise initiations collide |
+| Connection collision | Either authenticated direction may be retained when both peers are reachable; duplicate and older-generation carriers cannot displace the current authenticated owner |
 | Configuration persistence | Canonical TCP state round-trips through `showconf`, `setconf`, and `syncconf`; the tested Ubuntu `wg-quick` also serializes it through SaveConfig |
 | Diagnostics | Optional TCP metrics include cwnd, RTT/RTO, retransmission state, and queue pressure; destructive stream faults, including an exact IPv4 4-tuple one-shot send failure, exist only in a separate lab module |
 
@@ -559,11 +546,13 @@ carrier with exact `TCP_INFO` and `RetransSegs` movement, and proved a
 conntrack-correlated replacement tuple. That mixed run also contained an older
 failing revision of the dual-router case, so it is not a complete green gate.
 
-Corrected run `wg20260714T084959Z` then passed
-`tcp-nat44-dual-router-address-roam` on both guests for **1 PASS, 0 FAIL, 0
-SKIP** in 238.103 seconds. It is scoped as a same-identity two-carrier
-surrogate. A broader focused rerun and full regression, including fresh IPv6
-coverage, remain pending for the current source.
+Corrected historical run `wg20260714T084959Z` passed the
+`tcp-nat44-dual-router-address-roam` two-device surrogate on both guests.
+Current run `wg20260731T074807Z` supersedes it for operational NAT roaming:
+the single private device changed its outbound source address and port without
+DNAT, promoted the new authenticated carrier, retired the old carrier, and
+retained bidirectional tunnel traffic. A full rerun of every historical case
+on the current source remains separate from this green focused gate.
 
 ## Diagnostics
 

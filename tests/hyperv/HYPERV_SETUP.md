@@ -8,16 +8,15 @@ loading problems. The automated entry points remain
 [`Provision-HyperV.ps1`](Provision-HyperV.ps1), and
 [`Run-HyperVRegression.ps1`](Run-HyperVRegression.ps1).
 
-## Current follow-up note (2026-07-15)
+## Current follow-up note (2026-07-31)
 
-The managed guests now run Ubuntu kernel `6.8.0-134-generic`. The current
-integrated exact-owner source passes 205 local contracts. Both guests built overlay
-`18e3aab15eb64257e73f491849133f9a332d2467c66777214cd2481e459252a7`;
-the remote writer/parser/handoff integration, callback module pin, and final
-device-reopen quarantine guard were added afterward and require one more
-provision/build pass before runtime results are accepted. The current
-registry contains 39 cases, and no green 39-case campaign has completed for
-the final source.
+The merged source passes 213 local source and contract tests. Both managed
+Ubuntu guests built the production, DEBUG, and fault-injection variants.
+Focused run `wg20260731T074807Z` passed single-private NAT, dual-reachable
+initiation, outbound-only address/port roaming, and half-open recovery:
+4 PASS, 0 FAIL, 0 SKIP with clean kernel logs. The older 36-case campaign is
+still the latest complete broad registry run; it predates authenticated
+accepted-carrier promotion.
 
 An important process correction came from an intentionally interrupted focused
 run: stopping the host runner did not necessarily stop an already spawned
@@ -697,15 +696,12 @@ The pass criteria require all of the following on each guest:
    router's forwarding chain counts a new SYN to the DNATed listener, and
    bidirectional tunnel traffic remains usable.
 
-This topology is intentionally called `dual-reachable`: the private client's
-listen service is reachable through an explicit DNAT rule, so it does not test
-ordinary responder-only operation behind NAT without a forward. It also does
-not implement or prove authenticated accepted-socket promotion. After the
-source-port rebind, `old_accepted_carrier=retained|retired` records whether the
-old server-side accepted stream is still visible, but either value is accepted.
-Flushing middlebox state does not guarantee that an endpoint immediately
-receives FIN or RST, and deterministic peer-bound duplicate-carrier retirement
-belongs to the future promotion design.
+This topology is intentionally called `dual-reachable`: both peers can
+initiate, so either authenticated direction may be retained. The case detects
+the retained direction and validates its matching SNAT or DNAT evidence.
+`single-private` is the operational no-forward contract: only the private peer
+dials through SNAT, the public peer promotes the authenticated accepted stream,
+and source-port replacement must retire the old accepted carrier.
 
 `nft` comes from the Ubuntu `nftables` package and `conntrack` from the Ubuntu
 `conntrack` package; `guest-bootstrap.sh` installs both explicitly. The test
@@ -808,8 +804,9 @@ both guests; its dual-router entry failed in the then-incomplete topology and
 queue-accounting setup. That failed entry and the later keyless-route setup
 iterations are infrastructure/test-mechanics diagnostics, not evidence of a
 WireguardTCP behavior failure. The successful `084959` run is the product
-evidence for this case. A combined focused rerun and the expanded full campaign
-remain pending for the final snapshot.
+evidence for that historical case. At that point a combined focused rerun and
+the expanded full campaign remained pending; the current four-case focused
+result is recorded at the top of this guide.
 
 The historical valid brokered-host campaign `wg20260714T010310Z` started at
 2026-07-14 01:03:10 UTC and passed all 36 cases with no failures or skips in
@@ -827,9 +824,8 @@ isolated fault artifact produced per-guest deltas of `80/4/4/437` on
 writes/prefixes/resynchronizations/queue drops, followed by successful traffic
 recovery after clearing the controls.
 
-The remaining validation boundary covers authenticated carrier promotion for
-responder-only NAT without a forward, deterministic stale-carrier retirement,
-arbitrary NAT/provider behavior, a cookie-equivalent TCP pre-authentication
+The remaining validation boundary covers arbitrary NAT/provider behavior,
+repeated hostile promotion races, a cookie-equivalent TCP pre-authentication
 cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
 coverage, long-duration multi-flow soak testing, and wider kernel-version and
 distribution breadth.

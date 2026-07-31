@@ -24,6 +24,9 @@ recovery. The report records **4 PASS, 0 FAIL, 0 SKIP** with clean kernel logs.
 
 ## Prior follow-up status (2026-07-15)
 
+This section is a historical record and is superseded by the current focused
+status above.
+
 The integrated callback-owner and roaming-startup tree passes **205 local
 source contracts** and all three guest shell harnesses pass syntax validation. Both
 Ubuntu guests compiled the production tools and modules on
@@ -150,9 +153,9 @@ preplumb were still test-mechanics work. Later isolated iterations exposed two
 more topology constraints: live listener changes return `EBUSY`, and taking
 the keyless new device down removes the route that must be preinstalled. These
 were infrastructure/harness findings, not product failures. The corrected
-`084959` pass above supersedes those failed entries as product evidence. A new
-combined focused run and a full regression campaign containing the expanded
-case list remain pending.
+`084959` pass above superseded those failed entries as product evidence. At
+that historical point a combined focused run and full expanded campaign were
+still pending; the current focused acceptance result appears at the top.
 
 ## Case results
 
@@ -204,22 +207,25 @@ address changes, route and uplink changes, source-address replacement, and two
 live `FwMark` values. The full-tunnel case verified marked endpoint routing and
 the unmarked recursion guard. The IPv6 case verified independent IPv4/IPv6
 listeners and an IPv6 outer carrier, while the lifetime case kept an
-authenticated carrier active for 40 seconds on each guest. These results cover
-the tested namespace topology and do not imply arbitrary NAT or responder-only
-socket promotion behavior.
+authenticated carrier active for 40 seconds on each guest. These historical
+results cover the tested namespace topology and did not yet include the later
+responder-only promotion implementation.
 
-The NAT44 case ran separate private-peer, router, and public-peer namespaces
-inside each guest. nftables SNATed the private peer to public source port 41001
-and DNATed public port 52241 to private listener 52221. Both directions carried
-tunnel traffic, and two-second persistent keepalive counters advanced. The
+The historical dual-reachable NAT44 case ran separate private-peer, router, and
+public-peer namespaces inside each guest. nftables SNATed the private peer to
+public source port 41001 and DNATed public port 52241 to private listener 52221.
+Both directions carried tunnel traffic, and two-second persistent keepalive
+counters advanced. The
 test atomically replaced the SNAT rule with source port 41002, flushed only the
 router namespace's conntrack state, and recovered bidirectional traffic.
 `wg show endpoints` retained configured forward 52241. A live `FwMark` change
 then forced the public peer's reverse carrier to reconnect; each router counted
 a new SYN through that forward. Both repetitions still saw the old accepted
-41001 socket locally established, so duplicate/stale-carrier retirement remains
-open. This proves only the dual-reachable topology with explicit DNAT, not
-responder-only operation without a forward or general NAT parity.
+41001 socket locally established, so duplicate/stale-carrier retirement remained
+open in that older source. It proves only the dual-reachable topology with
+explicit DNAT. The current `wg20260731T074807Z` gate separately proves
+single-private operation without a forward, source-address/port roaming, and
+old-carrier retirement.
 
 The configuration round-trip case kept all secret-bearing files inside the
 guest-local mode-0700 temporary directory with mode 0600, and emitted no
@@ -296,12 +302,13 @@ full-tunnel `FwMark` changes, ULA and scoped link-local IPv6 outer transport,
 dual-stack listeners, a 40-second authenticated carrier, dual-reachable NAT44
 with an explicit forward and one live source-port remap, and deterministic
 short-write/parser/queue-pressure recovery on the tested Ubuntu 24.04/Linux 6.8
-guests. Remaining validation and design gaps are authenticated carrier
-promotion for responder-only/no-forward NAT; deterministic stale-carrier
-retirement; arbitrary NAT/provider behavior; a cookie-equivalent TCP
-pre-authentication cost defense; VRF and namespace-move behavior; broader MTU
-and fragmentation coverage; long-duration, multi-flow soak testing; and wider
-kernel-version and distribution breadth.
+guests. The later focused gate adds authenticated carrier promotion for
+responder-only/no-forward NAT and deterministic stale-carrier retirement.
+Remaining validation and design gaps are arbitrary NAT/provider behavior,
+repeated hostile promotion races, a cookie-equivalent TCP pre-authentication
+cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
+coverage, long-duration multi-flow soak testing, and wider kernel-version and
+distribution breadth.
 
 The suite is functional rather than a performance campaign. It does not test
 physical-carrier loss or establish TCP-over-TCP meltdown resilience. The

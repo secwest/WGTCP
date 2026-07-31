@@ -292,6 +292,35 @@ instead of initiating WireGuard handshakes from socket callbacks. Peer stop
 closes both scheduling gates and synchronously drains bootstrap and promotion
 work before releasing sockets.
 
+### 2026-07-31 - Documentation model follows authenticated ownership
+
+The accepted-carrier implementation changes the minimum operational topology,
+so the documentation no longer treats the earlier dual-reachable NAT surrogate
+as a deployment requirement. A private peer needs a reachable remote endpoint
+and initiates through SNAT; the reachable peer may omit its reverse endpoint
+and adopts the exact accepted stream only after WireGuard authentication.
+
+The documents also distinguish three different evidence classes:
+
+- the historical 36-case campaign provides broad compatibility coverage for an
+  older source snapshot;
+- `wg20260731T074807Z` is the current four-case NAT/recovery acceptance gate;
+  and
+- `wg20260731T070427Z` is the current hostile-stream and fatal-send gate.
+
+When both peers are reachable, documentation does not promise an
+operator-selectable carrier direction. Either authenticated direction may be
+retained, and the tunnel must be usable over the retained carrier. A newer
+authenticated accepted-connection ID supersedes an older accepted carrier on
+the same device; this local generation rule is not described as a cross-peer
+network consensus token.
+
+Historical dual-router and pre-promotion sections remain in the design record,
+but are explicitly labeled historical. Remaining NAT claims are bounded to
+the tested Linux/nftables namespace topology: arbitrary provider behavior,
+repeated hostile races, IPv6 translation, and long-duration operation remain
+validation work.
+
 ## Appendix - Detailed architecture by subsystem
 
 ## Device-wide transport selection

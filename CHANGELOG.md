@@ -698,6 +698,21 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
   half-open recovery: 4 PASS, 0 FAIL, 0 SKIP on both guests with clean kernel
   logs.
 
+### Documentation consistency audit
+
+- Updated the QuickStart to use outbound-only single-private NAT as the
+  operational template; the reachable peer no longer requires a reverse
+  endpoint and the private peer no longer requires an inbound forward.
+- Aligned the README, performance guide, transport design, Hyper-V operating
+  guide, setup guide, and curated results with authenticated accepted-carrier
+  promotion, source-address/port roaming, and old-carrier retirement.
+- Separated current focused acceptance evidence from the historical 36-case
+  broad regression instead of calling the older source the current gate.
+- Labeled the pre-implementation refcounted-carrier proposal and two-device
+  dual-router surrogate as historical design material.
+- Updated the website test summary and source-archive checksum prefixes to
+  match the current published artifacts.
+
 ## Maintainer update policy
 
 Add future entries chronologically. Include the date, commit hash, implemented

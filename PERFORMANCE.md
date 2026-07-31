@@ -164,12 +164,13 @@ Performance is irrelevant if the tunnel cannot connect. TCP mode can traverse
 networks that block raw UDP but permit the selected TCP port. Its persistent
 flows and keepalives also fit common stateful firewall and NAT policies.
 
-The functional regression campaign passed a dual-reachable NAT44 topology with
-explicit reverse port forwarding, bidirectional traffic, idle keepalives, and
-recovery after a translated source-port change. Current TCP mode still expects
-both configured peer listen ports to be reachable; general one-sided
-client-behind-NAT behavior is not yet equivalent to stock WireGuard UDP
-roaming.
+The functional regression passed a single-private NAT44 topology with no DNAT
+or inbound port forward. The private peer initiated through SNAT; the public
+peer authenticated and promoted the accepted carrier for bidirectional traffic.
+Idle keepalives, translated source-port rebinding, source-address roaming,
+authenticated reacquisition, and old-carrier retirement passed on both Hyper-V
+guests. This is operational evidence for the tested Linux/nftables topology,
+not a claim about every provider NAT or hostile middlebox.
 
 ### The operational model remains simple
 

@@ -20,15 +20,15 @@ control.
 
 ### Current follow-up status
 
-The 2026-07-15 integrated exact-owner tree passes 205 local source contracts.
-Both managed guests built the main ownership refactor on Ubuntu kernel
-`6.8.0-134-generic`; the remote writer/parser/handoff integration, callback
-module pin, and final device-reopen quarantine guard still require a fresh
-provision/build. The current registry contains 39 cases, and no green
-39-case campaign exists for the final source yet. The current full and focused
-runtime gates therefore remain pending, and [`RESULTS.md`](RESULTS.md)
-continues to treat the earlier 36-case campaign as the latest complete green
-run.
+The merged 2026-07-31 tree passes 213 local source and contract tests.
+Production, DEBUG, and fault-injection variants built on both managed Ubuntu
+guests. Focused run `wg20260731T074807Z` passed the four current NAT/recovery
+cases with clean kernel logs: single-private SNAT-only operation,
+dual-reachable initiation with either authenticated direction retained,
+outbound-only address/port roaming, and half-open recovery. The older 36-case
+campaign remains the latest complete broad registry run; it is historical
+compatibility evidence rather than the acceptance gate for the new promotion
+path.
 
 Do not interrupt a focused runner by stopping only its visible parent and then
 immediately start another run. An elevated child `python regression.py` and its
@@ -183,7 +183,7 @@ python .\tests\hyperv\regression.py `
     --tcp-kernel-variant fork-debug
 ```
 
-### Guest-local NAT44 case
+### Guest-local NAT44 cases
 
 Provision the current tree first so both guests have the NAT dependencies and
 test script, then run only the NAT case with:
@@ -191,10 +191,19 @@ test script, then run only the NAT case with:
 ```powershell
 .\tests\hyperv\Provision-HyperV.ps1
 python .\tests\hyperv\regression.py `
+    --only-case tcp-nat44-single-private `
     --only-case tcp-nat44-dual-reachable
 ```
 
-The runner executes an independent disposable topology inside each VM:
+`tcp-nat44-single-private` is the operational NAT contract. The private client
+has the public server's reachable endpoint and dials through SNAT; the public
+server has no reverse endpoint, DNAT, or forwarded port. Authenticated traffic
+promotes the accepted carrier for bidirectional use. The case verifies
+keepalive activity, `41001` to `41002` source-port rebinding, authenticated
+reacquisition, and old-carrier retirement.
+
+The dual-reachable case executes this independent disposable topology inside
+each VM:
 
 | Role | Namespace | Outer address | WireGuard address |
 |---|---|---|---|
@@ -214,12 +223,12 @@ live `FwMark` change then forces the public peer's reverse carrier to reconnect;
 the router must count a new SYN through forward `52241` before traffic is
 revalidated.
 
-This is deliberately a `dual-reachable` contract. It does not establish a
-responder-only client behind NAT with no port forward, nor authenticated
-accepted-socket promotion. The `old_accepted_carrier=retained|retired` result
-is diagnostic rather than pass/fail: a conntrack reset does not guarantee an
-immediate close signal at the old endpoint, and peer-bound duplicate-carrier
-retirement remains design work.
+This is deliberately the compatibility-oriented `dual-reachable` contract.
+Because both endpoints can initiate, either authenticated direction may be
+retained. The test detects the winning direction and validates the matching
+NAT/conntrack evidence; reverse reconnect through DNAT applies only when that
+direction wins. Use `single-private` for the stronger no-forward promotion and
+retirement contract.
 
 The completed topology's veth endpoints, addresses, routes, forwarding,
 nftables state, and conntrack mutation live inside PID-suffixed network
@@ -428,8 +437,8 @@ ID, and interface. The fully PID-checked procedure and the exact `m13`/`m10`
 recovery record are in
 [`HYPERV_SETUP.md`](HYPERV_SETUP.md#orphaned-multipass-client-recovery).
 
-The runtime evidence still stops short of authenticated carrier promotion for
-arbitrary NAT ephemeral-port roaming, a cookie-equivalent TCP pre-authentication
+The runtime evidence still stops short of arbitrary provider NAT behavior,
+repeated hostile promotion races, a cookie-equivalent TCP pre-authentication
 cost defense, VRF and namespace-move behavior, broader MTU and fragmentation
 coverage, long-duration multi-flow soak testing, and wider kernel-version and
 distribution breadth.

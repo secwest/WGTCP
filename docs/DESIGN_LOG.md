@@ -119,6 +119,12 @@ The harness records both tuples and invalidates a TCP cell if either changes or
 disappears. Results from this topology must not be generalized to a
 single-carrier TCP tunnel.
 
+This is a benchmark-topology validity rule for the recorded meltdown campaign,
+not a current deployment requirement. The later authenticated accepted-carrier
+implementation supports a single private initiator behind SNAT with no reverse
+endpoint, DNAT, or forwarded port. Performance cells retain the dual-endpoint
+shape so their historical carrier and impairment evidence remains comparable.
+
 ### DL-009: Authenticate accepted carriers by exact stream provenance
 
 **Status:** Accepted

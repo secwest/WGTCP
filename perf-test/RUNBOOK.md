@@ -44,8 +44,10 @@ themselves run on Linux.
   four target regions:
   - `wireguardtcp-ubuntu24-tls` (x64) ≥ v1.0.2
   - `wireguardtcp-ubuntu24-arm64-tls` ≥ v1.0.0
-- See [`azure-images/RUNBOOK.md`](../azure-images/RUNBOOK.md) for how to
-  build these from scratch.
+- The historical gallery-image build runbook is not included in this
+  standalone source tree. Build and publish equivalent private gallery images
+  using the listed names, versions, packages, and regional replication checks
+  before running this campaign.
 
 ---
 
@@ -227,7 +229,8 @@ perf-test/results/v1.0.2/
 
 To regression-test a new TCP build:
 
-1. Build a new gallery image-version (see `azure-images/RUNBOOK.md`).
+1. Build a new gallery image version using the prerequisites and image names in
+   Section 2; the historical external image-build runbook is not included here.
 2. Replicate to all four regions.
 3. Run with `-ImageVersionX64 <new>` (and / or `-ImageVersionArm <new>`),
    pointed at a different `-ResultsDir` (e.g.

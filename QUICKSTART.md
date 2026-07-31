@@ -455,18 +455,17 @@ Likewise, replace Host A's documentation prefix in the Host B template.
 For a link-local carrier, include its interface scope, for example
 `[fe80::2%eth0]:51820`, and verify that both hosts are on the same link.
 
-### Dual-reachable NAT44
+### Single-private NAT44
 
-Current TCP mode expects each configured peer listen port to be reachable. A
-host behind NAT therefore needs a stable inbound TCP port forward; ordinary
-one-sided client-behind-NAT operation is not yet equivalent to stock WireGuard
-UDP roaming.
+TCP mode supports a private peer behind ordinary source NAT without an inbound
+port forward. Configure the private peer with the reachable peer's TCP endpoint
+and let it initiate the carrier. The reachable peer may omit `Endpoint`; after
+the accepted stream carries authenticated WireGuard traffic, it promotes that
+exact stream to the configured peer and uses it bidirectionally.
 
 Example:
 
-- Host A listens privately on `10.0.0.10:51821`.
-- Router A exposes `198.51.100.25:52221` and forwards TCP to
-  `10.0.0.10:51821`.
+- Host A listens privately on `10.0.0.10:51821` behind source NAT.
 - Host B listens publicly on `203.0.113.20:51822`.
 
 Host A:
@@ -497,12 +496,18 @@ Transport = tcp
 [Peer]
 PublicKey = <HOST_A_PUBLIC_KEY>
 AllowedIPs = 10.50.0.1/32
-Endpoint = 198.51.100.25:52221
-PersistentKeepalive = 25
 ```
 
-Forward TCP only when TCP-only operation is intended, keep the public port
-stable, and ensure return traffic uses the same NAT gateway.
+Permit Host A to make the outbound TCP connection and permit Host B's listener
+port. No DNAT rule or inbound forward to Host A is required. Keep
+`PersistentKeepalive` on the private peer when the NAT mapping must survive
+idle periods.
+
+If both peers have configured, reachable endpoints, both may initiate. The
+first usable authenticated result is not an operator-visible election:
+whichever authenticated carrier the implementation retains carries the tunnel,
+and the other connection is retired or becomes irrelevant. Do not build
+external policy around a particular connection direction winning.
 
 ## Troubleshooting
 
