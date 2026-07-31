@@ -13,6 +13,24 @@ redundant full Linux kernel tree.
 
 Source snapshot: `jnathan/naked_gun@4211b00ef437`.
 
+## Start here
+
+WireguardTCP is useful when two Linux endpoints need WireGuard security but
+their network blocks or operationally restricts UDP. It keeps the normal
+WireGuard key, peer, `AllowedIPs`, and encryption model, then carries encrypted
+messages in framed TCP streams. Operators select TCP per interface with
+`Transport = tcp`; there is no automatic negotiation or fallback.
+
+The main benefit is TCP reachability while retaining familiar WireGuard
+administration. The tradeoffs are connection state, head-of-line blocking, and
+experimental roaming and NAT behavior. It is not HTTP or TLS camouflage, and
+stock WireGuard UDP remains the preferred mode when it is available.
+
+New users should follow the
+**[WireGuard TCP QuickStart](docs/QUICKSTART.md)** to install the module and
+tool, configure a verified two-host tunnel, and adapt the advanced
+site-to-site, asymmetric-port, dual-stack, and NAT templates.
+
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
 > The brokered two-VM Ubuntu 24.04/Linux 6.8 run `wg20260714T010310Z` passed
@@ -315,6 +333,7 @@ inventory.
 kernel/                       WireGuard kernel module with TCP transport
 tools/                        Modified WireGuard userland tools
 include/uapi/                 Additive Linux transport UAPI
+docs/QUICKSTART.md             Installation, first tunnel, and configuration templates
 docs/TCP_TRANSPORT_DESIGN.md  Detailed architecture and parity design
 docs/TCP_MELTDOWN.md          Calibrated meltdown scope and replication index
 DESIGNLOG.md                  Chronological architectural decisions
@@ -462,6 +481,7 @@ counter deltas, resets every control, and verifies post-pressure traffic.
 
 ## Documentation
 
+- [Installation, basic tunnel, and advanced configuration QuickStart](docs/QUICKSTART.md)
 - [Design decision log](DESIGNLOG.md)
 - [Change log](CHANGELOG.md)
 - [TCP transport design, compatibility, roaming, and behavior](docs/TCP_TRANSPORT_DESIGN.md)

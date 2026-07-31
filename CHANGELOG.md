@@ -9,6 +9,10 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added an operator QuickStart covering prerequisites, module and tool
+  installation, a verified basic two-host tunnel, troubleshooting, and
+  asymmetric-port, routed site-to-site, dual-stack, and dual-reachable NAT44
+  configuration templates.
 - Added a dedicated `perf-test/meltdown/` campaign for mechanistic
   TCP-over-TCP meltdown testing.
 - Added selective HTB plus finite-queue bottleneck construction, with IFB/netem
@@ -165,6 +169,8 @@ affects design and externally visible behavior.
 
 ### Fixed
 
+- Fixed source-contract preflight failures caused by tests using removed
+  comments and declarations as source-section boundaries.
 - Fixed five-second rotation of an accepted stream after it had carried a valid
   Noise handshake.
 - Fixed complete records being stranded in a bulk-read leftover buffer after a
