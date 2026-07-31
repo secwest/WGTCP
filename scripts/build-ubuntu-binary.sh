@@ -6,6 +6,7 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
 OUTPUT_DIR=$REPO_ROOT/docs/downloads
+TARGET_KERNEL_RELEASE=
 
 die() {
 	printf 'build-ubuntu-binary: %s\n' "$*" >&2
@@ -14,17 +15,22 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: scripts/build-ubuntu-binary.sh [--output-dir PATH]
+Usage: scripts/build-ubuntu-binary.sh [--output-dir PATH] [--kernel-release RELEASE]
 
 Build an Ubuntu 24.04, architecture-native WireguardTCP release archive for
-the running kernel. The archive contains the compiled source tree, production
-kernel module, modified wg tool, manifest, checksums, and guarded installer.
+the selected installed kernel (default: the running kernel). The archive
+contains the compiled source tree, production kernel module, modified wg tool,
+manifest, checksums, and guarded installer.
 EOF
 }
 
 while (( $# )); do
 	case "$1" in
 	--output-dir) OUTPUT_DIR=${2:?--output-dir requires a value}; shift 2 ;;
+	--kernel-release)
+		TARGET_KERNEL_RELEASE=${2:?--kernel-release requires a value}
+		shift 2
+		;;
 	--help) usage; exit 0 ;;
 	*) die "unknown argument: $1" ;;
 	esac
@@ -42,7 +48,9 @@ case "$architecture" in
 amd64|arm64) ;;
 *) die "unsupported architecture: $architecture" ;;
 esac
-kernel_release=$(uname -r)
+kernel_release=${TARGET_KERNEL_RELEASE:-$(uname -r)}
+[[ $kernel_release =~ ^[A-Za-z0-9._+-]+$ ]] ||
+	die "unsafe kernel release: $kernel_release"
 kernel_build=/lib/modules/$kernel_release/build
 [[ -r $kernel_build/Makefile ]] ||
 	die "matching kernel headers are required at $kernel_build"

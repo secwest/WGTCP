@@ -13,7 +13,8 @@ class UbuntuBinaryReleaseContractTests(unittest.TestCase):
     def test_build_is_native_and_limited_to_supported_targets(self):
         self.assertIn("Ubuntu 24.04 is required", BUILD)
         self.assertIn("amd64|arm64", BUILD)
-        self.assertIn("kernel_release=$(uname -r)", BUILD)
+        self.assertIn("TARGET_KERNEL_RELEASE", BUILD)
+        self.assertIn("kernel_release=${TARGET_KERNEL_RELEASE:-$(uname -r)}", BUILD)
         self.assertIn("matching kernel headers are required", BUILD)
 
     def test_archive_contains_compiled_tree_module_tool_and_provenance(self):
