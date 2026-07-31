@@ -334,6 +334,7 @@ kernel/                       WireGuard kernel module with TCP transport
 tools/                        Modified WireGuard userland tools
 include/uapi/                 Additive Linux transport UAPI
 QUICKSTART.md                  Installation, first tunnel, and configuration templates
+PERFORMANCE.md                 Performance advantages and calibrated meltdown results
 docs/TCP_TRANSPORT_DESIGN.md  Detailed architecture and parity design
 docs/TCP_MELTDOWN.md          Calibrated meltdown scope and replication index
 DESIGNLOG.md                  Chronological architectural decisions
@@ -482,6 +483,7 @@ counter deltas, resets every control, and verifies post-pressure traffic.
 ## Documentation
 
 - [Installation, basic tunnel, and advanced configuration QuickStart](QUICKSTART.md)
+- [Performance advantages and TCP-over-TCP meltdown results](PERFORMANCE.md)
 - [Design decision log](DESIGNLOG.md)
 - [Change log](CHANGELOG.md)
 - [TCP transport design, compatibility, roaming, and behavior](docs/TCP_TRANSPORT_DESIGN.md)

@@ -58,7 +58,8 @@ repository's measured scenarios:
 These are measured examples, not a promise that TCP mode will outperform UDP
 on every path. High latency, sustained congestion, or severe loss can make an
 ordered TCP stream slower through head-of-line blocking. The detailed test
-conditions and limitations are in
+summary is in [`PERFORMANCE.md`](PERFORMANCE.md), with complete conditions and
+limitations in
 [`perf-test/REPORT.md`](perf-test/REPORT.md) and
 [`docs/TCP_MELTDOWN.md`](docs/TCP_MELTDOWN.md).
 

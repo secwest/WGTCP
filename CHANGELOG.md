@@ -9,6 +9,9 @@ affects design and externally visible behavior.
 
 ### Added
 
+- Added a root `PERFORMANCE.md` summarizing measured TCP-mode advantages,
+  application benchmarks, stable high-RTT controls, and the precise result that
+  no valid execution met the campaign's formal meltdown definition.
 - Added an operator QuickStart covering prerequisites, module and tool
   installation, a verified basic two-host tunnel, troubleshooting, and
   asymmetric-port, routed site-to-site, dual-stack, and dual-reachable NAT44
