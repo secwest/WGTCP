@@ -115,6 +115,27 @@ STATE_PATH=$RESULTS_DIR/provision-state.json
 KNOWN_HOSTS_DIR=$RESULTS_DIR/known-hosts
 mkdir -p -- "$KNOWN_HOSTS_DIR"
 
+stage_base_image() {
+	local source=$BASE_IMAGE hash staged temporary
+	hash=$(sha256sum "$source" | awk '{print $1}')
+	staged=$STORAGE_DIR/wireguardtcp-base-$hash.img
+	if [[ -e $staged ]]; then
+		[[ $(sha256sum "$staged" | awk '{print $1}') == "$hash" ]] ||
+			die "staged base image checksum mismatch: $staged"
+	else
+		temporary=$(mktemp "$STORAGE_DIR/.wireguardtcp-base.XXXXXX")
+		cp --reflink=auto --sparse=always -- "$source" "$temporary"
+		[[ $(sha256sum "$temporary" | awk '{print $1}') == "$hash" ]] || {
+			rm -f -- "$temporary"
+			die "staged base image checksum verification failed"
+		}
+		chmod 0644 "$temporary"
+		mv -- "$temporary" "$staged"
+	fi
+	chmod 0644 "$staged"
+	BASE_IMAGE=$staged
+}
+
 readonly PATH0_A_MAC=52:54:00:10:00:0a
 readonly PATH0_B_MAC=52:54:00:10:00:0b
 readonly PATH1_A_MAC=52:54:00:20:00:0a
@@ -610,6 +631,7 @@ REMOTE
 }
 
 validate_state
+stage_base_image
 virsh_qemu uri >/dev/null
 virsh_qemu net-info default >/dev/null 2>&1 || die "the libvirt default management network is missing"
 [[ $(virsh_qemu net-info default | awk -F: '/^Active:/ { gsub(/[[:space:]]/, "", $2); print $2 }') == yes ]] ||

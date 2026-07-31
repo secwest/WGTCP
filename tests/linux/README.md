@@ -63,7 +63,9 @@ Provisioning records the libvirt domain and network UUIDs in
 recorded UUID is never adopted or changed. It creates a Git-visible snapshot
 from `HEAD`, modified/untracked overlays, and recorded deletions, verifies both
 archive hashes in each guest, runs the shared bootstrap, and compiles the
-production, DEBUG, and fault-injection modules on each guest.
+production, DEBUG, and fault-injection modules on each guest. The provisioner
+copies the verified cloud image into libvirt storage so QEMU can read its
+backing image even when the original is beneath a private home directory.
 
 The full runner delegates to the same case list and guest helpers as
 `tests/hyperv/regression.py`, so it runs the complete 36-case matrix. Results

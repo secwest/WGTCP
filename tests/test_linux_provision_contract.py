@@ -49,6 +49,12 @@ class LinuxProvisionContractTests(unittest.TestCase):
         self.assertIn("--ssh-private-key", PROVISION)
         self.assertGreaterEqual(PROVISION.count('-i "$SSH_PRIVATE_KEY"'), 3)
 
+    def test_verified_base_image_is_staged_for_libvirt_access(self):
+        self.assertIn("stage_base_image()", PROVISION)
+        self.assertIn('sha256sum "$source"', PROVISION)
+        self.assertIn('chmod 0644 "$staged"', PROVISION)
+        self.assertIn("BASE_IMAGE=$staged", PROVISION)
+
     def test_results_directory_is_returned_to_the_sudo_caller(self):
         self.assertIn("${SUDO_USER:-}", PROVISION)
         self.assertIn('chown "$SUDO_USER:$RESULTS_GROUP" "$RESULTS_DIR"', PROVISION)
