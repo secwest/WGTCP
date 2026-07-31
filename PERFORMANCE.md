@@ -4,25 +4,28 @@
 
 WireguardTCP provides a TCP carrier for WireGuard without changing WireGuard's
 encryption, keys, peer identity, or `AllowedIPs` model. The measured and
-functional results show six practical advantages:
+functional results show seven practical advantages:
 
 1. **Competitive clean-path speed.** On low- and medium-latency test paths,
    TCP mode matched or exceeded UDP mode in several bulk-transfer and HTTPS
    workloads.
-2. **Much stronger application delivery in selected lossy-path tests.** The
+2. **Lower CPU utilization in selected clean-path workloads.** On clean LAN
+   cells, TCP-WG used 6.7%-10.9% less mean CPU for bulk transfer and
+   11.7%-16.6% less for sequential HTTPS across x64 and arm64.
+3. **Much stronger application delivery in selected lossy-path tests.** The
    outer TCP stream retransmitted missing data instead of exposing every outer
    loss directly to the inner workload.
-3. **No formally classified TCP-over-TCP meltdown.** Across 122 valid
+4. **No formally classified TCP-over-TCP meltdown.** Across 122 valid
    post-repair executions in the dedicated mechanistic campaign, no execution
    met all three predeclared meltdown conditions, including runs in a
    deliberately extreme laboratory envelope.
-4. **Outbound-only NAT traversal.** A private peer established through SNAT
+5. **Outbound-only NAT traversal.** A private peer established through SNAT
    without DNAT or a forwarded inbound port, then roamed across source-address
    and source-port changes.
-5. **Kernel-native operation.** The persistent carrier needs no proxy, relay,
+6. **Kernel-native operation.** The persistent carrier needs no proxy, relay,
    or extra userspace encapsulation process, while retaining normal WireGuard
    keys, AllowedIPs, keepalives, and configuration tools.
-6. **Bounded and recoverable stream handling.** Capped queues, exact
+7. **Bounded and recoverable stream handling.** Capped queues, exact
    short-write continuation, parser resynchronization, fatal-send retirement,
    and replacement-carrier recovery passed focused destructive tests.
 
@@ -55,6 +58,11 @@ matched TCP-WG and UDP-WG tunnels.
 These results show that adding the TCP carrier did not impose an automatic
 throughput penalty. On these clean low- and medium-latency cells, it was
 competitive and often faster.
+
+CPU utilization was also lower in the clean LAN comparisons. Bulk transfer
+used 73.5% versus 78.8% mean CPU on x64 (**6.7% lower**) and 64.2% versus
+72.1% on arm64 (**10.9% lower**). Sequential HTTPS used 53.5% versus 60.6%
+on x64 (**11.7% lower**) and 51.2% versus 61.3% on arm64 (**16.6% lower**).
 
 The clean-path result is workload- and latency-dependent. At approximately
 195 ms RTT, clean x64 bulk TCP measured 244.8 Mbps over TCP-WG versus

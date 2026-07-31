@@ -26,6 +26,7 @@ its framing and connection lifecycle through NAT roaming and failure recovery.
 | Simple NAT deployment | Let a private peer initiate through ordinary SNAT without adding an inbound port forward |
 | Seamless roaming and recovery | Promote authenticated replacement connections after address, port, route, uplink, socket-mark, or carrier changes |
 | Strong measured performance | Match or exceed UDP-WG in several clean-path workloads and preserve substantially more traffic in selected lossy-path tests |
+| Lower CPU utilization | Use 6.7–10.9% less mean CPU for clean-LAN bulk transfer and 11.7–16.6% less for clean-LAN sequential HTTPS in the measured x64 and ARM64 cells |
 | IPv4 and IPv6 | Use IPv4, IPv6, dual-stack, and scoped link-local IPv6 configurations |
 
 ## Two years of tuning and validation
@@ -83,9 +84,12 @@ Selected measured results from the repository's application campaign:
 | Bulk TCP, x64, clean 56 ms path | 519.3 Mb/s | 428.9 Mb/s | TCP-WG +21.1% |
 | Sequential HTTPS, x64, clean LAN | 152.55 req/s | 131.14 req/s | TCP-WG +16.3% |
 | Bulk TCP, ARM64, clean LAN | 2918.4 Mb/s | 2777.2 Mb/s | TCP-WG +5.1% |
+| Mean CPU, ARM64 sequential HTTPS, clean LAN | 51.2% | 61.3% | TCP-WG 16.6% lower |
 
 In selected synthetic-loss tests, the TCP carrier delivered substantially more
 inner TCP and UDP traffic because the outer stream retransmitted lost data.
+On the clean LAN cells, TCP-WG also reduced mean CPU utilization across both
+architectures for bulk transfer and sequential HTTPS.
 
 A separate physical-carrier campaign recorded **zero formal TCP-over-TCP
 meltdowns across 122 valid post-repair executions**. The detailed report also
