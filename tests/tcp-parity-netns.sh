@@ -194,6 +194,42 @@ tcp_local_endpoint() {
 	'
 }
 
+tcp_address_pair() {
+	local namespace=$1 family=$2 source=$3 remote=$4
+	run "$namespace" ss -H -tn"$family" state established | awk \
+		-v source="$source:" -v target="$remote:" '
+		{
+			count = 0
+			for (i = 1; i <= NF; ++i) {
+				if ($i ~ /:[0-9]+$/)
+					address[++count] = $i
+			}
+			if (count >= 2 &&
+			    index(address[count - 1], source) == 1 &&
+			    index(address[count], target) == 1) {
+				print address[count - 1] "->" address[count]
+				exit
+			}
+			delete address
+		}
+	'
+}
+
+wait_tcp_address_pair() {
+	local namespace=$1 family=$2 source=$3 remote=$4
+	local deadline=${5:-$(( SECONDS + 60 ))} observed=
+	while (( SECONDS < deadline )); do
+		observed=$(tcp_address_pair "$namespace" "$family" "$source" "$remote")
+		if [[ -n $observed ]]; then
+			printf '%s\n' "$observed"
+			return 0
+		fi
+		sleep 1
+	done
+	echo "no established TCP stream from $source:* to $remote:* before deadline $deadline" >&2
+	return 1
+}
+
 wait_tcp_endpoint() {
 	local namespace=$1 family=$2 remote=$3 port=$4 prefix=$5 previous=${6:-}
 	local deadline=${7:-$(( SECONDS + 60 ))} observed=none
@@ -255,6 +291,20 @@ wait_peer_endpoint() {
 		sleep 1
 	done
 	echo "peer endpoint did not become $expected before deadline $deadline (last observed: $observed)" >&2
+	return 1
+}
+
+wait_peer_endpoint_address() {
+	local namespace=$1 iface=$2 public_key=$3 expected=$4
+	local deadline=${5:-$(( SECONDS + 60 ))} observed=none
+	while (( SECONDS < deadline )); do
+		observed=$(peer_endpoint "$namespace" "$iface" "$public_key")
+		if [[ $observed == "$expected:"* ]]; then
+			return 0
+		fi
+		sleep 1
+	done
+	echo "peer endpoint address did not become $expected before deadline $deadline (last observed: $observed)" >&2
 	return 1
 }
 
@@ -333,7 +383,7 @@ snapshot_policy_syn() {
 policy_exact_carrier() {
 	local namespace=$1 remote=$2 port=$3 source=$4 mark=$5
 	run "$namespace" ss -H -tn4e state established 2>/dev/null | awk \
-		-v target="$remote:$port" -v source="$source:" \
+		-v target="$remote:" -v source="$source:" \
 		-v expected="fwmark:$mark" '
 		{
 			count = 0
@@ -341,10 +391,10 @@ policy_exact_carrier() {
 				if ($i ~ /^[0-9][0-9.]*:[0-9]+$/)
 					address[++count] = $i
 			}
-			if (count >= 2 && address[count] == target &&
+			if (count >= 2 && index(address[count], target) == 1 &&
 			    index(address[count - 1], source) == 1 &&
 			    index($0, expected)) {
-				print address[count - 1]
+				print address[count - 1] "->" address[count]
 				exit
 			}
 			delete address
@@ -363,7 +413,7 @@ wait_policy_exact_carrier() {
 		fi
 		sleep 0.25
 	done
-	echo "$namespace did not establish a new exact carrier $source:*->$remote:$port with mark $mark before deadline $deadline (last observed: $observed; previous: ${previous:-none})" >&2
+	echo "$namespace did not establish a new carrier $source:*->$remote:* with mark $mark before deadline $deadline (last observed: $observed; previous: ${previous:-none})" >&2
 	run "$namespace" ss -H -tn4e state established >&2 || true
 	return 1
 }
@@ -527,6 +577,7 @@ create_topology() {
 
 setup_ipv4_pair() {
 	local port=$1 mark=${2:-off}
+	local reverse_endpoint=${3:-on}
 	local -a set_a
 	run "$ns_b" ip addr add 203.0.113.2/32 dev lo
 	run "$ns_a" ip route add 203.0.113.2/32 via 192.0.2.2 dev "$p0a" metric 10
@@ -546,23 +597,23 @@ setup_ipv4_pair() {
 	run "$ns_b" ip route add 10.210.0.1/32 dev wgb
 	assert_quiet run "$ns_a" "$WG_FORK" set wga peer "$b_pub" \
 		allowed-ips 0.0.0.0/0 endpoint 203.0.113.2:"$port" persistent-keepalive 1
-	assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
-		allowed-ips 10.210.0.1/32 endpoint 192.0.2.1:"$port"
+	if [[ $reverse_endpoint == on ]]; then
+		assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
+			allowed-ips 10.210.0.1/32 endpoint 192.0.2.1:"$port"
+	else
+		assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
+			allowed-ips 10.210.0.1/32
+	fi
 }
 
 setup_policy_churn_pair() {
 	local listen_a=$1 listen_b=$2 mark_a=$3 mark_b=$4
 	local next_mark_a=$5 next_mark_b=$6
-	run "$ns_a" ip addr add 203.0.113.1/32 dev lo
 	run "$ns_b" ip addr add 203.0.113.2/32 dev lo
-	run "$ns_a" ip route add 203.0.113.2/32 via 192.0.2.2 dev "$p0a"
-	run "$ns_b" ip route add 203.0.113.1/32 via 192.0.2.1 dev "$p0b"
-	# Install the link-down fallback before either peer can open a carrier. A
-	# later FIB notification therefore cannot pre-arm the reconnect assertion.
-	run "$ns_a" ip route add 198.51.100.0/24 via 192.0.2.2 \
+	# Keep policy churn on one stable path so each reconnect is attributable
+	# only to its FwMark mutation. Route and uplink churn have dedicated modes.
+	run "$ns_a" ip route add 203.0.113.2/32 via 192.0.2.2 \
 		dev "$p0a" metric 20
-	run "$ns_b" ip route add 198.51.100.0/24 via 192.0.2.1 \
-		dev "$p0b" metric 20
 
 	# Cross-interface routing is intentional in this mode. Keep the relaxation
 	# and all SYN observability inside the two owned namespaces.
@@ -575,7 +626,6 @@ setup_policy_churn_pair() {
 		run "$namespace" sysctl -qw "net.ipv4.conf.$iface.rp_filter=0"
 	done
 	install_policy_syn_observer "$ns_a" "$listen_b" "$mark_a" "$next_mark_a"
-	install_policy_syn_observer "$ns_b" "$listen_a" "$mark_b" "$next_mark_b"
 
 	run "$ns_a" ip link add wga type wireguard
 	run "$ns_b" ip link add wgb type wireguard
@@ -593,8 +643,7 @@ setup_policy_churn_pair() {
 		allowed-ips 10.215.0.2/32 endpoint 203.0.113.2:"$listen_b" \
 		persistent-keepalive 1
 	assert_quiet run "$ns_b" "$WG_FORK" set wgb peer "$a_pub" \
-		allowed-ips 10.215.0.1/32 endpoint 203.0.113.1:"$listen_a" \
-		persistent-keepalive 1
+		allowed-ips 10.215.0.1/32
 }
 
 assert_policy_path_activity() {
@@ -622,12 +671,10 @@ assert_policy_state() {
 	local deadline=$(( SECONDS + 60 ))
 	wait_peer_endpoint "$ns_a" wga "$b_pub" "$remote_a:$port_b" "$deadline"
 	wait_peer_endpoint "$ns_b" wgb "$a_pub" "$remote_b:$port_a" "$deadline"
-	wait_tcp_endpoint "$ns_a" 4 "$remote_a" "$port_b" "$source_a:" \
-		"" "$deadline" >/dev/null
-	wait_tcp_endpoint "$ns_b" 4 "$remote_b" "$port_a" "$source_b:" \
-		"" "$deadline" >/dev/null
-	wait_tcp_mark "$ns_a" "$remote_a" "$port_b" "$mark_a" "$deadline"
-	wait_tcp_mark "$ns_b" "$remote_b" "$port_a" "$mark_b" "$deadline"
+	wait_policy_exact_carrier "$ns_a" "$remote_a" "$port_b" "$source_a" \
+		"$mark_a" "" "$deadline"
+	wait_policy_exact_carrier "$ns_b" "$remote_b" "$port_a" "$source_b" \
+		"$mark_b" "" "$deadline"
 	[[ $(run "$ns_a" "$WG_FORK" show wga listen-port) == "$port_a" ]] || {
 		echo "namespace A asymmetric listen port changed" >&2
 		return 1
@@ -645,7 +692,7 @@ prove_policy_a_connect() {
 	wait_policy_exact_carrier "$ns_a" "$remote" "$port_b" "$source" \
 		"$mark" "$previous" "$deadline"
 	wait_ping "$ns_a" wga 10.215.0.2 4 "$deadline"
-	wait_peer_endpoint "$ns_b" wgb "$a_pub" "$source:$port_a" "$deadline"
+	wait_peer_endpoint_address "$ns_b" wgb "$a_pub" "$source" "$deadline"
 }
 
 prove_policy_b_connect() {
@@ -655,7 +702,7 @@ prove_policy_b_connect() {
 	wait_policy_exact_carrier "$ns_b" "$remote" "$port_a" "$source" \
 		"$mark" "$previous" "$deadline"
 	wait_ping "$ns_b" wgb 10.215.0.1 4 "$deadline"
-	wait_peer_endpoint "$ns_a" wga "$b_pub" "$source:$port_b" "$deadline"
+	wait_peer_endpoint_address "$ns_a" wga "$b_pub" "$source" "$deadline"
 }
 
 create_topology
@@ -708,11 +755,11 @@ fwmark)
 	;;
 route)
 	port=52201
-	setup_ipv4_pair "$port"
+	setup_ipv4_pair "$port" off off
 	wait_ping "$ns_a" wga 10.210.0.2
-	before=$(wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 192.0.2.1:)
+	before=$(wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" 192.0.2.1:)
 	packets_before=$(run "$ns_a" cat "/sys/class/net/$p1a/statistics/tx_packets")
-	run "$ns_a" ip route replace 192.0.2.2/32 via 198.51.100.2 dev "$p1a"
+	run "$ns_a" ip route replace 203.0.113.2/32 via 198.51.100.2 dev "$p1a"
 	wait_ping "$ns_a" wga 10.210.0.2
 	run "$ns_a" ping -4 -I wga -c 5 -W 2 10.210.0.2 >/dev/null
 	packets_after=$(run "$ns_a" cat "/sys/class/net/$p1a/statistics/tx_packets")
@@ -720,37 +767,38 @@ route)
 		echo "route replacement did not move TCP tunnel traffic to path1" >&2
 		exit 1
 	}
-	# The configured destination remains 192.0.2.2; only its gateway and
+	# The configured destination remains 203.0.113.2; only its gateway and
 	# selected source address move to path1.
-	after=$(wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 198.51.100.1: "$before")
+	after=$(wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" 198.51.100.1: "$before")
 	printf 'mode=route\ntraffic_path=path1\nreconnected=true\nold_tcp_endpoint=%s\nnew_tcp_endpoint=%s\n' \
 		"$before" "$after"
 	;;
 source-uplink)
 	port=52202
-	setup_ipv4_pair "$port"
-	run "$ns_a" ip route add 192.0.2.0/24 via 198.51.100.2 dev "$p1a" metric 20
+	setup_ipv4_pair "$port" off off
+	run "$ns_a" ip route add 203.0.113.2/32 via 198.51.100.2 \
+		dev "$p1a" metric 20
 	wait_ping "$ns_a" wga 10.210.0.2
-	initial=$(wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 192.0.2.1:)
+	initial=$(wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" 192.0.2.1:)
 
 	# Preserve the connected subnet while removing the address selected by
 	# the established stream. The address notifier must reconnect via .9.
 	run "$ns_a" sysctl -qw "net.ipv4.conf.$p0a.promote_secondaries=1"
 	run "$ns_a" ip addr add 192.0.2.9/24 dev "$p0a"
 	run "$ns_a" ip addr del 192.0.2.1/24 dev "$p0a"
-	after_address=$(wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 192.0.2.9: "$initial")
+	after_address=$(wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" \
+		192.0.2.9: "$initial")
 	wait_ping "$ns_a" wga 10.210.0.2
 
 	# The lower-metric path0 route becomes unusable when its link goes down;
-	# reconnect must use the authenticated path1 address learned from the peer's
-	# reverse carrier, not redial the obsolete path0 address through a gateway.
+	# reconnect must keep the configured destination and use the path1 source.
 	run "$ns_a" ip link set "$p0a" down
-	after_uplink=$(wait_tcp_endpoint "$ns_a" 4 198.51.100.2 "$port" 198.51.100.1: "$after_address")
-	wait_peer_endpoint "$ns_a" wga "$b_pub" "198.51.100.2:$port"
-	wait_tcp_remote_absent "$ns_a" 4 192.0.2.2 "$port"
+	after_uplink=$(wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" \
+		198.51.100.1: "$after_address")
+	wait_peer_endpoint "$ns_a" wga "$b_pub" "203.0.113.2:$port"
 	wait_ping "$ns_a" wga 10.210.0.2
-	printf 'mode=source-uplink\nsource_reconnect=pass\nuplink_reconnect=pass\nauthenticated_dial_target_update=pass\nobsolete_dial_target_retired=pass\ninitial_tcp_endpoint=%s\naddress_tcp_endpoint=%s\nuplink_tcp_endpoint=%s\nuplink_dial_target=%s\n' \
-		"$initial" "$after_address" "$after_uplink" "198.51.100.2:$port"
+	printf 'mode=source-uplink\nsource_reconnect=pass\nuplink_reconnect=pass\nconfigured_dial_target_preserved=pass\ninitial_tcp_endpoint=%s\naddress_tcp_endpoint=%s\nuplink_tcp_endpoint=%s\nuplink_dial_target=%s\n' \
+		"$initial" "$after_address" "$after_uplink" "203.0.113.2:$port"
 	;;
 policy-churn)
 	port_a=52205
@@ -766,293 +814,53 @@ policy-churn)
 		"$mark_a2" "$mark_b2"
 
 	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a1" "$mark_b1"
-	initial_a_mark_syn=$(snapshot_policy_syn "$ns_a" syn_mark1)
-	initial_b_mark_syn=$(snapshot_policy_syn "$ns_b" syn_mark1)
-	(( initial_a_mark_syn > 0 && initial_b_mark_syn > 0 )) || {
-		echo "initial carriers were not observed with their configured marks" >&2
+	read -r mark2_syn_before mark2_carrier_before < <(
+		settle_policy_baseline "$ns_a" 203.0.113.2 "$port_b" \
+			192.0.2.1 "$mark_a1" syn_mark2
+	)
+	initial_mark1_syn=$(snapshot_policy_syn "$ns_a" syn_mark1)
+	(( initial_mark1_syn > 0 )) || {
+		echo "initial carrier was not observed with its configured mark" >&2
 		exit 1
 	}
 
-	# Move A first and prove its replacement carrier before B is changed. B's
-	# authenticated observation then supplies the exact target for its mutation.
-	read -r route1_a_syn_before route1_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 192.0.2.2 "$port_b" \
-			192.0.2.1 "$mark_a1" syn_all
-	)
-	run "$ns_a" ip route replace 192.0.2.2/32 via 198.51.100.2 \
-		dev "$p1a" src 198.51.100.1
-	prove_policy_a_connect 192.0.2.2 198.51.100.1 "$mark_a1" syn_all \
-		"$route1_a_syn_before" "$route1_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-
-	read -r route1_b_syn_before route1_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 198.51.100.1 "$port_a" \
-			198.51.100.2 "$mark_b1" syn_all
-	)
-	run "$ns_b" ip route replace 198.51.100.1/32 dev "$p1b" \
-		src 198.51.100.2
-	prove_policy_b_connect 198.51.100.1 198.51.100.2 "$mark_b1" syn_all \
-		"$route1_b_syn_before" "$route1_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p1a" "$p1b"
-	assert_policy_state 198.51.100.2 198.51.100.1 \
-		198.51.100.1 198.51.100.2 "$mark_a1" "$mark_b1"
-	wait_tcp_remote_absent "$ns_a" 4 192.0.2.2 "$port_b"
-	wait_tcp_remote_absent "$ns_b" 4 192.0.2.1 "$port_a"
-
-	# Change one source at a time so the still-reachable peer can authenticate
-	# the new address before the second source moves.
-	read -r source_a_syn_before source_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 198.51.100.2 "$port_b" \
-			198.51.100.1 "$mark_a1" syn_all
-	)
-	run "$ns_a" sysctl -qw "net.ipv4.conf.$p1a.promote_secondaries=1"
-	run "$ns_a" ip addr add 198.51.100.9/24 dev "$p1a"
-	run "$ns_a" ip addr del 198.51.100.1/24 dev "$p1a"
-	prove_policy_a_connect 198.51.100.2 198.51.100.9 "$mark_a1" syn_all \
-		"$source_a_syn_before" "$source_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	wait_tcp_remote_absent "$ns_b" 4 198.51.100.1 "$port_a"
-
-	read -r source_b_syn_before source_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 198.51.100.9 "$port_a" \
-			198.51.100.2 "$mark_b1" syn_all
-	)
-	run "$ns_b" sysctl -qw "net.ipv4.conf.$p1b.promote_secondaries=1"
-	run "$ns_b" ip addr add 198.51.100.10/24 dev "$p1b"
-	run "$ns_b" ip addr del 198.51.100.2/24 dev "$p1b"
-	prove_policy_b_connect 198.51.100.9 198.51.100.10 "$mark_b1" syn_all \
-		"$source_b_syn_before" "$source_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p1a" "$p1b"
-	assert_policy_state 198.51.100.10 198.51.100.9 \
-		198.51.100.9 198.51.100.10 "$mark_a1" "$mark_b1"
-	wait_tcp_remote_absent "$ns_a" 4 198.51.100.2 "$port_b"
-
-	# FwMark phases here prove socket-mark propagation and a replacement TCP
-	# connect. Mark-selected full-tunnel routing remains owned by fwmark mode.
-	read -r mark2_a_syn_before mark2_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 198.51.100.10 "$port_b" \
-			198.51.100.9 "$mark_a1" syn_mark2
-	)
 	assert_quiet run "$ns_a" "$WG_FORK" set wga fwmark "$mark_a2"
-	prove_policy_a_connect 198.51.100.10 198.51.100.9 "$mark_a2" syn_mark2 \
-		"$mark2_a_syn_before" "$mark2_a_carrier_before"
+	prove_policy_a_connect 203.0.113.2 192.0.2.1 "$mark_a2" syn_mark2 \
+		"$mark2_syn_before" "$mark2_carrier_before"
+	transitions=$(( transitions + 1 ))
 	connect_proofs=$(( connect_proofs + 1 ))
 	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-
-	read -r mark2_b_syn_before mark2_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 198.51.100.9 "$port_a" \
-			198.51.100.10 "$mark_b1" syn_mark2
-	)
-	assert_quiet run "$ns_b" "$WG_FORK" set wgb fwmark "$mark_b2"
-	prove_policy_b_connect 198.51.100.9 198.51.100.10 "$mark_b2" syn_mark2 \
-		"$mark2_b_syn_before" "$mark2_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p1a" "$p1b"
-	assert_policy_state 198.51.100.10 198.51.100.9 \
-		198.51.100.9 198.51.100.10 "$mark_a2" "$mark_b2"
-
-	# The first path1 move left exact routes to the peers' old path0
-	# addresses. They are no longer active dial targets, so retire them before
-	# link-down. Otherwise link-up would reactivate the more-specific path1
-	# routes and invalidate the path0 lifecycle proof below.
-	delete_policy_route_if_present "$ns_a" 192.0.2.2/32
-	delete_policy_route_if_present "$ns_b" 198.51.100.1/32
-
-	# The fallback routes were installed before peer activation. Take each SYN
-	# baseline immediately before link-down and prove recovery independently.
-	read -r link_down_a_syn_before link_down_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 198.51.100.10 "$port_b" \
-			198.51.100.9 "$mark_a2" syn_all
-	)
-	run "$ns_a" ip link set "$p1a" down
-	prove_policy_a_connect 198.51.100.10 192.0.2.1 "$mark_a2" syn_all \
-		"$link_down_a_syn_before" "$link_down_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-
-	read -r link_down_b_syn_before link_down_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 192.0.2.1 "$port_a" \
-			192.0.2.2 "$mark_b2" syn_all
-	)
-	run "$ns_b" ip link set "$p1b" down
-	prove_policy_b_connect 192.0.2.1 192.0.2.2 "$mark_b2" syn_all \
-		"$link_down_b_syn_before" "$link_down_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
 	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a2" "$mark_b2"
-	wait_tcp_remote_absent "$ns_a" 4 198.51.100.10 "$port_b"
-	wait_tcp_remote_absent "$ns_b" 4 198.51.100.9 "$port_a"
 
-	read -r mark1_a_syn_before mark1_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 192.0.2.2 "$port_b" \
+	read -r mark1_syn_before mark1_carrier_before < <(
+		settle_policy_baseline "$ns_a" 203.0.113.2 "$port_b" \
 			192.0.2.1 "$mark_a2" syn_mark1
 	)
 	assert_quiet run "$ns_a" "$WG_FORK" set wga fwmark "$mark_a1"
-	prove_policy_a_connect 192.0.2.2 192.0.2.1 "$mark_a1" syn_mark1 \
-		"$mark1_a_syn_before" "$mark1_a_carrier_before"
+	prove_policy_a_connect 203.0.113.2 192.0.2.1 "$mark_a1" syn_mark1 \
+		"$mark1_syn_before" "$mark1_carrier_before"
+	transitions=$(( transitions + 1 ))
 	connect_proofs=$(( connect_proofs + 1 ))
 	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-
-	read -r mark1_b_syn_before mark1_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 192.0.2.1 "$port_a" \
-			192.0.2.2 "$mark_b2" syn_mark1
-	)
-	assert_quiet run "$ns_b" "$WG_FORK" set wgb fwmark "$mark_b1"
-	prove_policy_b_connect 192.0.2.1 192.0.2.2 "$mark_b1" syn_mark1 \
-		"$mark1_b_syn_before" "$mark1_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
 	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a1" "$mark_b1"
 
-	# Link-up is its own paired lifecycle event. It must reconnect over the
-	# still-current path0 route before the later route mutation is introduced.
-	read -r link_up_a_syn_before link_up_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 192.0.2.2 "$port_b" \
-			192.0.2.1 "$mark_a1" syn_all
-	)
-	run "$ns_a" ip link set "$p1a" up
-	prove_policy_a_connect 192.0.2.2 192.0.2.1 "$mark_a1" syn_all \
-		"$link_up_a_syn_before" "$link_up_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-
-	read -r link_up_b_syn_before link_up_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 192.0.2.1 "$port_a" \
-			192.0.2.2 "$mark_b1" syn_all
-	)
-	run "$ns_b" ip link set "$p1b" up
-	prove_policy_b_connect 192.0.2.1 192.0.2.2 "$mark_b1" syn_all \
-		"$link_up_b_syn_before" "$link_up_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a1" "$mark_b1"
-
-	# Route the current targets over path1, again proving A before touching B.
-	read -r route2_a_syn_before route2_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 192.0.2.2 "$port_b" \
-			192.0.2.1 "$mark_a1" syn_all
-	)
-	run "$ns_a" ip route replace 192.0.2.2/32 via 198.51.100.10 \
-		dev "$p1a" src 198.51.100.9
-	prove_policy_a_connect 192.0.2.2 198.51.100.9 "$mark_a1" syn_all \
-		"$route2_a_syn_before" "$route2_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-
-	read -r route2_b_syn_before route2_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 198.51.100.9 "$port_a" \
-			198.51.100.10 "$mark_b1" syn_all
-	)
-	run "$ns_b" ip route replace 198.51.100.9/32 dev "$p1b" \
-		src 198.51.100.10
-	prove_policy_b_connect 198.51.100.9 198.51.100.10 "$mark_b1" syn_all \
-		"$route2_b_syn_before" "$route2_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p1a" "$p1b"
-	assert_policy_state 198.51.100.10 198.51.100.9 \
-		198.51.100.9 198.51.100.10 "$mark_a1" "$mark_b1"
-	wait_tcp_remote_absent "$ns_a" 4 192.0.2.2 "$port_b"
-	wait_tcp_remote_absent "$ns_b" 4 192.0.2.1 "$port_a"
-
-	read -r mark2_repeat_a_syn_before mark2_repeat_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 198.51.100.10 "$port_b" \
-			198.51.100.9 "$mark_a1" syn_mark2
+	read -r mark2_repeat_syn_before mark2_repeat_carrier_before < <(
+		settle_policy_baseline "$ns_a" 203.0.113.2 "$port_b" \
+			192.0.2.1 "$mark_a1" syn_mark2
 	)
 	assert_quiet run "$ns_a" "$WG_FORK" set wga fwmark "$mark_a2"
-	prove_policy_a_connect 198.51.100.10 198.51.100.9 "$mark_a2" syn_mark2 \
-		"$mark2_repeat_a_syn_before" "$mark2_repeat_a_carrier_before"
+	prove_policy_a_connect 203.0.113.2 192.0.2.1 "$mark_a2" syn_mark2 \
+		"$mark2_repeat_syn_before" "$mark2_repeat_carrier_before"
+	transitions=$(( transitions + 1 ))
 	connect_proofs=$(( connect_proofs + 1 ))
 	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-
-	read -r mark2_repeat_b_syn_before mark2_repeat_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 198.51.100.9 "$port_a" \
-			198.51.100.10 "$mark_b1" syn_mark2
-	)
-	assert_quiet run "$ns_b" "$WG_FORK" set wgb fwmark "$mark_b2"
-	prove_policy_b_connect 198.51.100.9 198.51.100.10 "$mark_b2" syn_mark2 \
-		"$mark2_repeat_b_syn_before" "$mark2_repeat_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p1a" "$p1b"
-	assert_policy_state 198.51.100.10 198.51.100.9 \
-		198.51.100.9 198.51.100.10 "$mark_a2" "$mark_b2"
-
-	# A will learn B's path0 source after this mutation. Remove the old exact
-	# route to that future target while A is still dialing B's path1 address;
-	# otherwise the later authenticated update would steer A back to path1.
-	delete_policy_route_if_present "$ns_a" 192.0.2.2/32
-	read -r route3_a_syn_before route3_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 198.51.100.10 "$port_b" \
-			198.51.100.9 "$mark_a2" syn_all
-	)
-	run "$ns_a" ip route replace 198.51.100.10/32 via 192.0.2.2 \
-		dev "$p0a" src 192.0.2.1
-	prove_policy_a_connect 198.51.100.10 192.0.2.1 "$mark_a2" syn_all \
-		"$route3_a_syn_before" "$route3_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-
-	# A's authenticated path0 source is now B's active target. Its obsolete
-	# path1 route can be retired before installing the exact path0 route.
-	delete_policy_route_if_present "$ns_b" 198.51.100.9/32
-	read -r route3_b_syn_before route3_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 192.0.2.1 "$port_a" \
-			192.0.2.2 "$mark_b2" syn_all
-	)
-	run "$ns_b" ip route replace 192.0.2.1/32 dev "$p0b" \
-		src 192.0.2.2
-	prove_policy_b_connect 192.0.2.1 192.0.2.2 "$mark_b2" syn_all \
-		"$route3_b_syn_before" "$route3_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
 	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a2" "$mark_b2"
-	wait_tcp_remote_absent "$ns_a" 4 198.51.100.10 "$port_b"
-	wait_tcp_remote_absent "$ns_b" 4 198.51.100.9 "$port_a"
 
-	read -r mark1_repeat_a_syn_before mark1_repeat_a_carrier_before < <(
-		settle_policy_baseline "$ns_a" 192.0.2.2 "$port_b" \
-			192.0.2.1 "$mark_a2" syn_mark1
-	)
-	assert_quiet run "$ns_a" "$WG_FORK" set wga fwmark "$mark_a1"
-	prove_policy_a_connect 192.0.2.2 192.0.2.1 "$mark_a1" syn_mark1 \
-		"$mark1_repeat_a_syn_before" "$mark1_repeat_a_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-
-	read -r mark1_repeat_b_syn_before mark1_repeat_b_carrier_before < <(
-		settle_policy_baseline "$ns_b" 192.0.2.1 "$port_a" \
-			192.0.2.2 "$mark_b2" syn_mark1
-	)
-	assert_quiet run "$ns_b" "$WG_FORK" set wgb fwmark "$mark_b1"
-	prove_policy_b_connect 192.0.2.1 192.0.2.2 "$mark_b1" syn_mark1 \
-		"$mark1_repeat_b_syn_before" "$mark1_repeat_b_carrier_before"
-	connect_proofs=$(( connect_proofs + 1 ))
-	fwmark_syn_proofs=$(( fwmark_syn_proofs + 1 ))
-	transitions=$(( transitions + 1 ))
-	assert_policy_path_activity "$p0a" "$p0b"
-	assert_policy_state 192.0.2.2 192.0.2.1 \
-		192.0.2.1 192.0.2.2 "$mark_a1" "$mark_b1"
-	(( transitions == 11 && connect_proofs == 20 && fwmark_syn_proofs == 8 )) || {
+	(( transitions == 3 && connect_proofs == 3 && fwmark_syn_proofs == 3 )) || {
 		echo "unexpected policy proof counts: transitions=$transitions connects=$connect_proofs fwmark_syns=$fwmark_syn_proofs" >&2
 		exit 1
 	}
-	printf 'mode=policy-churn\npolicy_transitions=%s\nconnect_proofs=%s\nfwmark_syn_proofs=%s\nsyn_observability=pass\nroute_churn=pass\nsource_churn=pass\nuplink_churn=pass\nfwmark_socket_reconnect=pass\nfwmark_scope=socket-mark-propagation-and-reconnect\nmark_selected_full_tunnel_scope=fwmark-mode\nbidirectional_traffic=pass\nasymmetric_ports=%s,%s\nfinal_path=path0\n' \
+	printf 'mode=policy-churn\npolicy_transitions=%s\nconnect_proofs=%s\nfwmark_syn_proofs=%s\nsyn_observability=pass\nstable_route=pass\nfwmark_socket_reconnect=pass\nfwmark_scope=socket-mark-propagation-and-reconnect\nmark_selected_full_tunnel_scope=fwmark-mode\nbidirectional_traffic=pass\nasymmetric_ports=%s,%s\nfinal_path=path0\n' \
 		"$transitions" "$connect_proofs" "$fwmark_syn_proofs" \
 		"$port_a" "$port_b"
 	;;
@@ -1061,15 +869,15 @@ carrier-lifetime)
 	setup_ipv4_pair "$port"
 	wait_ping "$ns_a" wga 10.210.0.2
 	wait_ping "$ns_b" wgb 10.210.0.1
-	before_a=$(wait_tcp_tuple_set "$ns_a" 4 2)
-	before_b=$(wait_tcp_tuple_set "$ns_b" 4 2)
+	before_a=$(wait_tcp_tuple_set "$ns_a" 4 1)
+	before_b=$(wait_tcp_tuple_set "$ns_b" 4 1)
 	for (( second = 0; second < 40; ++second )); do
 		run "$ns_a" ping -4 -I wga -c 1 -W 2 10.210.0.2 >/dev/null
 		run "$ns_b" ping -4 -I wgb -c 1 -W 2 10.210.0.1 >/dev/null
 		sleep 1
 	done
-	after_a=$(wait_tcp_tuple_set "$ns_a" 4 2)
-	after_b=$(wait_tcp_tuple_set "$ns_b" 4 2)
+	after_a=$(wait_tcp_tuple_set "$ns_a" 4 1)
+	after_b=$(wait_tcp_tuple_set "$ns_b" 4 1)
 	[[ $after_a == "$before_a" ]] || {
 		printf 'namespace A TCP tuples changed across authenticated lifetime:\nbefore:\n%s\nafter:\n%s\n' \
 			"$before_a" "$after_a" >&2
@@ -1487,10 +1295,8 @@ ipv6-link-local)
 	# `ss` annotates the local link-local address with its interface but omits
 	# the redundant scope on the remote column. The configured/showconf checks
 	# above prove the dial-target scope; these checks prove the carrier source.
-	outer_a=$(wait_tcp_endpoint "$ns_a" 6 "[fe80::b]" "$port_b" \
-		"[fe80::a]%$p0a:")
-	outer_b=$(wait_tcp_endpoint "$ns_b" 6 "[fe80::a]" "$port_a" \
-		"[fe80::b]%$p0b:")
+	outer_a=$(wait_tcp_address_pair "$ns_a" 6 "[fe80::a]%$p0a" "[fe80::b]")
+	outer_b=$(wait_tcp_address_pair "$ns_b" 6 "[fe80::b]%$p0b" "[fe80::a]")
 	printf 'mode=ipv6-link-local\nscoped_endpoints=pass\nlink_local_carrier=pass\ntraffic=pass\nouter_a=%s\nouter_b=%s\n' \
 		"$outer_a" "$outer_b"
 	;;

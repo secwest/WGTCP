@@ -108,6 +108,18 @@ class TcpLifecycleContract(unittest.TestCase):
         self.assertLess(promotion.index(source), promotion.index(publish))
         self.assertLess(promotion.index(dest), promotion.index(publish))
 
+    def test_stale_authenticated_candidate_is_not_a_kernel_warning(self) -> None:
+        promotion = final_section(
+            self.socket,
+            "static bool wg_tcp_promote_authenticated_carrier(struct wg_peer *peer,",
+            "static void wg_destroy_temp_peer(",
+        )
+        self.assertIn("if (ret != -ESTALE && ret != -ESHUTDOWN)", promotion)
+        self.assertLess(
+            promotion.index("if (ret != -ESTALE && ret != -ESHUTDOWN)"),
+            promotion.index("WARN_ON_ONCE(ret)"),
+        )
+
     def test_authenticated_promotion_is_deferred_with_no_lost_wakeup(self) -> None:
         update = section(
             self.socket,

@@ -4554,7 +4554,12 @@ unlock:
 	mutex_unlock(&temp->tcp_socket_lock);
 	mutex_unlock(&peer->tcp_socket_lock);
 	if (ret) {
-		WARN_ON_ONCE(ret);
+		/* Concurrent candidates can become stale, and interface teardown can
+		 * stop callback installation after a candidate has been claimed. Both
+		 * paths safely destroy the candidate; warn only on unexpected errors.
+		 */
+		if (ret != -ESTALE && ret != -ESHUTDOWN)
+			WARN_ON_ONCE(ret);
 		goto fail_entry;
 	}
 

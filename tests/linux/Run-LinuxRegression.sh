@@ -63,10 +63,25 @@ ssh_private_key=${state[2]}
 
 guest_ip() {
 	local guest=$1 ip
-	ip=$(virsh -c qemu:///system domifaddr "$guest" --source lease 2>/dev/null |
-		awk '$3 == "ipv4" { split($4, address, "/"); print address[1]; exit }')
-	[[ -n $ip ]] || die "could not resolve a libvirt DHCP lease for $guest"
-	printf '%s\n' "$ip"
+	local -a addresses=()
+	mapfile -t addresses < <(
+		virsh -c qemu:///system domifaddr "$guest" --source lease 2>/dev/null |
+			awk '$3 == "ipv4" {
+				split($4, address, "/")
+				if (!seen[address[1]]++)
+					print address[1]
+			}'
+	)
+	for ip in "${addresses[@]}"; do
+		if ssh -o BatchMode=yes -o ConnectTimeout=5 \
+			-o StrictHostKeyChecking=yes \
+			-o "UserKnownHostsFile=$known_hosts_dir/$guest" \
+			-i "$ssh_private_key" "ubuntu@$ip" true >/dev/null 2>&1; then
+			printf '%s\n' "$ip"
+			return
+		fi
+	done
+	die "could not resolve a reachable libvirt DHCP lease for $guest"
 }
 
 known_hosts_dir=$RESULTS_DIR/known-hosts

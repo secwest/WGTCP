@@ -32,19 +32,27 @@ New users should follow the
 tool, configure a verified two-host tunnel, and adapt the advanced
 site-to-site, asymmetric-port, dual-stack, and NAT templates.
 
+Ubuntu 24.04 users running the exact `6.8.0-136-generic` kernel can install
+without compiling:
+
+- [amd64 binary archive](docs/downloads/WireguardTCP-ubuntu-24.04-amd64-6.8.0-136-generic.tar.gz)
+- [arm64 binary archive](docs/downloads/WireguardTCP-ubuntu-24.04-arm64-6.8.0-136-generic.tar.gz)
+- [SHA-256 checksums](docs/downloads/SHA256SUMS.txt)
+
+The archives include the modified `wg` tool, production kernel module, guarded
+installer, and complete compiled source tree. The installer rejects a different
+Ubuntu release, architecture, or running kernel rather than loading an
+incompatible module. See the [binary-install instructions](QUICKSTART.md#install-without-compiling-on-ubuntu-2404)
+for Secure Boot and installation requirements.
+
 > **Status: experimental for TCP.** UDP is the drop-in-compatible Linux path;
 > omitting `Transport` retains the stock-facing UDP behavior described below.
-> The merged source passes **213 local source and contract tests**. Production,
-> DEBUG, and isolated fault modules built on both Ubuntu 24.04 Hyper-V guests,
-> and the production module also built with `W=1` against the prepared WSL
-> kernel tree. Final focused run `wg20260731T074807Z` passed all four current
-> NAT/recovery cases: outbound-only single-private NAT, dual-reachable
-> initiation with either authenticated direction retained, address-and-port
-> roaming, and exact half-open recovery (**4 PASS, 0 FAIL, 0 SKIP**) with clean
-> kernel logs. Run `wg20260731T070427Z` separately passed hostile-stream,
-> short-write, exact fatal-send, recovery, and production-module restoration.
-> The older 36-case full campaign remains useful broad compatibility evidence,
-> but it predates accepted-carrier promotion. These results cover the tested
+> The merged source passes **221 local tests plus 16 subtests**. Production,
+> DEBUG, and isolated fault modules built on both Ubuntu 24.04 Linux guests.
+> Definitive Linux run `wg20260731T130556Z` exercised the complete UDP/TCP,
+> stock/fork, policy, IPv4/IPv6, NAT, roaming, recovery, configuration, and
+> hostile-stream matrix with **40 PASS, 0 FAIL, 0 SKIP** in 955.098 seconds and
+> clean kernel-log checks. These results cover the tested
 > Linux/nftables topologies, not every kernel, controller, NAT, or middlebox.
 > See the
 > [regression results](tests/hyperv/RESULTS.md) and the detailed
@@ -126,8 +134,8 @@ The one-shot send-failure selector is compiled only into
 `wireguard-fork-fault.ko`. It matches network-namespace inode, WireGuard
 ifindex, and the complete local/remote IPv4 address and port tuple before
 injecting `EPIPE`; production and ordinary DEBUG modules expose none of these
-parameters. The current source contracts and VM builds cover that isolation,
-but its refreshed runtime case remains part of the pending focused gate.
+parameters. The source contracts, VM builds, and hostile-stream runtime case cover that
+isolation and restore the production module after fault injection.
 
 ## Configuration
 
@@ -501,7 +509,8 @@ The Linux harness creates `wgtcp-a` and `wgtcp-b` on the existing libvirt
 management network plus private `wgtcp-path0` and `wgtcp-path1` networks. It
 uses verified SSH host keys for management, transfers the exact Git-visible
 snapshot, then delegates to the same complete case list and guest helpers as
-the Hyper-V runner.
+the Hyper-V runner. Linux run `wg20260731T130556Z` passed all 40 cases with no
+failures or skips in 955.098 seconds.
 
 **Windows (Hyper-V):** On Windows 10/11 Pro, Enterprise, or Education, enable
 Hyper-V and install the verified Multipass package as described in

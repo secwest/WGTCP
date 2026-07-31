@@ -83,6 +83,63 @@ run this implementation, and TCP retransmission can increase latency through
 head-of-line blocking. Prefer normal WireGuard UDP when it works and use TCP
 only after evaluating the target network and workload.
 
+## Install without compiling on Ubuntu 24.04
+
+Prebuilt archives are available for Ubuntu 24.04 on `amd64` and `arm64`:
+
+- [amd64, kernel 6.8.0-136-generic](docs/downloads/WireguardTCP-ubuntu-24.04-amd64-6.8.0-136-generic.tar.gz)
+- [arm64, kernel 6.8.0-136-generic](docs/downloads/WireguardTCP-ubuntu-24.04-arm64-6.8.0-136-generic.tar.gz)
+- [archive SHA-256 checksums](docs/downloads/SHA256SUMS.txt)
+
+These archives contain the modified `wg` tool, the production
+`wireguard.ko`, and the complete compiled source tree. They are intentionally
+strict: the installer accepts only Ubuntu 24.04, the archive's architecture,
+and the exact running kernel `6.8.0-136-generic`. Check both hosts before
+downloading:
+
+```bash
+. /etc/os-release
+printf 'Ubuntu %s, architecture %s, kernel %s\n' \
+  "$VERSION_ID" "$(dpkg --print-architecture)" "$(uname -r)"
+```
+
+If the kernel differs, use the source-build procedure below instead of trying
+to force-install the module. Kernel modules are tied to the kernel release and
+ABI.
+
+After downloading the archive for the host's architecture, compare its digest
+with `docs/downloads/SHA256SUMS.txt`, then extract and install it. This `amd64`
+example is identical for `arm64` except for the archive name:
+
+```bash
+archive=WireguardTCP-ubuntu-24.04-amd64-6.8.0-136-generic.tar.gz
+sha256sum "$archive"
+tar -xzf "$archive"
+cd "${archive%.tar.gz}"
+
+ip -o link show type wireguard
+sudo ./install.sh
+```
+
+The interface check must print nothing. Bring down and remove any active
+WireGuard interfaces before running the installer. The installer verifies all
+payload hashes, installs `wg` under `/usr/local/bin`, installs the module under
+`/lib/modules/6.8.0-136-generic/updates/wireguardtcp/`, runs `depmod`, loads
+the module, and confirms that the new module was selected.
+
+The module is unsigned. Secure Boot must be disabled or the module must be
+signed with a key trusted by the host. Verify the installation:
+
+```bash
+command -v wg
+wg --version
+modinfo -n wireguard
+```
+
+`command -v wg` should report `/usr/local/bin/wg`, and `modinfo -n wireguard`
+should report the `updates/wireguardtcp/wireguard.ko` path. Continue at
+[Generate one key pair per host](#4-generate-one-key-pair-per-host).
+
 ## Before you begin
 
 You need:

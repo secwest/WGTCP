@@ -56,6 +56,12 @@ class LinuxProvisionContractTests(unittest.TestCase):
         self.assertGreaterEqual(PROVISION.count('-i "$SSH_PRIVATE_KEY"'), 3)
         self.assertIn('"SshPrivateKey": env["STATE_SSH_PRIVATE_KEY"]', PROVISION)
 
+    def test_provisioner_probes_all_reported_dhcp_leases(self):
+        self.assertIn("domain_ips()", PROVISION)
+        self.assertIn("if (!seen[address[1]]++)", PROVISION)
+        self.assertIn('for address in "${addresses[@]}"; do', PROVISION)
+        self.assertIn('"ubuntu@$address" true', PROVISION)
+
     def test_verified_base_image_is_staged_for_libvirt_access(self):
         self.assertIn("stage_base_image()", PROVISION)
         self.assertIn('sha256sum "$source"', PROVISION)

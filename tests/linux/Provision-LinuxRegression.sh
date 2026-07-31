@@ -468,28 +468,35 @@ ensure_domain() {
 	fi
 }
 
-domain_ip() {
+domain_ips() {
 	local name=$1
 	virsh_qemu domifaddr "$name" --source lease 2>/dev/null |
-		awk '$3 == "ipv4" { split($4, address, "/"); print address[1]; exit }'
+		awk '$3 == "ipv4" {
+			split($4, address, "/")
+			if (!seen[address[1]]++)
+				print address[1]
+		}'
 }
 
 wait_for_ssh() {
 	local name=$1 address deadline known_hosts
+	local -a addresses=()
 	known_hosts=$KNOWN_HOSTS_DIR/$name
 	deadline=$(( SECONDS + 600 ))
 	while (( SECONDS < deadline )); do
-		address=$(domain_ip "$name" || true)
-		if [[ -n $address ]] && ssh \
-			-i "$SSH_PRIVATE_KEY" \
-			-o BatchMode=yes \
-			-o ConnectTimeout=10 \
-			-o StrictHostKeyChecking=accept-new \
-			-o "UserKnownHostsFile=$known_hosts" \
-			"ubuntu@$address" true >/dev/null 2>&1; then
-			printf '%s\n' "$address"
-			return
-		fi
+		mapfile -t addresses < <(domain_ips "$name" || true)
+		for address in "${addresses[@]}"; do
+			if ssh \
+				-i "$SSH_PRIVATE_KEY" \
+				-o BatchMode=yes \
+				-o ConnectTimeout=10 \
+				-o StrictHostKeyChecking=accept-new \
+				-o "UserKnownHostsFile=$known_hosts" \
+				"ubuntu@$address" true >/dev/null 2>&1; then
+				printf '%s\n' "$address"
+				return
+			fi
+		done
 		sleep 5
 	done
 	die "timed out waiting for SSH to '$name'"

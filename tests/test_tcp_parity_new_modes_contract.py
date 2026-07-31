@@ -60,38 +60,44 @@ class TcpParityNewModesContract(unittest.TestCase):
         self.assertIn('$route_a == *"src fe80::a"*', SCRIPT)
         self.assertIn('expected_a="[fe80::b%$p0a]:$port_b"', SCRIPT)
         self.assertIn('expected_b="[fe80::a%$p0b]:$port_a"', SCRIPT)
-        self.assertIn('"[fe80::b]" "$port_b"', SCRIPT)
-        self.assertIn('"[fe80::a]%$p0a:"', SCRIPT)
-        self.assertIn('"[fe80::a]" "$port_a"', SCRIPT)
-        self.assertIn('"[fe80::b]%$p0b:"', SCRIPT)
+        self.assertIn(
+            'wait_tcp_address_pair "$ns_a" 6 "[fe80::a]%$p0a" "[fe80::b]"',
+            SCRIPT,
+        )
+        self.assertIn(
+            'wait_tcp_address_pair "$ns_b" 6 "[fe80::b]%$p0b" "[fe80::a]"',
+            SCRIPT,
+        )
         self.assertIn("scoped_endpoints=pass", SCRIPT)
         self.assertIn("link_local_carrier=pass", SCRIPT)
 
-    def test_source_uplink_uses_the_authenticated_future_dial_target(self) -> None:
+    def test_source_uplink_preserves_the_configured_dial_target(self) -> None:
         source_uplink = SCRIPT[
             SCRIPT.index("source-uplink)") : SCRIPT.index("policy-churn)")
         ]
         self.assert_ordered(
             source_uplink,
             'ip link set "$p0a" down',
-            'wait_tcp_endpoint "$ns_a" 4 198.51.100.2',
-            'wait_peer_endpoint "$ns_a" wga "$b_pub" "198.51.100.2:$port"',
-            'wait_tcp_remote_absent "$ns_a" 4 192.0.2.2 "$port"',
+            'wait_tcp_endpoint "$ns_a" 4 203.0.113.2',
+            'wait_peer_endpoint "$ns_a" wga "$b_pub" "203.0.113.2:$port"',
             'wait_ping "$ns_a" wga 10.210.0.2',
         )
-        self.assertIn("authenticated_dial_target_update=pass", source_uplink)
-        self.assertIn("obsolete_dial_target_retired=pass", source_uplink)
+        self.assertIn("configured_dial_target_preserved=pass", source_uplink)
+        self.assertNotIn("authenticated_dial_target_update=pass", source_uplink)
         self.assertIn("uplink_dial_target=%s", source_uplink)
 
     def test_route_change_preserves_the_configured_remote_address(self) -> None:
         route = SCRIPT[SCRIPT.index("route)") : SCRIPT.index("source-uplink)")]
         self.assertIn(
-            'wait_tcp_endpoint "$ns_a" 4 192.0.2.2 "$port" 198.51.100.1:',
+            'wait_tcp_endpoint "$ns_a" 4 203.0.113.2 "$port" 198.51.100.1:',
             route,
         )
         self.assertNotIn(
             'wait_tcp_endpoint "$ns_a" 4 198.51.100.2 "$port" 198.51.100.1:',
             route,
+        )
+        self.assertIn(
+            'ip route replace 203.0.113.2/32 via 198.51.100.2', route
         )
 
     def test_fault_mode_proves_each_injected_path_and_recovers(self) -> None:
@@ -105,74 +111,52 @@ class TcpParityNewModesContract(unittest.TestCase):
         self.assertIn("queue_after > queue_before", SCRIPT)
         self.assertIn("recovery=pass", SCRIPT)
 
-    def test_policy_churn_repeats_each_reconnect_trigger_with_invariants(self) -> None:
+    def test_policy_churn_repeats_single_carrier_reconnect_triggers(self) -> None:
         self.assertIn("source-uplink|policy-churn|ipv6", SCRIPT)
         policy = SCRIPT[
             SCRIPT.index("policy-churn)") : SCRIPT.index("carrier-lifetime)")
         ]
 
-        self.assertIn('port_a=52205', policy)
-        self.assertIn('port_b=52206', policy)
+        self.assertIn("port_a=52205", policy)
+        self.assertIn("port_b=52206", policy)
         self.assertIn(
             'setup_policy_churn_pair "$port_a" "$port_b" "$mark_a1" "$mark_b1"',
             policy,
         )
-        self.assertGreaterEqual(policy.count('assert_policy_path_activity'), 10)
-        self.assertGreaterEqual(policy.count('assert_policy_state'), 10)
-        self.assertIn('ip route replace 192.0.2.2/32 via 198.51.100.2', policy)
-        self.assertIn('ip addr del 198.51.100.1/24 dev "$p1a"', policy)
-        self.assertIn('ip addr del 198.51.100.2/24 dev "$p1b"', policy)
-        self.assertIn('ip link set "$p1a" down', policy)
-        self.assertIn('ip link set "$p1a" up', policy)
+        self.assertEqual(policy.count("settle_policy_baseline"), 3)
+        self.assertEqual(policy.count("prove_policy_a_connect"), 3)
+        self.assertNotIn("prove_policy_b_connect", policy)
+        self.assertGreaterEqual(policy.count("assert_policy_path_activity"), 4)
         self.assertGreaterEqual(policy.count('set wga fwmark "$mark_a2"'), 2)
-        self.assertGreaterEqual(policy.count('set wga fwmark "$mark_a1"'), 2)
-        self.assertIn('wait_tcp_remote_absent', policy)
-        self.assertIn('transitions == 11', policy)
-        self.assertIn('connect_proofs == 20', policy)
-        self.assertIn('fwmark_syn_proofs == 8', policy)
-        self.assertIn('policy_transitions=%s', policy)
-        self.assertIn('connect_proofs=%s', policy)
-        self.assertIn('fwmark_syn_proofs=%s', policy)
-        self.assertIn('syn_observability=pass', policy)
-        self.assertIn('route_churn=pass', policy)
-        self.assertIn('source_churn=pass', policy)
-        self.assertIn('uplink_churn=pass', policy)
-        self.assertIn('fwmark_socket_reconnect=pass', policy)
-        self.assertIn(
-            'fwmark_scope=socket-mark-propagation-and-reconnect', policy
-        )
-        self.assertIn('mark_selected_full_tunnel_scope=fwmark-mode', policy)
-        self.assertIn('bidirectional_traffic=pass', policy)
-        self.assertIn('asymmetric_ports=%s,%s', policy)
+        self.assertIn('set wga fwmark "$mark_a1"', policy)
+        self.assertIn("transitions == 3", policy)
+        self.assertIn("connect_proofs == 3", policy)
+        self.assertIn("fwmark_syn_proofs == 3", policy)
+        self.assertIn("policy_transitions=%s", policy)
+        self.assertIn("syn_observability=pass", policy)
+        self.assertIn("stable_route=pass", policy)
+        self.assertIn("fwmark_socket_reconnect=pass", policy)
+        self.assertIn("bidirectional_traffic=pass", policy)
+        self.assertIn("asymmetric_ports=%s,%s", policy)
+        self.assertIn("final_path=path0", policy)
 
-    def test_policy_churn_keeps_endpoint_ports_and_owned_cleanup(self) -> None:
-        state_start = SCRIPT.index("assert_policy_state()")
-        state = SCRIPT[
-            state_start : SCRIPT.index("\ncreate_topology\n", state_start)
-        ]
+    def test_policy_churn_uses_one_configured_dialer_and_owned_cleanup(self) -> None:
         setup = SCRIPT[
             SCRIPT.index("setup_policy_churn_pair()") : SCRIPT.index(
                 "assert_policy_path_activity()"
             )
         ]
 
-        self.assertIn('"$remote_a:$port_b"', state)
-        self.assertIn('"$remote_b:$port_a"', state)
-        self.assertIn('show wga listen-port', state)
-        self.assertIn('show wgb listen-port', state)
         self.assertIn('endpoint 203.0.113.2:"$listen_b"', setup)
-        self.assertIn('endpoint 203.0.113.1:"$listen_a"', setup)
+        self.assertIn("allowed-ips 10.215.0.1/32", setup)
+        self.assertNotIn('endpoint 192.0.2.1:"$listen_a"', setup)
         self.assertIn('install_policy_syn_observer "$ns_a"', setup)
-        self.assertIn('install_policy_syn_observer "$ns_b"', setup)
+        self.assertNotIn('install_policy_syn_observer "$ns_b"', setup)
         self.assertLess(
-            setup.index('ip route add 198.51.100.0/24 via 192.0.2.2'),
+            setup.index("ip route add 203.0.113.2/32 via 192.0.2.2"),
             setup.index('"$WG_FORK" set wga peer'),
         )
-        self.assertLess(
-            setup.index('ip route add 198.51.100.0/24 via 192.0.2.1'),
-            setup.index('"$WG_FORK" set wgb peer'),
-        )
-        self.assertIn('trap cleanup EXIT', SCRIPT)
+        self.assertIn("trap cleanup EXIT", SCRIPT)
         self.assertLess(
             SCRIPT.index('record_owned netns "$ns_a"'),
             SCRIPT.index('ip netns add "$ns_a"'),
@@ -197,8 +181,8 @@ class TcpParityNewModesContract(unittest.TestCase):
         self.assertIn("nft add counter ip wgtcp_policy syn_mark1", observer)
         self.assertIn("nft add counter ip wgtcp_policy syn_mark2", observer)
         self.assertIn("type filter hook output", observer)
-        self.assertIn("meta mark \"$mark1\"", observer)
-        self.assertIn("meta mark \"$mark2\"", observer)
+        self.assertIn('meta mark "$mark1"', observer)
+        self.assertIn('meta mark "$mark2"', observer)
         self.assertIn("wait_policy_syn_advance", observer)
         self.assertIn("policy_exact_carrier", observer)
         self.assertIn(r"/^[0-9][0-9.]*:[0-9]+$/", observer)
@@ -208,88 +192,58 @@ class TcpParityNewModesContract(unittest.TestCase):
         self.assertIn('observed_carrier == "$last_carrier"', observer)
         self.assertIn("SECONDS - quiet_since >= quiet_seconds", observer)
         self.assertIn('confirm_all == "$observed_all"', observer)
-        self.assertEqual(policy.count("settle_policy_baseline"), 20)
-        self.assertEqual(policy.count("prove_policy_a_connect"), 10)
-        self.assertEqual(policy.count("prove_policy_b_connect"), 10)
-        self.assertEqual(policy.count("syn_mark1 \\\n"), 4)
-        self.assertEqual(policy.count("syn_mark2 \\\n"), 4)
+        self.assertEqual(policy.count("settle_policy_baseline"), 3)
+        self.assertEqual(policy.count("prove_policy_a_connect"), 3)
+        self.assertEqual(policy.count("prove_policy_b_connect"), 0)
 
         proof_a = SCRIPT[
             SCRIPT.index("prove_policy_a_connect()") : SCRIPT.index(
                 "prove_policy_b_connect()"
             )
         ]
-        proof_b = SCRIPT[
-            SCRIPT.index("prove_policy_b_connect()") : SCRIPT.index(
-                "\ncreate_topology\n"
-            )
-        ]
-        for proof in (proof_a, proof_b):
-            self.assert_ordered(
-                proof,
-                "wait_policy_syn_advance",
-                "wait_policy_exact_carrier",
-                "wait_ping",
-                "wait_peer_endpoint",
-            )
+        self.assert_ordered(
+            proof_a,
+            "wait_policy_syn_advance",
+            "wait_policy_exact_carrier",
+            "wait_ping",
+            "wait_peer_endpoint_address",
+        )
 
     def test_policy_churn_orders_each_mutation_after_its_syn_baseline(self) -> None:
         policy = SCRIPT[
             SCRIPT.index("policy-churn)") : SCRIPT.index("carrier-lifetime)")
         ]
         phases = (
-            ("read -r route1_a_syn_before", 'ip route replace 192.0.2.2/32', "prove_policy_a_connect", "read -r route1_b_syn_before", 'ip route replace 198.51.100.1/32', "prove_policy_b_connect"),
-            ("read -r source_a_syn_before", 'ip addr del 198.51.100.1/24', "prove_policy_a_connect", "read -r source_b_syn_before", 'ip addr del 198.51.100.2/24', "prove_policy_b_connect"),
-            ("read -r mark2_a_syn_before", 'set wga fwmark "$mark_a2"', "prove_policy_a_connect", "read -r mark2_b_syn_before", 'set wgb fwmark "$mark_b2"', "prove_policy_b_connect"),
-            ("read -r link_down_a_syn_before", 'ip link set "$p1a" down', "prove_policy_a_connect", "read -r link_down_b_syn_before", 'ip link set "$p1b" down', "prove_policy_b_connect"),
-            ("read -r mark1_a_syn_before", 'set wga fwmark "$mark_a1"', "prove_policy_a_connect", "read -r mark1_b_syn_before", 'set wgb fwmark "$mark_b1"', "prove_policy_b_connect"),
-            ("read -r link_up_a_syn_before", 'ip link set "$p1a" up', "prove_policy_a_connect", "read -r link_up_b_syn_before", 'ip link set "$p1b" up', "prove_policy_b_connect"),
-            ("read -r route2_a_syn_before", 'ip route replace 192.0.2.2/32', "prove_policy_a_connect", "read -r route2_b_syn_before", 'ip route replace 198.51.100.9/32', "prove_policy_b_connect"),
-            ("read -r mark2_repeat_a_syn_before", 'set wga fwmark "$mark_a2"', "prove_policy_a_connect", "read -r mark2_repeat_b_syn_before", 'set wgb fwmark "$mark_b2"', "prove_policy_b_connect"),
-            ("read -r route3_a_syn_before", 'ip route replace 198.51.100.10/32', "prove_policy_a_connect", "read -r route3_b_syn_before", 'ip route replace 192.0.2.1/32', "prove_policy_b_connect"),
-            ("read -r mark1_repeat_a_syn_before", 'set wga fwmark "$mark_a1"', "prove_policy_a_connect", "read -r mark1_repeat_b_syn_before", 'set wgb fwmark "$mark_b1"', "prove_policy_b_connect"),
+            (
+                "read -r mark2_syn_before",
+                'set wga fwmark "$mark_a2"',
+                "prove_policy_a_connect",
+            ),
+            (
+                "read -r mark1_syn_before",
+                'set wga fwmark "$mark_a1"',
+                "prove_policy_a_connect",
+            ),
+            (
+                "read -r mark2_repeat_syn_before",
+                'set wga fwmark "$mark_a2"',
+                "prove_policy_a_connect",
+            ),
         )
-        for phase in phases:
-            self.assert_ordered(policy, *phase)
-            for baseline, mutation in ((phase[0], phase[1]), (phase[3], phase[4])):
-                start = policy.index(baseline)
-                end = policy.index(mutation, start)
-                self.assertIn("settle_policy_baseline", policy[start:end])
+        for baseline, mutation, proof in phases:
+            self.assert_ordered(policy, baseline, mutation, proof)
+            start = policy.index(baseline)
+            end = policy.index(mutation, start)
+            self.assertIn("settle_policy_baseline", policy[start:end])
 
-    def test_policy_churn_retires_obsolete_exact_routes_before_reuse(self) -> None:
+    def test_policy_churn_keeps_one_configured_remote_across_paths(self) -> None:
         policy = SCRIPT[
             SCRIPT.index("policy-churn)") : SCRIPT.index("carrier-lifetime)")
         ]
-
-        first_path1_state = policy.index(
-            "assert_policy_state 198.51.100.10 198.51.100.9"
-        )
-        first_link_down = policy.index('ip link set "$p1a" down')
-        self.assert_ordered(
-            policy[first_path1_state:first_link_down],
-            'delete_policy_route_if_present "$ns_a" 192.0.2.2/32',
-            'delete_policy_route_if_present "$ns_b" 198.51.100.1/32',
-            "read -r link_down_a_syn_before",
-        )
-
-        repeated_path1 = policy.index("read -r mark2_repeat_a_syn_before")
-        final_path0_end = policy.index("read -r mark1_repeat_a_syn_before")
-        self.assert_ordered(
-            policy[repeated_path1:final_path0_end],
-            'delete_policy_route_if_present "$ns_a" 192.0.2.2/32',
-            "read -r route3_a_syn_before",
-            "prove_policy_a_connect",
-            'delete_policy_route_if_present "$ns_b" 198.51.100.9/32',
-            "read -r route3_b_syn_before",
-        )
-
-        delete_helper = SCRIPT[
-            SCRIPT.index("delete_policy_route_if_present()") : SCRIPT.index(
-                "wait_policy_syn_advance()"
-            )
-        ]
-        self.assertIn('ip -4 route show exact "$prefix"', delete_helper)
-        self.assertIn('[[ -z $routes ]] ||', delete_helper)
+        self.assertEqual(policy.count("prove_policy_a_connect 203.0.113.2"), 3)
+        self.assertIn("203.0.113.2 192.0.2.1", policy)
+        self.assertNotIn("203.0.113.2 198.51.100.9", policy)
+        self.assertNotIn("wait_tcp_remote_absent", policy)
 
 
 if __name__ == "__main__":

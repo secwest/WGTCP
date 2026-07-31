@@ -50,6 +50,12 @@ class LinuxRunnerContractTests(unittest.TestCase):
     def test_known_host_validation_is_limited_to_the_two_guests(self):
         self.assertIn('for guest in "${state[@]:0:2}"; do', RUNNER)
 
+    def test_runner_selects_a_reachable_address_from_all_dhcp_leases(self):
+        self.assertIn("if (!seen[address[1]]++)", RUNNER)
+        self.assertIn('for ip in "${addresses[@]}"; do', RUNNER)
+        self.assertIn('"ubuntu@$ip" true', RUNNER)
+        self.assertIn("could not resolve a reachable libvirt DHCP lease", RUNNER)
+
     def test_preflight_details_are_linux_transport_specific(self):
         suite = Harness()
 
