@@ -7,6 +7,10 @@ affects design and externally visible behavior.
 
 ## Unreleased
 
+### Removed
+
+- Removed the obsolete performance campaign cost estimate.
+
 ### Added
 
 - Added a root `PERFORMANCE.md` summarizing measured TCP-mode advantages,

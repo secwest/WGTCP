@@ -10,7 +10,6 @@ architectures (x64, arm64), at eight packet-loss rates (0, 0.5, 1, 2, 3,
 5, 10, 20%) with three runs per cell.
 
 **Authoritative design** lives in [`TESTPLAN.md`](./TESTPLAN.md).
-**Cost envelope** lives in [`COSTESTIMATE.md`](./COSTESTIMATE.md).
 **Report skeleton** lives in [`REPORT-TEMPLATE.md`](./REPORT-TEMPLATE.md).
 
 ---
