@@ -9,14 +9,198 @@ fixes, validation, tooling, and documentation.
 
 The imported source identifies its lineage as the `tcp` branch of
 `github.com/jnathan/naked_gun` at commit
-`4211b00ef437f097ffd741145ec4379eb89bb031`. That repository no longer resolves
-through authenticated or public GitHub access, so its original commit graph is
-not available for commit-by-commit citation. The pre-import history below is
-reconstructed from the preserved source, documentation, and source-era test
-notes. Every entry beginning with the April 2026 import is backed by this
-repository's Git history.
+`4211b00ef437f097ffd741145ec4379eb89bb031`. The original authenticated GitHub
+commit graph was inspected directly. Dates in the pre-import timeline follow
+GitHub's displayed commit-day groupings; links point to representative commits
+rather than implying that every one of the branch's more than 1,000
+fine-grained revisions was independently releasable. Every entry beginning
+with the April 2026 import is also backed by this repository's Git history.
 
-## Before 2026-04-27 - Original TCP branch development
+## 2024-02-28 through 2026-03-11 - Original `naked_gun` TCP timeline
+
+### 2024-02-28 - Repository assembly and transport configuration
+
+- Combined `wireguard-tools` and `wireguard-linux` in one development
+  repository.
+- Iterated through parser stubs and same-day reverts before landing consolidated
+  TCP-aware configuration and command-line plumbing in
+  [`b810051`](https://github.com/jnathan/naked_gun/commit/b81005137846621befb12b9e3d09d49af29b5053).
+
+### 2024-02-29 through 2024-03-01 - Userspace and netlink control plane
+
+- Added device and peer transport-mode commands in
+  [`658692f`](https://github.com/jnathan/naked_gun/commit/658692fc8ce58d016db5513876a4126ce6ed4160).
+- Added kernel generic-netlink configuration in
+  [`c7c30d1`](https://github.com/jnathan/naked_gun/commit/c7c30d167d41a1b36adf5910a6a96f69b389c47b)
+  and passed the new flags from the tools in
+  [`ce2e585`](https://github.com/jnathan/naked_gun/commit/ce2e58561ad10863e7aa71c0ff8f2adcc8211cc4).
+
+### 2024-03-03 - Initial kernel TCP carrier
+
+- Added the initial kernel TCP handling and socket workers in
+  [`8c24329`](https://github.com/jnathan/naked_gun/commit/8c24329c49609f7ac2815d8ff6a80d6654eab05c).
+
+### 2024-03-06 - Normal send-path integration
+
+- Routed the normal IPv4 and IPv6 send paths through TCP queuing in
+  [`c8c9c12`](https://github.com/jnathan/naked_gun/commit/c8c9c125bd859863f2022bd39bb4e4ed4cbe908c).
+
+### 2024-03-07 - Endpoint extraction and IPv6 scope
+
+- Added socket-to-endpoint extraction, endpoint comparison, and IPv6
+  link-local scope handling so a TCP carrier could reconstruct the metadata
+  expected by the normal WireGuard receive path.
+
+### 2024-03-13 through 2024-03-17 - Listener and temporary-peer lifecycle
+
+- Added conditional TCP MTU handling, callback reset, device connection
+  tracking, listener initialization, temporary-peer ownership, connection-list
+  cleanup, dual IPv4/IPv6 listener threads, and listener socket pointers.
+- Moved accepted sockets from an isolated prototype toward device-owned
+  lifecycle and teardown.
+
+### 2024-04-04 through 2024-04-08 - Framing, connect, and retry foundations
+
+- Moved the TCP encapsulation header into the shared socket interface, corrected
+  lock types, expanded outbound connection creation, added peer retry state,
+  and converted socket timeout handling to supported kernel interfaces.
+
+### 2024-04-10 through 2024-04-15 - Per-peer queues and userspace round trip
+
+- Added per-peer TCP send queues and locks, partial-record storage, cleanup
+  work, connection-list iteration, and peer-associated socket state.
+- Extended `wg` configuration parsing, display, Linux IPC, and container
+  structures so transport selection survived the complete userspace path.
+
+### 2024-04-17 through 2024-04-24 - Kernel configuration integration
+
+- Continued generic-netlink, device, socket, and configuration integration,
+  turning the carrier into a selectable device behavior rather than a
+  hard-wired experiment.
+
+### 2024-06-08 and 2024-06-20 - Peer and device state
+
+- Added the peer- and device-side state required by the developing listener,
+  retry, and stream paths.
+
+### 2024-07-16 through 2024-07-23 - Listener/connect lifecycle
+
+- Refined device startup, generic-netlink application, address reuse,
+  IPv4/IPv6 listener selection, outbound connection placement, callback setup,
+  and release ordering.
+
+### 2024-07-26 through 2024-07-31 - Cleanup and callback reliability
+
+- Stopped listeners during socket release, tightened port validation,
+  strengthened state-change cleanup, added retry scheduling guards, and made
+  keypair release more defensive.
+
+### 2024-08-01 through 2024-08-07 - Locking, diagnostics, and transport selection
+
+- Replaced early connection-list locking with RCU-oriented handling, expanded
+  diagnostics, and removed the temporary hard-wiring of TCP.
+- Defined the UDP/TCP transport selector and brought up both paths under an
+  explicit device mode.
+
+### 2024-08-11 through 2024-08-16 - Worker and callback ownership
+
+- Reworked connection-list cleanup, packet queuing, listener callbacks, state
+  tracking, read/write workers, callback safety flags, locking, and peer socket
+  cleanup.
+
+### 2024-08-17 through 2024-08-21 - Stream receive hardening
+
+- Added handshake/cookie and packet diagnostics, then corrected null
+  dereferences, partial reads, header synchronization, leftover SKB handling,
+  callback user-data ownership, and UDP-header bypass for TCP records.
+
+### 2024-08-22 through 2024-08-25 - Carrier promotion and endpoint ownership
+
+- Iterated on encrypted-record diagnostics, framing lengths, accepted temporary
+  peers, promotion, connection races, separate inbound/outbound callbacks,
+  exact endpoint storage, retry cleanup, and source/destination tracking.
+- The high commit density records active fault isolation and design
+  exploration, not hundreds of releases.
+
+### 2024-08-26 through 2024-08-31 - Port correctness and stabilization
+
+- Removed temporary debug changes, stopped hard-wiring the TCP port, restored
+  the configured port, synchronized the working TCP branch, and continued
+  endpoint and socket cleanup.
+
+### 2024-09-17 through 2024-09-24 - Parser and packet diagnostics
+
+- Corrected pointer arithmetic, leftover-buffer handling, transfer locking, and
+  kernel formatting.
+- Added progressively structured TCP/IP packet decoding and disabled ECN for
+  the experimental outer TCP carrier.
+
+### 2025-01-28 through 2025-03-11 - Send/receive diagnostics and socket repair
+
+- Expanded send and receive diagnostics, pointer visibility, device tracing,
+  SKB inspection, and targeted receive/socket fixes.
+
+### 2025-05-01 through 2025-05-22 - SKB tracing and worker experiments
+
+- Added full SKB printouts and compile fixes, then experimented with receive and
+  socket worker changes.
+
+### 2025-06-10 through 2025-07-22 - Reverts and transfer-worker redesign
+
+- Reverted the May receive/socket experiments, then reworked the transfer path
+  to stop depending on the earlier worker arrangement.
+
+### 2025-07-29 and 2025-08-26 - Fragmentation correctness
+
+- Corrected conditional fragmentation-header length in
+  [`dee4602`](https://github.com/jnathan/naked_gun/commit/dee4602c904c21689181da5c58ce6b8e63e8352b)
+  and fragmentation-header detection in
+  [`e66f421`](https://github.com/jnathan/naked_gun/commit/e66f4215b0970f9853c14d7629ac13b26210bcac).
+
+### 2025-09-21 through 2025-09-30 - Queue and stream convergence
+
+- Removed obsolete maximum-packet and write-queue remnants, renamed framing
+  fields for clarity, and continued socket, receive, and format corrections.
+
+### 2026-02-05 - Structured diagnostics and socket repair
+
+- Added the TCP diagnostic framework and a concentrated sequence of memory,
+  initialization, return-value, listener, and socket refactoring fixes.
+- Ended the tranche with the temporary-peer prototype correction in
+  [`51765a1`](https://github.com/jnathan/naked_gun/commit/51765a1cb4c28ab30595a676418b57cc75810b7f).
+
+### 2026-03-08 - Listener, connect, latency, and relay fixes
+
+- Corrected listener temporary-peer construction, the outbound connect
+  completion check, and `TCP_NODELAY` on accepted and outbound sockets.
+- Split verbose and diagnostic logging and added relay/node-agent development
+  support. The relay and agent are operating infrastructure, not additions to
+  the WireGuard-on-TCP wire format.
+
+### 2026-03-09 - Rekey and buffered-read fixes
+
+- Fixed handshake/rekey livelock and buffered-read starvation through
+  pre-send drain/recheck sequencing and processing of already-buffered data in
+  [`fe2fd51`](https://github.com/jnathan/naked_gun/commit/fe2fd5135dc168cc6d44bb7a76b831d7c38804f6),
+  [`7f66568`](https://github.com/jnathan/naked_gun/commit/7f6656843900431953ed79db36efbdb9fe3f8c14),
+  and
+  [`def79f2`](https://github.com/jnathan/naked_gun/commit/def79f2144c6244a3a30f1d00ad7b25a2cfc1fcc).
+
+### 2026-03-11 - Imported source tip
+
+- Fixed module-removal deadlock and socket-callback use-after-free hazards in
+  [`4211b00`](https://github.com/jnathan/naked_gun/commit/4211b00ef437f097ffd741145ec4379eb89bb031).
+- This exact `tcp`-branch commit became the standalone repository's source
+  snapshot on 2026-04-27.
+
+### 2026-03-11 - Branch boundary
+
+The repository's default `main` branch is not this lineage. Two socket-fix
+batches added to `main` in February 2026 were immediately reverted as
+wrong-branch changes. The `main`-only testing documents added in May 2026 also
+postdate `4211b00`; none of those states is part of the imported snapshot.
+
+### 2026-03-11 - Imported-tip feature inventory
 
 The preserved source snapshot already contained the core WireguardTCP
 implementation:
@@ -71,7 +255,7 @@ Retained source notes identify four late fixes in the original branch:
 
 ## 2026-04-30 through 2026-05-03 - Application performance campaign
 
-### `b84c95a` - Add point-to-point performance harness
+### 2026-04-30 - `b84c95a` adds the point-to-point performance harness
 
 - Added the Azure point-to-point performance framework under `perf-test/`.
 - Provisioned isolated x64 and arm64 VM pairs across LAN, medium, high, and
@@ -84,7 +268,7 @@ Retained source notes identify four late fixes in the original branch:
 - Protected the transport-aware `wg` binary from distribution package
   replacement during image bootstrap.
 
-### Reporting and naming improvements
+### 2026-04-30 - Reporting and naming improvements
 
 Commits `31c3822`, `9e28508`, `a1bfd46`, `517f241`, `e1e482a`, `fcf8196`,
 `e530be4`, and `db18003`:
@@ -97,7 +281,7 @@ Commits `31c3822`, `9e28508`, `a1bfd46`, `517f241`, `e1e482a`, `fcf8196`,
 - Added periodic report regeneration for campaigns in progress.
 - Added latency parsing for HTTP/2 results.
 
-### Campaign completion and gap filling
+### 2026-04-30 through 2026-05-01 - Campaign completion and gap filling
 
 Commits `5431d06`, the report-refresh series from `577c690` through `83de32a`,
 and the focused gap-fill commits:
@@ -111,7 +295,7 @@ and the focused gap-fill commits:
 - Added tunnel reset and recovery support with `987476f`.
 - Filled remaining high-latency HTTP/2 cells with `2c4c878`.
 
-### Performance parser and harness bug fixes
+### 2026-05-01 through 2026-05-03 - Parser and harness bug fixes
 
 Commits `d856cdf`, `f31faa5`, `0d0177b`, `9e7e9d4`, `880bbfb`, `e11aef3`, and
 `78bc294`:
@@ -127,7 +311,7 @@ Commits `d856cdf`, `f31faa5`, `0d0177b`, `9e7e9d4`, `880bbfb`, `e11aef3`, and
 - Reparsed the stored campaign after each parser fix so published tables used
   consistent rules.
 
-### Result
+### 2026-05-03 - Campaign result
 
 - Published a complete x64/arm64, TCP/UDP, workload, latency, and loss matrix.
 - Recorded competitive clean-path TCP performance and strong delivery in
@@ -257,6 +441,22 @@ Commits `0557140`, `518f1e1`, `ac66719`, `2b9513f`, `f62b150`, `23fc651`,
 - Confined forwarding, nftables, and conntrack mutation to disposable
   namespaces.
 
+### Configuration persistence and hostile-stream validation
+
+- Added canonical `Transport = tcp` output to `showconf`.
+- Preserved transport state through `setconf`, `syncconf`, and `wg-quick`
+  `SaveConfig`.
+- Protected private configuration material in guest-only restricted
+  directories.
+- Added a separate fault-injection module build.
+- Kept destructive `tcp_test_*` controls out of production and ordinary DEBUG
+  modules.
+- Added controlled short writes, malformed prefixes, parser
+  resynchronization, queue pressure, writer delay, and recovery counters.
+- Added one-command ownership of fault-module loading, testing, restoration, and
+  result reporting.
+- Verified post-test restoration to the production module.
+
 ## 2026-07-14 - Evidence integrity and complete parity hardening
 
 ### Burst and transport-aware campaign fixes
@@ -309,22 +509,6 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
   route and address changes, uplink migration, endpoint learning, keepalives,
   NAT44, and `FwMark` reconnects.
 - Completed 36 PASS, 0 FAIL, 0 SKIP across 541 recorded commands.
-
-## 2026-07-13 and 2026-07-14 - Configuration and hostile-stream validation
-
-- Added canonical `Transport = tcp` output to `showconf`.
-- Preserved transport state through `setconf`, `syncconf`, and `wg-quick`
-  `SaveConfig`.
-- Protected private configuration material in guest-only restricted
-  directories.
-- Added a separate fault-injection module build.
-- Kept destructive `tcp_test_*` controls out of production and ordinary DEBUG
-  modules.
-- Added controlled short writes, malformed prefixes, parser
-  resynchronization, queue pressure, writer delay, and recovery counters.
-- Added one-command ownership of fault-module loading, testing, restoration, and
-  result reporting.
-- Verified post-test restoration to the production module.
 
 ## 2026-07-15 - Performance operating envelope and boundary tools
 
@@ -422,6 +606,29 @@ Commits `0cd7431`, `0a55dd9`, `f7a76b0`, `c49591c`, `0ceda3f`, `d986133`,
 
 - Removed the old campaign cost estimate.
 - Removed active references and renumbered the performance campaign workflow.
+
+## 2026-07-30 - TCP source modularization
+
+### `a8ef645` - Separate TCP carrier and debug implementation
+
+- Moved TCP-specific carrier code out of the generic socket and send sources
+  into `kernel/wg_tcp.c` and `kernel/wg_tcp.h`.
+- Moved most TCP diagnostic implementation into dedicated debug sources.
+- Updated the kernel build and dependent device, peer, receive, timer, and
+  header integration.
+- Kept this as a source-organization change; it did not redefine the TCP record
+  format or WireGuard cryptographic protocol.
+
+## 2026-07-30 - Lifecycle and roaming groundwork
+
+### `7f45beb` - Checkpoint expanded regression design
+
+- Expanded TCP lifecycle, NAT, route/source-policy, and roaming documentation.
+- Added repeatable TCP roaming and delayed-record regression scaffolding.
+- Extended Hyper-V provisioning, runner diagnostics, and source contracts for
+  the broader lifecycle matrix.
+- Recorded this as groundwork rather than a claim that authenticated accepted
+  carrier promotion or real single-device roaming was complete.
 
 ## Maintainer update policy
 

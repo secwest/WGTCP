@@ -5,14 +5,16 @@ preserved original TCP branch into the current kernel module, userland tools,
 test systems, and performance framework. It records implemented design
 decisions and the bug fixes that refined them.
 
-## 1. Source lineage and standalone layout
+## Part I - Chronological design history
 
-### Original TCP branch
+### 2024-02-28 - Source assembly and transport configuration
 
 The preserved implementation identifies its source as
 `jnathan/naked_gun@4211b00ef437f097ffd741145ec4379eb89bb031`. Its original
-commit graph is no longer available from GitHub, so the design of that period is
-reconstructed from the imported source and retained source-era notes.
+authenticated GitHub commit graph was inspected directly. It contains more than
+1,000 fine-grained revisions from the project's assembly on 2024-02-28 through
+the imported tip on 2026-03-11. Those commits establish chronology, but only the
+complete tree at `4211b00` is treated as the inherited code baseline.
 
 The original branch made TCP a carrier beneath WireGuard rather than a new VPN
 protocol:
@@ -28,9 +30,162 @@ This retained WireGuard's peer keys, Noise state machine, replay protection,
 timers, `AllowedIPs`, and encrypted message formats. TCP framing was introduced
 only to recover record boundaries from a byte stream.
 
-### Standalone import - `ffe7285`
+The first design decision was to select transport in the existing WireGuard
+configuration plane rather than invent a second VPN protocol. After same-day
+parser experiments and reverts, commit
+[`b810051`](https://github.com/jnathan/naked_gun/commit/b81005137846621befb12b9e3d09d49af29b5053)
+consolidated TCP-aware configuration and command-line setup.
 
-The April 2026 import retained:
+### 2024-02-29 through 2024-03-01 - Control plane reaches the kernel
+
+Device and peer transport commands
+([`658692f`](https://github.com/jnathan/naked_gun/commit/658692fc8ce58d016db5513876a4126ce6ed4160))
+were connected to kernel generic netlink
+([`c7c30d1`](https://github.com/jnathan/naked_gun/commit/c7c30d167d41a1b36adf5910a6a96f69b389c47b))
+and passed through the tools
+([`ce2e585`](https://github.com/jnathan/naked_gun/commit/ce2e58561ad10863e7aa71c0ff8f2adcc8211cc4)).
+This established the lasting interface-wide policy: UDP remains the default;
+TCP is an explicit alternative.
+
+### 2024-03-03 - Kernel carrier prototype
+
+[`8c24329`](https://github.com/jnathan/naked_gun/commit/8c24329c49609f7ac2815d8ff6a80d6654eab05c)
+introduced the first kernel TCP handling. The design immediately required
+process-context workers because WireGuard packet production and TCP stream I/O
+have different blocking and framing rules.
+
+### 2024-03-06 and 2024-03-07 - Send integration and endpoint reconstruction
+
+The ordinary IPv4 and IPv6 send functions began queuing through the TCP carrier
+in
+[`c8c9c12`](https://github.com/jnathan/naked_gun/commit/c8c9c125bd859863f2022bd39bb4e4ed4cbe908c).
+Socket endpoint extraction, endpoint comparison, and IPv6 link-local scope
+handling then supplied the metadata expected by the common WireGuard receive
+path.
+
+### 2024-03-13 through 2024-03-17 - Listener and provisional-peer lifecycle
+
+The branch added TCP-specific MTU handling, listener threads, callback reset,
+device connection lists, accepted temporary peers, cleanup, and separate IPv4
+and IPv6 listener ownership. Unknown accepted sockets could not be trusted as a
+configured peer until a WireGuard handshake established identity, so
+provisional peer state became a core lifecycle concept.
+
+### 2024-04-04 through 2024-04-08 - Framing, connect, and retry
+
+The encapsulation header moved into the shared socket interface. Outbound
+connection creation, retry work, peer socket fields, timeout handling, and lock
+types were refined together. Framing and lifetime were therefore coupled: a
+partial record could not safely outlive or migrate away from its exact stream.
+
+### 2024-04-10 through 2024-04-15 - Queues and configuration round trip
+
+Per-peer send queues, partial-record storage, cleanup work, and connection-list
+iteration were added. In parallel, `wg` parsing, display, Linux IPC, and
+container structures were extended so the transport choice could make a
+complete userspace round trip.
+
+### 2024-04-17 through 2024-07-31 - Integration into device lifecycle
+
+Generic-netlink, device, peer, and socket changes moved TCP from a hard-wired
+prototype into selected device behavior. June added required peer/device state.
+July refined startup, address reuse, listener selection, outbound connect
+placement, callback setup, retry scheduling, shutdown, and port validation.
+
+### 2024-08-01 through 2024-08-07 - Explicit dual transport
+
+Early connection-list locking was replaced with RCU-oriented handling,
+diagnostics expanded, and hard-wired TCP behavior was removed. The branch
+defined an explicit UDP/TCP selector and brought up both paths under one device
+policy.
+
+### 2024-08-11 through 2024-08-16 - Worker and callback ownership
+
+Connection cleanup, queuing, state callbacks, read/write workers, callback
+publication flags, locks, and peer socket cleanup were repeatedly refined.
+These changes exposed the central rule later formalized in the standalone
+repository: callback installation, parser state, queued output, and release
+must have one exact socket owner.
+
+### 2024-08-17 through 2024-08-21 - Stream parser hardening
+
+Handshake, cookie, packet, and stream diagnostics were used to correct null
+dereferences, partial reads, header synchronization, leftover SKBs,
+`sk_user_data` ownership, and TCP-specific receive metadata. UDP header
+processing was explicitly skipped for TCP records before both paths rejoined
+the common authenticated receive machinery.
+
+### 2024-08-22 through 2024-08-25 - Promotion and directional carriers
+
+The design iterated through temporary-peer promotion, connection races,
+separate inbound/outbound callbacks, endpoint storage, retry cleanup, and
+source/destination tracking. The hundreds of granular commits in this period
+record experiments and reversals, not a release train.
+
+### 2024-08-26 through 2024-09-24 - Stabilization and diagnostics
+
+Temporary debugging was reduced, the configured TCP port replaced hard-wired
+values, and the working branch was synchronized. September corrected pointer
+arithmetic, leftover-buffer handling, and transfer locking while adding
+structured TCP/IP decoding. ECN was disabled for the experimental outer TCP
+carrier.
+
+### 2025-01-28 through 2025-03-11 - Instrumentation-led socket repair
+
+Send, receive, pointer, device, SKB, and endpoint diagnostics drove targeted
+socket and parser corrections. The instrumentation remained a development aid,
+not an extension of the wire protocol or trust model.
+
+### 2025-05-01 through 2025-07-22 - Worker experiments and rollback
+
+Full SKB tracing and receive/socket worker experiments were added, then the May
+worker changes were reverted in June. July reworked the transfer path without
+depending on the discarded arrangement. The history preserves unsuccessful
+approaches instead of presenting only the final state.
+
+### 2025-07-29 through 2025-09-30 - Fragmentation and queue convergence
+
+Conditional fragmentation-header length and detection were corrected in
+[`dee4602`](https://github.com/jnathan/naked_gun/commit/dee4602c904c21689181da5c58ce6b8e63e8352b)
+and
+[`e66f421`](https://github.com/jnathan/naked_gun/commit/e66f4215b0970f9853c14d7629ac13b26210bcac).
+The branch then removed obsolete maximum-packet and write-queue remnants,
+renamed framing fields, and continued stream fixes.
+
+### 2026-02-05 - Structured diagnostic and socket-fix tranche
+
+A formal TCP diagnostic framework preceded memory, initialization,
+return-value, listener, and socket refactoring fixes. The tranche ended with
+the temporary-peer prototype correction in
+[`51765a1`](https://github.com/jnathan/naked_gun/commit/51765a1cb4c28ab30595a676418b57cc75810b7f).
+
+### 2026-03-08 - Listener, connect, and latency corrections
+
+The branch corrected listener temporary-peer construction, outbound connect
+completion, and `TCP_NODELAY` setup on accepted and outbound sockets. Verbose
+and diagnostic logging were separated. Relay and node-agent work supported
+development operations but did not change the carrier wire format.
+
+### 2026-03-09 - Rekey and buffered-read correctness
+
+Handshake/rekey livelock and buffered-read starvation were addressed with
+pre-send drain/recheck sequencing and processing of already-buffered records in
+[`fe2fd51`](https://github.com/jnathan/naked_gun/commit/fe2fd5135dc168cc6d44bb7a76b831d7c38804f6),
+[`7f66568`](https://github.com/jnathan/naked_gun/commit/7f6656843900431953ed79db36efbdb9fe3f8c14),
+and
+[`def79f2`](https://github.com/jnathan/naked_gun/commit/def79f2144c6244a3a30f1d00ad7b25a2cfc1fcc).
+
+### 2026-03-11 - Historical source boundary
+
+[`4211b00`](https://github.com/jnathan/naked_gun/commit/4211b00ef437f097ffd741145ec4379eb89bb031)
+fixed module-removal deadlock and callback use-after-free hazards. This exact
+`tcp` tip is the inherited baseline. The default `main` branch is separate: its
+February socket-fix batches were reverted as wrong-branch changes, and its May
+testing documents postdate the imported tip.
+
+### 2026-04-27 - Standalone import (`ffe7285`)
+
+The standalone import retained:
 
 - the complete out-of-tree kernel module;
 - the modified `wg` and `wg-quick` tools;
@@ -42,7 +197,79 @@ That layout made the transport implementation directly buildable against the
 running kernel and made kernel, userland, UAPI, tests, and documentation
 reviewable in one repository.
 
-## 2. Device-wide transport selection
+### 2026-04-30 through 2026-05-03 - Application performance architecture
+
+The project added isolated point-to-point x64/arm64 pairs, matched TCP-WG and
+UDP-WG tunnels, four latency tiers, five application workload families, loss
+matrices, repeated runs, raw-result preservation, and reproducible aggregation.
+Parser corrections excluded failed HTTP requests from successful latency,
+retained valid non-2xx timing, used supported CPU sampling, and allowed exact
+gap-cell reruns. The resulting claims were intentionally application-level,
+not proof about every TCP-over-TCP mechanism.
+
+### 2026-05-08 - Performance documentation maintenance
+
+Quota, clone, naming, and campaign instructions were corrected without changing
+the measured evidence.
+
+### 2026-07-11 - Exact socket retirement and reviewability
+
+`b1c40d9` serialized send, callback reset, queue drain, and socket release with
+peer-level locks and synchronous worker cancellation. `245774d` made the
+complete fork reviewable as one generated patch, while `35c9110` documented the
+transport architecture and bounded performance findings.
+
+### 2026-07-12 - Compatibility becomes an explicit invariant
+
+`f515eb5` established UDP-default behavior, stock-facing grammar and output,
+shared TCP/UDP listen-port rules, transport-aware UAPI and tools, namespace and
+dual-stack coverage, and a two-VM regression matrix. Compatibility became a
+tested contract rather than an assumption inherited from the fork.
+
+### 2026-07-13 - Lifecycle, writer, NAT, and mechanistic test design
+
+The project created formal change/design logs, added the physical-carrier
+meltdown campaign, repaired the TCP writer lost wakeup, expanded parity
+contracts, added isolated NAT44 validation, preserved transport through
+configuration reload, and isolated destructive hostile-stream controls in a
+separate fault module. Campaign gates were committed before results so later
+interpretation could not silently move thresholds.
+
+### 2026-07-14 - Evidence integrity and full parity
+
+Transport-aware clean controls, exact endpoint roles, concurrency-safe BPF
+aggregation, monotonic event sequences, immutable reruns, and provenance-bound
+composites made invalid or missing evidence detectable. `849d702` consolidated
+device, listener, endpoint, network-notifier, parser, admission, and stream
+ownership. The 36-case functional campaign completed with 36 PASS, 0 FAIL, and
+0 SKIP.
+
+### 2026-07-15 - Operating envelope and boundary campaigns
+
+`d24fa51` separated observed severe degradation from the formal meltdown
+definition and documented the measured operating envelope. Subsequent commits
+predeclared timed boundary and correlation campaigns instead of generalizing
+beyond completed evidence.
+
+### 2026-07-30 - Cleanup, Linux regression, and user documentation
+
+Kernel cleanup removed dead declarations and duplicate structures. A Linux
+libvirt/QEMU/KVM backend was added beside Hyper-V and completed the shared
+36-case suite. Regression contracts were repaired around stable source
+boundaries, and the QuickStart and performance guide were expanded for users.
+
+### 2026-07-30 - TCP modularization and roaming groundwork
+
+`a8ef645` moved TCP-specific carrier and diagnostic code out of the generic
+socket/send files into `wg_tcp.c`, `wg_tcp.h`, and dedicated debug sources.
+`7f45beb` checkpointed expanded lifecycle, NAT, policy-churn, and roaming
+documentation and regression scaffolding. This checkpoint records groundwork;
+it does not retroactively broaden the authenticated-promotion or real-device
+roaming claims.
+
+## Appendix - Detailed architecture by subsystem
+
+## Device-wide transport selection
 
 ### Original decision
 
@@ -75,7 +302,7 @@ The Hyper-V matrix tested stock and modified tools against stock and modified
 kernels, while source contracts encoded parser, netlink, output, random-port,
 and live-mode transition behavior.
 
-## 3. TCP record format and receive integration
+## TCP record format and receive integration
 
 ### Original framing design
 
@@ -126,7 +353,7 @@ The separate fault module added:
 
 Production and ordinary DEBUG builds do not expose these destructive controls.
 
-## 4. Listener, dialer, and provisional accepted connections
+## Listener, dialer, and provisional accepted connections
 
 ### Original listener and dialer design
 
@@ -160,7 +387,7 @@ The listener records the temporary peer and connection identity in the tracked
 connection entry. Asynchronous authentication can therefore refer to one exact
 accepted carrier even when multiple sockets are active.
 
-## 5. Socket ownership and retirement
+## Socket ownership and retirement
 
 ### Original model
 
@@ -212,7 +439,7 @@ The implementation was then consolidated by:
 - removing dead receive, Noise, cookie, send, and socket paths; and
 - clarifying debug helper names.
 
-## 6. Serialized transmission and backpressure
+## Serialized transmission and backpressure
 
 ### Per-peer output queue
 
@@ -246,7 +473,7 @@ The corrected design:
 This eliminated a condition in which queued frames could remain without a
 future callback.
 
-## 7. Endpoint identity, learning, and simultaneous initiation
+## Endpoint identity, learning, and simultaneous initiation
 
 ### Configured endpoint separation
 
@@ -284,7 +511,7 @@ The isolated NAT regression formalized a dual-reachable topology:
 All router behavior lives in a disposable network namespace, keeping host and
 guest root networking unchanged.
 
-## 8. Network namespaces, routes, and socket marks
+## Network namespaces, routes, and socket marks
 
 ### Creation namespace
 
@@ -314,7 +541,7 @@ This model was validated with:
 - endpoint updates; and
 - live `FwMark` changes.
 
-## 9. IPv4, IPv6, and scoped endpoints
+## IPv4, IPv6, and scoped endpoints
 
 IPv4 and IPv6 listeners are independently created, published, and released.
 Failure or teardown of one family does not transfer ownership of the other
@@ -332,7 +559,7 @@ The runtime suite validated independent dual-stack listeners, IPv6 outer
 carriers, asymmetric ports, scoped link-local endpoints, and bidirectional
 inner IPv6 traffic.
 
-## 10. Configuration persistence
+## Configuration persistence
 
 The transport setting follows the normal WireGuard configuration lifecycle:
 
@@ -345,7 +572,7 @@ Regression tests keep private keys and secret-bearing configurations in
 guest-local restricted directories, compare files without printing secrets,
 and report only public pass/fail metadata.
 
-## 11. Diagnostics and test-only fault injection
+## Diagnostics and test-only fault injection
 
 ### Diagnostic builds
 
@@ -368,7 +595,7 @@ variant. A guest-owned command installs cleanup before loading the fault module,
 runs the test, restores production, and reports both test and restoration
 status.
 
-## 12. Regression architecture
+## Regression architecture
 
 ### Source contracts
 
@@ -405,7 +632,7 @@ Live provisioning fixes established:
 - privileged result ownership handoff; and
 - Linux-specific preflight reporting.
 
-## 13. Performance test architecture
+## Performance test architecture
 
 ### Application campaign
 
@@ -458,7 +685,7 @@ meltdown classifications. The operator summary is maintained in
 `PERFORMANCE.md`, while `docs/TCP_MELTDOWN.md` and `perf-test/meltdown/` preserve
 the fixed definitions, detailed matrices, and reproduction workflow.
 
-## 14. Documentation evolution
+## Documentation evolution
 
 Documentation grew with the implementation:
 
