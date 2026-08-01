@@ -16,6 +16,21 @@ $ErrorActionPreference = "Stop"
 $BaseTree = (Resolve-Path -LiteralPath $BaseTree).Path
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 
+$patchPaths = @(
+    "kernel"
+    "include/uapi/linux/wireguard.h"
+    "tools/Makefile"
+    "tools/config.c"
+    "tools/containers.h"
+    "tools/ipc-linux.h"
+    "tools/ipc.c"
+    "tools/netlink.h"
+    "tools/set.c"
+    "tools/show.c"
+    "tools/showconf.c"
+    "tools/uapi/linux/linux/wireguard.h"
+)
+
 foreach ($path in @("kernel", "include/uapi/linux/wireguard.h", "tools")) {
     if (-not (Test-Path -LiteralPath (Join-Path $BaseTree $path))) {
         throw "Patch baseline is missing $path"
@@ -25,14 +40,14 @@ foreach ($path in @("kernel", "include/uapi/linux/wireguard.h", "tools")) {
 $target = git -C (Join-Path $PSScriptRoot "..") rev-parse $TargetCommit
 if ($LASTEXITCODE -ne 0) { throw "Could not resolve target commit $TargetCommit" }
 
-$untracked = @(git -C $BaseTree ls-files --others --exclude-standard)
+$untracked = @(git -C $BaseTree ls-files --others --exclude-standard -- $patchPaths)
 if ($LASTEXITCODE -ne 0) { throw "Could not enumerate new patch files" }
 if ($untracked.Count -gt 0) {
     git -C $BaseTree add --intent-to-add -- $untracked
     if ($LASTEXITCODE -ne 0) { throw "Could not include new patch files" }
 }
 
-$diff = git -C $BaseTree -c core.safecrlf=false diff --binary --full-index --no-ext-diff
+$diff = git -C $BaseTree -c core.safecrlf=false diff --binary --full-index --no-ext-diff -- $patchPaths
 if ($LASTEXITCODE -ne 0) { throw "Could not generate patch delta" }
 
 $header = @"
@@ -43,11 +58,9 @@ Tools baseline: wireguard-tools a998407747005ea7e4e0258d96f105c97241e1d3
 Target repository: https://github.com/secwest/WireguardTCP.git
 Target source commit: $target
 
-This patch contains only the kernel module, UAPI, and wg/wg-quick changes
-needed to build and run WireguardTCP. Documentation, performance campaigns,
-test harnesses, result archives, website files, and release artifacts are
-excluded. Upstream kernel crypto, SIMD, and architecture assembly are not
-modified by this patch.
+This patch contains only the allowlisted kernel module, UAPI, and wg source
+changes needed to build and run WireguardTCP. Upstream kernel crypto, SIMD,
+and architecture assembly are not modified by this patch.
 
 Prepare the baseline from clean official checkouts:
 

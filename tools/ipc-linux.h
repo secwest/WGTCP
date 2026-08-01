@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: MIT */
+// SPDX-License-Identifier: MIT
 /*
- * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include <stdbool.h>
@@ -24,7 +23,6 @@
 #include "encoding.h"
 #include "netlink.h"
 
-
 #define IPC_SUPPORTS_KERNEL_INTERFACE
 
 #define SOCKET_BUFFER_SIZE (mnl_ideal_socket_buffer_size())
@@ -33,7 +31,6 @@ struct interface {
 	const char *name;
 	bool is_wireguard;
 };
-
 
 static int parse_linkinfo(const struct nlattr *attr, void *data)
 {
@@ -61,7 +58,6 @@ static int read_devices_cb(const struct nlmsghdr *nlh, void *data)
 	struct interface interface = { 0 };
 	int ret;
 
-	DEBUG_PRINT("Entering read_devices_cb\n");
 	ret = mnl_attr_parse(nlh, sizeof(struct ifinfomsg), parse_infomsg, &interface);
 	if (ret != MNL_CB_OK)
 		return ret;
@@ -71,7 +67,6 @@ static int read_devices_cb(const struct nlmsghdr *nlh, void *data)
 		return ret;
 	if (nlh->nlmsg_type != NLMSG_DONE)
 		return MNL_CB_OK + 1;
-	DEBUG_PRINT("Exiting read_devices_cb\n");
 	return MNL_CB_OK;
 }
 
@@ -86,7 +81,6 @@ static int kernel_get_wireguard_interfaces(struct string_list *list)
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifm;
 
-	DEBUG_PRINT("Entering kernel_get_wireguard_interfaces\n");
 	ret = -ENOMEM;
 	rtnl_buffer = calloc(SOCKET_BUFFER_SIZE, 1);
 	if (!rtnl_buffer)
@@ -128,8 +122,7 @@ another:
 		 * during the dump. That's unfortunate, but is pretty common on busy
 		 * systems that are adding and removing tunnels all the time. Rather
 		 * than retrying, potentially indefinitely, we just work with the
-		 * partial results.
-		 */
+		 * partial results. */
 		if (errno != EINTR) {
 			ret = -errno;
 			goto cleanup;
@@ -143,9 +136,9 @@ cleanup:
 	free(rtnl_buffer);
 	if (nl)
 		mnl_socket_close(nl);
-	DEBUG_PRINT("Exiting kernel_get_wireguard_interfaces\n");
 	return ret;
 }
+
 static int kernel_get_device(struct wgdevice **device, const char *iface);
 
 static int kernel_set_device(struct wgdevice *dev)
@@ -158,7 +151,6 @@ static int kernel_set_device(struct wgdevice *dev)
 	struct nlmsghdr *nlh;
 	struct mnlg_socket *nlg;
 
-	DEBUG_PRINT("Entering kernel_set_device\n");
 	if (dev->flags & WGDEVICE_HAS_TRANSPORT) {
 		ret = kernel_get_device(&current, dev->name);
 		if (ret < 0)
@@ -170,10 +162,10 @@ static int kernel_set_device(struct wgdevice *dev)
 				return -EOPNOTSUPP;
 			}
 			dev->flags &= ~WGDEVICE_HAS_TRANSPORT;
-		} else {
+		} else
 			free_wgdevice(current);
-		}
 	}
+
 	nlg = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
 	if (!nlg)
 		return -errno;
@@ -191,10 +183,10 @@ again:
 			mnl_attr_put_u16(nlh, WGDEVICE_A_LISTEN_PORT, dev->listen_port);
 		if (dev->flags & WGDEVICE_HAS_FWMARK)
 			mnl_attr_put_u32(nlh, WGDEVICE_A_FWMARK, dev->fwmark);
-		if (dev->flags & WGDEVICE_REPLACE_PEERS)
-			flags |= WGDEVICE_F_REPLACE_PEERS;
 		if (dev->flags & WGDEVICE_HAS_TRANSPORT)
 			mnl_attr_put_u8(nlh, WGDEVICE_A_TRANSPORT, dev->transport);
+		if (dev->flags & WGDEVICE_REPLACE_PEERS)
+			flags |= WGDEVICE_F_REPLACE_PEERS;
 		if (flags)
 			mnl_attr_put_u32(nlh, WGDEVICE_A_FLAGS, flags);
 	}
@@ -285,9 +277,6 @@ toobig_peers:
 	mnl_attr_nest_end(nlh, peers_nest);
 	goto send;
 send:
-
-	/* Print the netlink message before sending it */
-
 	if (mnlg_socket_send(nlg, nlh) < 0) {
 		ret = -errno;
 		goto out;
@@ -303,7 +292,6 @@ send:
 out:
 	mnlg_socket_close(nlg);
 	errno = -ret;
-	DEBUG_PRINT("Exiting kernel_set_device\n");
 	return ret;
 }
 
@@ -339,7 +327,6 @@ static int parse_allowedips(const struct nlattr *attr, void *data)
 	struct wgallowedip *new_allowedip = calloc(1, sizeof(*new_allowedip));
 	int ret;
 
-	DEBUG_PRINT("Entering parse_allowedips\n");
 	if (!new_allowedip) {
 		perror("calloc");
 		return MNL_CB_ERROR;
@@ -355,7 +342,6 @@ static int parse_allowedips(const struct nlattr *attr, void *data)
 		return ret;
 	if (!((new_allowedip->family == AF_INET && new_allowedip->cidr <= 32) || (new_allowedip->family == AF_INET6 && new_allowedip->cidr <= 128)))
 		return MNL_CB_ERROR;
-	DEBUG_PRINT("Exiting parse_allowedips\n");
 	return MNL_CB_OK;
 }
 
@@ -409,7 +395,6 @@ static int parse_peer(const struct nlattr *attr, void *data)
 		break;
 	case WGPEER_A_ALLOWEDIPS:
 		return mnl_attr_parse_nested(attr, parse_allowedips, peer);
-		break;
 	}
 
 	return MNL_CB_OK;
@@ -421,7 +406,6 @@ static int parse_peers(const struct nlattr *attr, void *data)
 	struct wgpeer *new_peer = calloc(1, sizeof(*new_peer));
 	int ret;
 
-	DEBUG_PRINT("Entering parse_peers\n");
 	if (!new_peer) {
 		perror("calloc");
 		return MNL_CB_ERROR;
@@ -437,7 +421,6 @@ static int parse_peers(const struct nlattr *attr, void *data)
 		return ret;
 	if (!(new_peer->flags & WGPEER_HAS_PUBLIC_KEY))
 		return MNL_CB_ERROR;
-	DEBUG_PRINT("Exiting parse_peers\n");
 	return MNL_CB_OK;
 }
 
@@ -495,17 +478,13 @@ static int parse_device(const struct nlattr *attr, void *data)
 
 static int read_device_cb(const struct nlmsghdr *nlh, void *data)
 {
-	DEBUG_PRINT("Entering read_device_cb\n");
-	int ret = mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_device, data);
-	DEBUG_PRINT("Exiting read_device_cb\n");
-	return ret;
+	return mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_device, data);
 }
 
 static void coalesce_peers(struct wgdevice *device)
 {
 	struct wgpeer *old_next_peer, *peer = device->first_peer;
 
-	DEBUG_PRINT("Entering coalesce_peers\n");
 	while (peer && peer->next_peer) {
 		if (memcmp(peer->public_key, peer->next_peer->public_key, sizeof(peer->public_key))) {
 			peer = peer->next_peer;
@@ -522,7 +501,6 @@ static void coalesce_peers(struct wgdevice *device)
 		peer->next_peer = old_next_peer->next_peer;
 		free(old_next_peer);
 	}
-	DEBUG_PRINT("Exiting coalesce_peers\n");
 }
 
 static int kernel_get_device(struct wgdevice **device, const char *iface)
@@ -573,6 +551,5 @@ out:
 		*device = NULL;
 	}
 	errno = -ret;
-	DEBUG_PRINT("Exiting kernel_get_device\n");
 	return ret;
 }

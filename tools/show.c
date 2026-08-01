@@ -24,14 +24,10 @@
 #include "encoding.h"
 #include "subcommands.h"
 
-#define DEBUG_PRINT(fmt, args...) do { } while (0)
-
 static int peer_cmp(const void *first, const void *second)
 {
 	time_t diff;
 	const struct wgpeer *a = *(void *const *)first, *b = *(void *const *)second;
-
-	DEBUG_PRINT("Entering peer_cmp\n");
 
 	if (!a->last_handshake_time.tv_sec && !a->last_handshake_time.tv_nsec && (b->last_handshake_time.tv_sec || b->last_handshake_time.tv_nsec))
 		return 1;
@@ -44,7 +40,6 @@ static int peer_cmp(const void *first, const void *second)
 		return 1;
 	if (diff > 0)
 		return -1;
-	DEBUG_PRINT("Exiting peer_cmp\n");
 	return 0;
 }
 
@@ -54,22 +49,13 @@ static void sort_peers(struct wgdevice *device)
 	size_t peer_count = 0, i = 0;
 	struct wgpeer *peer, **peers;
 
-	DEBUG_PRINT("Entering sort_peers\n");
-
 	for_each_wgpeer(device, peer)
 		++peer_count;
-
-	DEBUG_PRINT("Peer count: %zu\n", peer_count);
-
-	if (!peer_count) {
-		DEBUG_PRINT("Exiting sort_peers - no peers\n");
+	if (!peer_count)
 		return;
-	}
 	peers = calloc(peer_count, sizeof(*peers));
-	if (!peers) {
-		DEBUG_PRINT("Exiting sort_peers - calloc failed\n");
+	if (!peers)
 		return;
-	}
 	for_each_wgpeer(device, peer)
 		peers[i++] = peer;
 	qsort(peers, peer_count, sizeof(*peers), peer_cmp);
@@ -79,38 +65,29 @@ static void sort_peers(struct wgdevice *device)
 	}
 	peers[peer_count - 1]->next_peer = NULL;
 	free(peers);
-	DEBUG_PRINT("Exiting sort_peers\n");
 }
 
 static char *key(const uint8_t key[static WG_KEY_LEN])
 {
 	static char base64[WG_KEY_LEN_BASE64];
-	DEBUG_PRINT("Entering key\n");
+
 	key_to_base64(base64, key);
-	DEBUG_PRINT("Exiting key\n");
 	return base64;
 }
 
 static const char *maybe_key(const uint8_t maybe_key[static WG_KEY_LEN], bool have_it)
 {
-	DEBUG_PRINT("Entering maybe_key\n");
-	if (!have_it) {
-		DEBUG_PRINT("Exiting maybe_key - no key\n");
+	if (!have_it)
 		return "(none)";
-	}
-	DEBUG_PRINT("Exiting maybe_key\n");
 	return key(maybe_key);
 }
 
 static const char *masked_key(const uint8_t masked_key[static WG_KEY_LEN])
 {
 	const char *var = getenv("WG_HIDE_KEYS");
-	DEBUG_PRINT("Entering masked_key\n");
-	if (var && !strcmp(var, "never")) {
-		DEBUG_PRINT("Exiting masked_key - key shown\n");
+
+	if (var && !strcmp(var, "never"))
 		return key(masked_key);
-	}
-	DEBUG_PRINT("Exiting masked_key - key hidden\n");
 	return "(hidden)";
 }
 
@@ -118,15 +95,11 @@ static char *ip(const struct wgallowedip *ip)
 {
 	static char buf[INET6_ADDRSTRLEN + 1];
 
-	DEBUG_PRINT("Entering ip\n");
-
 	memset(buf, 0, INET6_ADDRSTRLEN + 1);
 	if (ip->family == AF_INET)
 		inet_ntop(AF_INET, &ip->ip4, buf, INET6_ADDRSTRLEN);
 	else if (ip->family == AF_INET6)
 		inet_ntop(AF_INET6, &ip->ip6, buf, INET6_ADDRSTRLEN);
-
-	DEBUG_PRINT("Exiting ip\n");
 	return buf;
 }
 
@@ -138,8 +111,6 @@ static char *endpoint(const struct sockaddr *addr)
 	int ret;
 	socklen_t addr_len = 0;
 
-	DEBUG_PRINT("Entering endpoint\n");
-
 	memset(buf, 0, sizeof(buf));
 	if (addr->sa_family == AF_INET)
 		addr_len = sizeof(struct sockaddr_in);
@@ -150,25 +121,17 @@ static char *endpoint(const struct sockaddr *addr)
 	if (ret) {
 		strncpy(buf, gai_strerror(ret), sizeof(buf) - 1);
 		buf[sizeof(buf) - 1] = '\0';
-		DEBUG_PRINT("Exiting endpoint - getnameinfo failed: %s\n", buf);
 	} else
 		snprintf(buf, sizeof(buf), (addr->sa_family == AF_INET6 && strchr(host, ':')) ? "[%s]:%s" : "%s:%s", host, service);
-
-	DEBUG_PRINT("Exiting endpoint\n");
 	return buf;
 }
 
-static char *transport(const uint32_t transport_val)
+static const char *transport(uint8_t value)
 {
-	DEBUG_PRINT("Entering transport\n");
-	if (transport_val == WG_TRANSPORT_UDP) {
-		DEBUG_PRINT("Exiting transport - udp\n");
-		return "udp";
-	} else if (transport_val == WG_TRANSPORT_TCP) {
-		DEBUG_PRINT("Exiting transport - tcp\n");
+	if (value == WG_TRANSPORT_TCP)
 		return "tcp";
-	}
-	DEBUG_PRINT("Exiting transport - unknown\n");
+	if (value == WG_TRANSPORT_UDP)
+		return "udp";
 	return "unknown";
 }
 
@@ -176,8 +139,6 @@ static size_t pretty_time(char *buf, const size_t len, unsigned long long left)
 {
 	size_t offset = 0;
 	unsigned long long years, days, hours, minutes, seconds;
-
-	DEBUG_PRINT("Entering pretty_time\n");
 
 	years = left / (365 * 24 * 60 * 60);
 	left = left % (365 * 24 * 60 * 60);
@@ -199,7 +160,6 @@ static size_t pretty_time(char *buf, const size_t len, unsigned long long left)
 	if (seconds)
 		offset += snprintf(buf + offset, len - offset, "%s%llu " TERMINAL_FG_CYAN  "second%s" TERMINAL_RESET, offset ? ", " : "", seconds, seconds == 1 ? "" : "s");
 
-	DEBUG_PRINT("Exiting pretty_time\n");
 	return offset;
 }
 
@@ -208,8 +168,6 @@ static char *ago(const struct timespec64 *t)
 	static char buf[1024];
 	size_t offset;
 	time_t now = time(NULL);
-
-	DEBUG_PRINT("Entering ago\n");
 
 	if (now == t->tv_sec)
 		strncpy(buf, "Now", sizeof(buf) - 1);
@@ -221,7 +179,6 @@ static char *ago(const struct timespec64 *t)
 	}
 	buf[sizeof(buf) - 1] = '\0';
 
-	DEBUG_PRINT("Exiting ago\n");
 	return buf;
 }
 
@@ -229,19 +186,13 @@ static char *every(uint16_t seconds)
 {
 	static char buf[1024] = "every ";
 
-	DEBUG_PRINT("Entering every\n");
-
 	pretty_time(buf + strlen("every "), sizeof(buf) - strlen("every ") - 1, seconds);
-
-	DEBUG_PRINT("Exiting every\n");
 	return buf;
 }
 
 static char *bytes(uint64_t b)
 {
 	static char buf[1024];
-
-	DEBUG_PRINT("Entering bytes\n");
 
 	if (b < 1024ULL)
 		snprintf(buf, sizeof(buf), "%u " TERMINAL_FG_CYAN "B" TERMINAL_RESET, (unsigned int)b);
@@ -254,24 +205,19 @@ static char *bytes(uint64_t b)
 	else
 		snprintf(buf, sizeof(buf), "%.2f " TERMINAL_FG_CYAN "TiB" TERMINAL_RESET, (double)b / (1024 * 1024 * 1024) / 1024);
 
-	DEBUG_PRINT("Exiting bytes\n");
 	return buf;
 }
 
 static const char *COMMAND_NAME;
 static void show_usage(void)
 {
-	DEBUG_PRINT("Entering show_usage\n");
 	fprintf(stderr, "Usage: %s %s { <interface> | all | interfaces } [public-key | private-key | listen-port | fwmark | transport | peers | preshared-keys | endpoints | allowed-ips | latest-handshakes | transfer | persistent-keepalive | dump]\n", PROG_NAME, COMMAND_NAME);
-	DEBUG_PRINT("Exiting show_usage\n");
 }
 
 static void pretty_print(struct wgdevice *device)
 {
 	struct wgpeer *peer;
 	struct wgallowedip *allowedip;
-
-	DEBUG_PRINT("Entering pretty_print\n");
 
 	terminal_printf(TERMINAL_RESET);
 	terminal_printf(TERMINAL_FG_GREEN TERMINAL_BOLD "interface" TERMINAL_RESET ": " TERMINAL_FG_GREEN "%s" TERMINAL_RESET "\n", device->name);
@@ -284,7 +230,7 @@ static void pretty_print(struct wgdevice *device)
 	if (device->fwmark)
 		terminal_printf("  " TERMINAL_BOLD "fwmark" TERMINAL_RESET ": 0x%x\n", device->fwmark);
 	if (device->transport == WG_TRANSPORT_TCP)
-		terminal_printf("  " TERMINAL_BOLD "transport" TERMINAL_RESET ": %s\n", transport(device->transport));
+		terminal_printf("  " TERMINAL_BOLD "transport" TERMINAL_RESET ": tcp\n");
 	if (device->first_peer) {
 		sort_peers(device);
 		terminal_printf("\n");
@@ -313,16 +259,12 @@ static void pretty_print(struct wgdevice *device)
 		if (peer->next_peer)
 			terminal_printf("\n");
 	}
-
-	DEBUG_PRINT("Exiting pretty_print\n");
 }
 
 static void dump_print(struct wgdevice *device, bool with_interface)
 {
 	struct wgpeer *peer;
 	struct wgallowedip *allowedip;
-
-	DEBUG_PRINT("Entering dump_print\n");
 
 	if (with_interface)
 		printf("%s\t", device->name);
@@ -354,16 +296,12 @@ static void dump_print(struct wgdevice *device, bool with_interface)
 		else
 			printf("off\n");
 	}
-
-	DEBUG_PRINT("Exiting dump_print\n");
 }
 
 static bool ugly_print(struct wgdevice *device, const char *param, bool with_interface)
 {
 	struct wgpeer *peer;
 	struct wgallowedip *allowedip;
-
-	DEBUG_PRINT("Entering ugly_print with param: %s\n", param);
 
 	if (!strcmp(param, "public-key")) {
 		if (with_interface)
@@ -448,11 +386,8 @@ static bool ugly_print(struct wgdevice *device, const char *param, bool with_int
 	else {
 		fprintf(stderr, "Invalid parameter: `%s'\n", param);
 		show_usage();
-		DEBUG_PRINT("Exiting ugly_print with error\n");
 		return false;
 	}
-
-	DEBUG_PRINT("Exiting ugly_print\n");
 	return true;
 }
 
@@ -460,13 +395,10 @@ int show_main(int argc, const char *argv[])
 {
 	int ret = 0;
 
-	DEBUG_PRINT("Entering show_main with argc: %d\n", argc);
-
 	COMMAND_NAME = argv[0];
 
 	if (argc > 3) {
 		show_usage();
-		DEBUG_PRINT("Exiting show_main - too many arguments\n");
 		return 1;
 	}
 
@@ -475,7 +407,6 @@ int show_main(int argc, const char *argv[])
 
 		if (!interfaces) {
 			perror("Unable to list interfaces");
-			DEBUG_PRINT("Exiting show_main - unable to list interfaces\n");
 			return 1;
 		}
 		ret = !!*interfaces;
@@ -507,27 +438,24 @@ int show_main(int argc, const char *argv[])
 
 		if (argc > 2) {
 			show_usage();
-			DEBUG_PRINT("Exiting show_main - invalid usage\n");
 			return 1;
 		}
 		interfaces = ipc_list_devices();
 		if (!interfaces) {
 			perror("Unable to list interfaces");
-			DEBUG_PRINT("Exiting show_main - unable to list interfaces\n");
 			return 1;
 		}
 		interface = interfaces;
 		for (size_t len = 0; (len = strlen(interface)); interface += len + 1)
 			printf("%s%c", interface, strlen(interface + len + 1) ? ' ' : '\n');
 		free(interfaces);
-	} else if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help"))) {
+	} else if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help")))
 		show_usage();
-	} else {
+	else {
 		struct wgdevice *device = NULL;
 
 		if (ipc_get_device(&device, argv[1]) < 0) {
 			perror("Unable to access interface");
-			DEBUG_PRINT("Exiting show_main - unable to access interface\n");
 			return 1;
 		}
 		if (argc == 3) {
@@ -537,7 +465,5 @@ int show_main(int argc, const char *argv[])
 			pretty_print(device);
 		free_wgdevice(device);
 	}
-
-	DEBUG_PRINT("Exiting show_main\n");
 	return ret;
 }

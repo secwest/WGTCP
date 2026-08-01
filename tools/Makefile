@@ -46,7 +46,7 @@ CFLAGS += -Wall -Wextra
 CFLAGS += -MMD -MP
 CFLAGS += -DRUNSTATEDIR="\"$(RUNSTATEDIR)\""
 ifeq ($(DEBUG),yes)
-CFLAGS += -g -DDEBUG=$(DEBUG)
+CFLAGS += -g
 endif
 WIREGUARD_TOOLS_VERSION = $(patsubst v%,%,$(shell GIT_DIR="$(PWD)/../.git" git describe --dirty 2>/dev/null))
 ifneq ($(WIREGUARD_TOOLS_VERSION),)
@@ -61,7 +61,7 @@ endif
 ifeq ($(PLATFORM),windows)
 CC := x86_64-w64-mingw32-clang
 WINDRES := $(shell $(CC) $(CFLAGS) -print-prog-name=windres 2>/dev/null)
-CFLAGS += -Iwincompat/include -include wincompat/compat.h -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 -flto
+CFLAGS += -Iwincompat/include -include wincompat/compat.h -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 -flto
 LDLIBS += -lws2_32 -lsetupapi -lole32 -ladvapi32 -lntdll -Lwincompat
 LDFLAGS += -flto -Wl,--dynamicbase -Wl,--nxcompat -Wl,--tsaware -mconsole
 LDFLAGS += -Wl,--major-os-version=10 -Wl,--minor-os-version=0 -Wl,--major-subsystem-version=10 -Wl,--minor-subsystem-version=0

@@ -82,8 +82,7 @@
  *    WGDEVICE_A_FLAGS: NLA_U32, 0 or WGDEVICE_F_REPLACE_PEERS if all current
  *                      peers should be removed prior to adding the list below.
  *    WGDEVICE_A_PRIVATE_KEY: len WG_KEY_LEN, all zeros to remove
- *    WGDEVICE_A_LISTEN_PORT: NLA_U16, 0 to choose randomly at interface-up;
- *                            changing it on a running TCP device returns EBUSY
+ *    WGDEVICE_A_LISTEN_PORT: NLA_U16, 0 to choose randomly
  *    WGDEVICE_A_FWMARK: NLA_U32, 0 to disable
  *    WGDEVICE_A_TRANSPORT: NLA_U8, WG_TRANSPORT_UDP or WG_TRANSPORT_TCP;
  *                          omission preserves the current transport

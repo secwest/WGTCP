@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * TCP Support Copyright (c) 2024 Jeff Nathan and Dragos Ruiu. All Rights Reserved.
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 #include <arpa/inet.h>
@@ -19,8 +18,6 @@
 #include "ipc.h"
 #include "subcommands.h"
 
-#define DEBUG_PRINT(fmt, args...) do { } while (0)
-
 int showconf_main(int argc, const char *argv[])
 {
 	char base64[WG_KEY_LEN_BASE64];
@@ -30,65 +27,47 @@ int showconf_main(int argc, const char *argv[])
 	struct wgallowedip *allowedip;
 	int ret = 1;
 
-	DEBUG_PRINT("Entering %s\n", __func__);
-	DEBUG_PRINT("Arguments count: %d\n", argc);
-
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s %s <interface>\n", PROG_NAME, argv[0]);
-		DEBUG_PRINT("Invalid argument count. Exiting %s with return code %d\n", __func__, 1);
 		return 1;
 	}
 
 	if (ipc_get_device(&device, argv[1])) {
 		perror("Unable to access interface");
-		DEBUG_PRINT("Unable to access interface: %s. Exiting %s with return code %d\n", argv[1], __func__, 1);
 		goto cleanup;
 	}
 
 	printf("[Interface]\n");
-	if (device->listen_port) {
+	if (device->listen_port)
 		printf("ListenPort = %u\n", device->listen_port);
-		DEBUG_PRINT("Device listen port: %u\n", device->listen_port);
-	}
-	if (device->fwmark) {
+	if (device->fwmark)
 		printf("FwMark = 0x%x\n", device->fwmark);
-		DEBUG_PRINT("Device fwmark: 0x%x\n", device->fwmark);
-	}
 	if (device->flags & WGDEVICE_HAS_PRIVATE_KEY) {
 		key_to_base64(base64, device->private_key);
 		printf("PrivateKey = %s\n", base64);
-		DEBUG_PRINT("Device private key: %s\n", base64);
 	}
-	if (device->transport) {
-		printf("Transport = %s\n", (device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp"));
-		DEBUG_PRINT("Device transport mode: %s\n", (device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp"));
-	}
+	if (device->flags & WGDEVICE_HAS_TRANSPORT)
+		printf("Transport = %s\n", device->transport == WG_TRANSPORT_TCP ? "tcp" : "udp");
 	printf("\n");
-
 	for_each_wgpeer(device, peer) {
 		key_to_base64(base64, peer->public_key);
 		printf("[Peer]\nPublicKey = %s\n", base64);
-		DEBUG_PRINT("Peer public key: %s\n", base64);
-
 		if (peer->flags & WGPEER_HAS_PRESHARED_KEY) {
 			key_to_base64(base64, peer->preshared_key);
 			printf("PresharedKey = %s\n", base64);
-			DEBUG_PRINT("Peer preshared key: %s\n", base64);
 		}
-
 		if (peer->first_allowedip)
-		printf("AllowedIPs = ");
+			printf("AllowedIPs = ");
 		for_each_wgallowedip(peer, allowedip) {
 			if (allowedip->family == AF_INET) {
 				if (!inet_ntop(AF_INET, &allowedip->ip4, ip, INET6_ADDRSTRLEN))
-				continue;
+					continue;
 			} else if (allowedip->family == AF_INET6) {
 				if (!inet_ntop(AF_INET6, &allowedip->ip6, ip, INET6_ADDRSTRLEN))
-				continue;
+					continue;
 			} else
 				continue;
 			printf("%s/%d", ip, allowedip->cidr);
-			DEBUG_PRINT("Allowed IP: %s/%d\n", ip, allowedip->cidr);
 			if (allowedip->next_allowedip)
 				printf(", ");
 		}
@@ -109,23 +88,18 @@ int showconf_main(int argc, const char *argv[])
 					printf("Endpoint = [%s]:%s\n", host, service);
 				else
 					printf("Endpoint = %s:%s\n", host, service);
-				DEBUG_PRINT("Peer endpoint: %s:%s\n", host, service);
 			}
 		}
 
 		if (peer->persistent_keepalive_interval)
 			printf("PersistentKeepalive = %u\n", peer->persistent_keepalive_interval);
-		DEBUG_PRINT("Peer persistent keepalive: %u\n", peer->persistent_keepalive_interval);
 
 		if (peer->next_peer)
-		printf("\n");
+			printf("\n");
 	}
-
 	ret = 0;
 
 cleanup:
-	DEBUG_PRINT("Cleaning up device\n");
 	free_wgdevice(device);
-	DEBUG_PRINT("Exiting %s with return code %d\n", __func__, ret);
 	return ret;
 }

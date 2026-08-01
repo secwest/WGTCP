@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LGPL-2.1+ */
+// SPDX-License-Identifier: LGPL-2.1+
 /*
  * Copyright (C) 2015-2026 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  * Copyright (C) 2008-2012 Pablo Neira Ayuso <pablo@netfilter.org>.
@@ -318,9 +318,9 @@ static void mnl_attr_put(struct nlmsghdr *nlh, uint16_t type, size_t len,
 		memset(mnl_attr_get_payload(attr) + len, 0, pad);
 }
 
-static void mnl_attr_put_u8(struct nlmsghdr *nlh, uint8_t type, uint8_t data)
+static void mnl_attr_put_u8(struct nlmsghdr *nlh, uint16_t type, uint8_t data)
 {
-	mnl_attr_put(nlh, type, sizeof(uint8_t), &data);
+	mnl_attr_put(nlh, type, sizeof(data), &data);
 }
 
 static void mnl_attr_put_u16(struct nlmsghdr *nlh, uint16_t type, uint16_t data)

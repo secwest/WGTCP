@@ -96,9 +96,9 @@ struct wgdevice {
 
 	uint32_t fwmark;
 	uint16_t listen_port;
+	uint8_t transport;
 
 	struct wgpeer *first_peer, *last_peer;
-	uint8_t transport;
 };
 
 #define for_each_wgpeer(__dev, __peer) for ((__peer) = (__dev)->first_peer; (__peer); (__peer) = (__peer)->next_peer)
