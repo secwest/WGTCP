@@ -6,57 +6,47 @@
 #include "peerlookup.h"
 #include "peer.h"
 #include "noise.h"
-#include "wg_tcp_debug.h"
 
 static struct hlist_head *pubkey_bucket(struct pubkey_hashtable *table,
 					const u8 pubkey[NOISE_PUBLIC_KEY_LEN])
 {
-	wg_dbg("Entering pubkey_bucket: table=%px, pubkey=%*phN\n", table, NOISE_PUBLIC_KEY_LEN, pubkey);
 	/* siphash gives us a secure 64bit number based on a random key. Since
 	 * the bits are uniformly distributed, we can then mask off to get the
 	 * bits we need.
 	 */
 	const u64 hash = siphash(pubkey, NOISE_PUBLIC_KEY_LEN, &table->key);
-	wg_dbg("Exiting pubkey_bucket\n");
+
 	return &table->hashtable[hash & (HASH_SIZE(table->hashtable) - 1)];
 }
 
 struct pubkey_hashtable *wg_pubkey_hashtable_alloc(void)
 {
-	wg_dbg("Entering wg_pubkey_hashtable_alloc\n");
 	struct pubkey_hashtable *table = kvmalloc(sizeof(*table), GFP_KERNEL);
 
-	if (!table) {
-		wg_dbg("Exiting wg_pubkey_hashtable_alloc: NULL\n");
+	if (!table)
 		return NULL;
-	}
 
 	get_random_bytes(&table->key, sizeof(table->key));
 	hash_init(table->hashtable);
 	mutex_init(&table->lock);
-	wg_dbg("Exiting wg_pubkey_hashtable_alloc: table=%px\n", table);
 	return table;
 }
 
 void wg_pubkey_hashtable_add(struct pubkey_hashtable *table,
 			     struct wg_peer *peer)
 {
-	wg_dbg("Entering wg_pubkey_hashtable_add: table=%px, peer=%px\n", table, peer);
 	mutex_lock(&table->lock);
 	hlist_add_head_rcu(&peer->pubkey_hash,
 			   pubkey_bucket(table, peer->handshake.remote_static));
 	mutex_unlock(&table->lock);
-	wg_dbg("Exiting wg_pubkey_hashtable_add\n");
 }
 
 void wg_pubkey_hashtable_remove(struct pubkey_hashtable *table,
 				struct wg_peer *peer)
 {
-	wg_dbg("Entering wg_pubkey_hashtable_remove: table=%px, peer=%px\n", table, peer);
 	mutex_lock(&table->lock);
 	hlist_del_init_rcu(&peer->pubkey_hash);
 	mutex_unlock(&table->lock);
-	wg_dbg("Exiting wg_pubkey_hashtable_remove\n");
 }
 
 /* Returns a strong reference to a peer */
@@ -64,7 +54,6 @@ struct wg_peer *
 wg_pubkey_hashtable_lookup(struct pubkey_hashtable *table,
 			   const u8 pubkey[NOISE_PUBLIC_KEY_LEN])
 {
-	wg_dbg("Entering wg_pubkey_hashtable_lookup: table=%px, pubkey=%*phN\n", table, NOISE_PUBLIC_KEY_LEN, pubkey);
 	struct wg_peer *iter_peer, *peer = NULL;
 
 	rcu_read_lock_bh();
@@ -78,35 +67,28 @@ wg_pubkey_hashtable_lookup(struct pubkey_hashtable *table,
 	}
 	peer = wg_peer_get_maybe_zero(peer);
 	rcu_read_unlock_bh();
-	wg_dbg("Exiting wg_pubkey_hashtable_lookup: peer=%px\n", peer);
 	return peer;
 }
 
 static struct hlist_head *index_bucket(struct index_hashtable *table,
 				       const __le32 index)
 {
-	wg_dbg("Entering index_bucket: table=%px, index=%u\n", table, index);
 	/* Since the indices are random and thus all bits are uniformly
 	 * distributed, we can find its bucket simply by masking.
 	 */
-	wg_dbg("Exiting index_bucket\n");
 	return &table->hashtable[(__force u32)index &
 				 (HASH_SIZE(table->hashtable) - 1)];
 }
 
 struct index_hashtable *wg_index_hashtable_alloc(void)
 {
-	wg_dbg("Entering wg_index_hashtable_alloc\n");
 	struct index_hashtable *table = kvmalloc(sizeof(*table), GFP_KERNEL);
 
-	if (!table) {
-		wg_dbg("Exiting wg_index_hashtable_alloc: NULL\n");
+	if (!table)
 		return NULL;
-	}
 
 	hash_init(table->hashtable);
 	spin_lock_init(&table->lock);
-	wg_dbg("Exiting wg_index_hashtable_alloc: table=%px\n", table);
 	return table;
 }
 
@@ -133,10 +115,10 @@ struct index_hashtable *wg_index_hashtable_alloc(void)
  * guessing. this would not, however, help with the growing hash lengths, which
  * is another thing to consider moving forward.
  */
+
 __le32 wg_index_hashtable_insert(struct index_hashtable *table,
 				 struct index_hashtable_entry *entry)
 {
-	wg_dbg("Entering wg_index_hashtable_insert: table=%px, entry=%px\n", table, entry);
 	struct index_hashtable_entry *existing_entry;
 
 	spin_lock_bh(&table->lock);
@@ -177,7 +159,7 @@ search_unused_slot:
 	spin_unlock_bh(&table->lock);
 
 	rcu_read_unlock_bh();
-	wg_dbg("Exiting wg_index_hashtable_insert: index=%u\n", entry->index);
+
 	return entry->index;
 }
 
@@ -185,7 +167,6 @@ bool wg_index_hashtable_replace(struct index_hashtable *table,
 				struct index_hashtable_entry *old,
 				struct index_hashtable_entry *new)
 {
-	wg_dbg("Entering wg_index_hashtable_replace: table=%px, old=%px, new=%px\n", table, old, new);
 	bool ret;
 
 	spin_lock_bh(&table->lock);
@@ -205,18 +186,15 @@ bool wg_index_hashtable_replace(struct index_hashtable *table,
 	INIT_HLIST_NODE(&old->index_hash);
 out:
 	spin_unlock_bh(&table->lock);
-	wg_dbg("Exiting wg_index_hashtable_replace: ret=%d\n", ret);
 	return ret;
 }
 
 void wg_index_hashtable_remove(struct index_hashtable *table,
 			       struct index_hashtable_entry *entry)
 {
-	wg_dbg("Entering wg_index_hashtable_remove: table=%px, entry=%px\n", table, entry);
 	spin_lock_bh(&table->lock);
 	hlist_del_init_rcu(&entry->index_hash);
 	spin_unlock_bh(&table->lock);
-	wg_dbg("Exiting wg_index_hashtable_remove\n");
 }
 
 /* Returns a strong reference to a entry->peer */
@@ -225,7 +203,6 @@ wg_index_hashtable_lookup(struct index_hashtable *table,
 			  const enum index_hashtable_type type_mask,
 			  const __le32 index, struct wg_peer **peer)
 {
-	wg_dbg("Entering wg_index_hashtable_lookup: table=%px, type_mask=%u, index=%u, peer=%px\n", table, type_mask, index, peer);
 	struct index_hashtable_entry *iter_entry, *entry = NULL;
 
 	rcu_read_lock_bh();
@@ -245,6 +222,5 @@ wg_index_hashtable_lookup(struct index_hashtable *table,
 			entry = NULL;
 	}
 	rcu_read_unlock_bh();
-	wg_dbg("Exiting wg_index_hashtable_lookup: entry=%px\n", entry);
 	return entry;
 }

@@ -8,7 +8,6 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <net/ip.h>
-#include "wg_tcp_debug.h"
 
 static struct kmem_cache *entry_cache;
 static hsiphash_key_t key;
@@ -41,7 +40,6 @@ enum {
 
 static void entry_free(struct rcu_head *rcu)
 {
-	wg_dbg("entry_free: entry_cache=%p, rcu=%p\n", entry_cache, rcu);
 	kmem_cache_free(entry_cache,
 			container_of(rcu, struct ratelimiter_entry, rcu));
 	atomic_dec(&total_entries);
@@ -49,7 +47,6 @@ static void entry_free(struct rcu_head *rcu)
 
 static void entry_uninit(struct ratelimiter_entry *entry)
 {
-	wg_dbg("entry_uninit: entry=%p\n", entry);
 	hlist_del_rcu(&entry->hash);
 	call_rcu(&entry->rcu, entry_free);
 }
@@ -86,7 +83,6 @@ static void wg_ratelimiter_gc_entries(struct work_struct *work)
 
 bool wg_ratelimiter_allow(struct sk_buff *skb, struct net *net)
 {
-	wg_dbg("wg_ratelimiter_allow: skb=%p, net=%p\n", skb, net);
 	/* We only take the bottom half of the net pointer, so that we can hash
 	 * 3 words in the end. This way, siphash's len param fits into the final
 	 * u32, and we don't incur an extra round.
@@ -131,7 +127,6 @@ bool wg_ratelimiter_allow(struct sk_buff *skb, struct net *net)
 			entry->tokens = ret ? tokens - PACKET_COST : tokens;
 			spin_unlock(&entry->lock);
 			rcu_read_unlock();
-			wg_dbg("wg_ratelimiter_allow: exit ret=%d\n", ret);
 			return ret;
 		}
 	}
@@ -153,18 +148,15 @@ bool wg_ratelimiter_allow(struct sk_buff *skb, struct net *net)
 	spin_lock(&table_lock);
 	hlist_add_head_rcu(&entry->hash, bucket);
 	spin_unlock(&table_lock);
-	wg_dbg("wg_ratelimiter_allow: exit true\n");
 	return true;
 
 err_oom:
 	atomic_dec(&total_entries);
-	wg_dbg("wg_ratelimiter_allow: exit false\n");
 	return false;
 }
 
 int wg_ratelimiter_init(void)
 {
-	wg_dbg("wg_ratelimiter_init: enter\n");
 	mutex_lock(&init_lock);
 	if (++init_refcnt != 1)
 		goto out;
@@ -200,7 +192,6 @@ int wg_ratelimiter_init(void)
 	get_random_bytes(&key, sizeof(key));
 out:
 	mutex_unlock(&init_lock);
-	wg_dbg("wg_ratelimiter_init: exit 0\n");
 	return 0;
 
 err_kmemcache:
@@ -208,13 +199,11 @@ err_kmemcache:
 err:
 	--init_refcnt;
 	mutex_unlock(&init_lock);
-	wg_dbg("wg_ratelimiter_init: exit -ENOMEM\n");
 	return -ENOMEM;
 }
 
 void wg_ratelimiter_uninit(void)
 {
-	wg_dbg("wg_ratelimiter_uninit: enter\n");
 	mutex_lock(&init_lock);
 	if (!init_refcnt || --init_refcnt)
 		goto out;
@@ -229,7 +218,6 @@ void wg_ratelimiter_uninit(void)
 	kmem_cache_destroy(entry_cache);
 out:
 	mutex_unlock(&init_lock);
-	wg_dbg("wg_ratelimiter_uninit: exit\n");
 }
 
 #include "selftest/ratelimiter.c"

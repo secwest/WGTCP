@@ -5,7 +5,6 @@
 
 #include "queueing.h"
 #include <linux/skb_array.h>
-#include "wg_tcp_debug.h"
 
 struct multicore_worker __percpu *
 wg_packet_percpu_multicore_worker_alloc(work_func_t function, void *ptr)
@@ -23,21 +22,19 @@ wg_packet_percpu_multicore_worker_alloc(work_func_t function, void *ptr)
 	return worker;
 }
 
-int wg_packet_queue_init(struct crypt_queue *queue, work_func_t function, unsigned int len)
+int wg_packet_queue_init(struct crypt_queue *queue, work_func_t function,
+			 unsigned int len)
 {
 	int ret;
 
 	memset(queue, 0, sizeof(*queue));
 	queue->last_cpu = -1;
 	ret = ptr_ring_init(&queue->ring, len, GFP_KERNEL);
-	if (ret) {
-		wg_dbg("Exiting: wg_packet_queue_init with ret=%d\n", ret);
+	if (ret)
 		return ret;
-	}
 	queue->worker = wg_packet_percpu_multicore_worker_alloc(function, queue);
 	if (!queue->worker) {
 		ptr_ring_cleanup(&queue->ring, NULL);
-		wg_dbg("Exiting: wg_packet_queue_init with ret=%d\n", -ENOMEM);
 		return -ENOMEM;
 	}
 	return 0;
@@ -74,10 +71,8 @@ static void __wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *sk
 
 bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 {
-	if (!atomic_add_unless(&queue->count, 1, MAX_QUEUED_PACKETS)) {
-		wg_dbg("Exiting: wg_prev_queue_enqueue with ret=%d\n", false);
+	if (!atomic_add_unless(&queue->count, 1, MAX_QUEUED_PACKETS))
 		return false;
-	}
 	__wg_prev_queue_enqueue(queue, skb);
 	return true;
 }
@@ -85,11 +80,10 @@ bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 {
 	struct sk_buff *tail = queue->tail, *next = smp_load_acquire(&NEXT(tail));
+
 	if (tail == STUB(queue)) {
-		if (!next) {
-			wg_dbg("Exiting: wg_prev_queue_dequeue with ret=%p\n", NULL);
+		if (!next)
 			return NULL;
-		}
 		queue->tail = next;
 		tail = next;
 		next = smp_load_acquire(&NEXT(next));
@@ -99,15 +93,13 @@ struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 		atomic_dec(&queue->count);
 		return tail;
 	}
-	if (tail != READ_ONCE(queue->head)) {
+	if (tail != READ_ONCE(queue->head))
 		return NULL;
-	}
 	__wg_prev_queue_enqueue(queue, STUB(queue));
 	next = smp_load_acquire(&NEXT(tail));
 	if (next) {
 		queue->tail = next;
 		atomic_dec(&queue->count);
-		wg_dbg("Exiting: wg_prev_queue_dequeue with ret=%p\n", tail);
 		return tail;
 	}
 	return NULL;
