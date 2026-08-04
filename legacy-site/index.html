@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30;url=https://wgtcp.net/">
+  <title>WireGuard TCP Transport enhancement patch — moved to WGTCP.net</title>
+  <meta name="description" content="The WireGuard TCP Transport enhancement patch can be found at WGTCP.net.">
+  <style>
+    :root{--ink:#101317;--paper:#f7e6b5;--yellow:#f4c51d;--red:#d92d21;--blue:#3d92a6;--white:#fff8df}
+    *{box-sizing:border-box}html,body{min-height:100%}body{margin:0;overflow-x:hidden;background:var(--yellow);color:var(--ink);font-family:"Arial Narrow","Roboto Condensed",Arial,sans-serif}body:before{content:"";position:fixed;inset:0;z-index:-1;opacity:.5;background-image:radial-gradient(#10131755 .7px,transparent .7px),radial-gradient(#fff6 .7px,transparent .7px);background-position:0 0,2px 2px;background-size:4px 4px}.burst{position:fixed;inset:-80%;z-index:-2;background:repeating-conic-gradient(from -8deg at 52% 54%,transparent 0 11deg,#d92d21d8 11deg 17deg,transparent 17deg 30deg);transform:rotate(-3deg)}
+    main{width:min(1050px,90vw);margin:clamp(2rem,5vw,5rem) auto 5rem;border:6px solid var(--ink);box-shadow:15px 15px 0 var(--ink);background:var(--paper);padding:clamp(1.5rem,4vw,3.6rem);transform:rotate(-.4deg)}.label{display:inline-block;background:var(--ink);color:var(--paper);padding:.45rem .7rem;font-size:.68rem;font-weight:900;letter-spacing:.15em;text-transform:uppercase}
+    h1{max-width:950px;margin:.35em 0 .55em;font-family:Impact,"Arial Black",sans-serif;font-size:clamp(2.7rem,7vw,6.8rem);font-style:italic;font-weight:900;letter-spacing:.012em;line-height:.88;text-transform:uppercase}h1 em{display:block;margin-top:.16em;color:var(--red);font-style:inherit;font-size:1.08em;text-shadow:4px 4px 0 var(--yellow),7px 7px 0 var(--ink)}
+    .splash-art{margin:2rem 0 2.5rem;border:5px solid var(--ink);box-shadow:10px 10px 0 var(--ink);background:var(--paper);transform:rotate(-.45deg);overflow:hidden}.splash-art img{display:block;width:100%;height:auto}
+    .redirect{display:grid;grid-template-columns:1fr auto;gap:1.5rem;align-items:end;border-top:4px solid var(--ink);padding-top:1.2rem}.count{font-size:.68rem;font-weight:900;letter-spacing:.13em;text-transform:uppercase}.count strong{display:inline-block;min-width:2ch;color:var(--red);font-family:Impact,"Arial Black",sans-serif;font-size:2rem}.track{height:11px;margin-top:.65rem;border:3px solid var(--ink);overflow:hidden}.bar{height:100%;width:100%;background:var(--red);transform-origin:left;animation:countdown 30s linear forwards}a{display:inline-block;border:4px solid var(--ink);box-shadow:6px 6px 0 var(--ink);background:var(--red);color:var(--paper);padding:.75rem 1.1rem;font-family:Impact,"Arial Black",sans-serif;font-size:1.15rem;font-style:italic;text-decoration:none;text-transform:uppercase;white-space:nowrap}a:hover{box-shadow:2px 2px 0 var(--ink);transform:translate(4px,4px)}
+    @keyframes countdown{to{transform:scaleX(0)}}@media(prefers-reduced-motion:reduce){.bar{animation:none}}@media(max-width:700px){.redirect{grid-template-columns:1fr}.redirect a{text-align:center}}@media(max-width:430px){main{width:94vw;padding:1.2rem}.splash-art{border-width:4px;box-shadow:6px 6px 0 var(--ink)}}
+  </style>
+</head>
+<body>
+  <div class="burst" aria-hidden="true"></div>
+  <main>
+    <h1>The WireGuard TCP Transport enhancement patch can be found at <em>WGTCP.net</em></h1>
+    <figure class="splash-art"><img src="wgtcp-transport.png" alt="TCP packets travelling through a red industrial pipe"></figure>
+    <div class="redirect"><div><div class="count" aria-live="polite">Redirecting in <strong id="seconds">30</strong> seconds</div><div class="track" aria-hidden="true"><div class="bar"></div></div></div><a href="https://wgtcp.net/">Go to WGTCP.net →</a></div>
+  </main>
+  <script>
+    let remaining=30;const output=document.getElementById('seconds');const timer=setInterval(()=>{remaining-=1;output.textContent=remaining;if(remaining<=0){clearInterval(timer);window.location.replace('https://wgtcp.net/')}},1000);
+  </script>
+</body>
+</html>
