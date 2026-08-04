@@ -1,18 +1,18 @@
 # WireGuard TCP QuickStart
 
-This guide builds and installs WireguardTCP on two Ubuntu or Debian hosts,
+This guide builds and installs WGTCP on two Ubuntu or Debian hosts,
 creates a basic point-to-point tunnel, and provides templates for common
 advanced layouts.
 
-WireguardTCP keeps WireGuard's keys, Noise encryption, peer identities,
+WGTCP keeps WireGuard's keys, Noise encryption, peer identities,
 `AllowedIPs`, and administration model. In TCP mode, it places each encrypted
 WireGuard message in a small record carried over a long-lived TCP connection.
 This can provide connectivity where raw UDP is blocked while preserving a
 familiar WireGuard configuration workflow.
 
-## Why use WireguardTCP?
+## Why use WGTCP?
 
-WireguardTCP adds a practical second carrier to WireGuard. The tunnel, keys,
+WGTCP adds a practical second carrier to WireGuard. The tunnel, keys,
 routes, and security model stay familiar; the main configuration change is one
 line:
 
@@ -78,7 +78,7 @@ No relay, proxy, userspace tunnel daemon, certificate authority, or new key
 format is required. Both endpoints do need this modified Linux module and
 modified `wg` tool.
 
-TCP mode is experimental. It is not HTTP or TLS camouflage, both endpoints must
+TCP mode is an independently developed transport patch. It is not HTTP or TLS camouflage, both endpoints must
 run this implementation, and TCP retransmission can increase latency through
 head-of-line blocking. Prefer normal WireGuard UDP when it works and use TCP
 only after evaluating the target network and workload.
@@ -207,7 +207,7 @@ The outputs are:
 - `tools/wg`, the modified configuration tool; and
 - `kernel/wireguard.ko`, the modified kernel module.
 
-## 3. Install and load WireguardTCP
+## 3. Install and load WGTCP
 
 Delete every active WireGuard interface before replacing the module:
 
@@ -468,7 +468,7 @@ PersistentKeepalive = 25
 ```
 
 Add routes on each site's LAN router so `10.10.0.0/24` and `10.20.0.0/24`
-use the local WireguardTCP gateway. Also permit forwarding between the LAN
+use the local WGTCP gateway. Also permit forwarding between the LAN
 interface and `wg0`; do not add masquerading unless overlapping policy or
 return-route constraints require it.
 

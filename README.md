@@ -1,14 +1,19 @@
-# WireguardTCP
+# WGTCP — TCP transport patch for WireGuard
 
 **WireGuard's security and simplicity, with a TCP carrier that reaches networks
 where UDP cannot.**
 
-WireguardTCP adds a high-performance TCP transport to the Linux WireGuard
+WGTCP adds a high-performance TCP transport patch to the Linux WireGuard
 kernel module. It keeps the keys, Noise encryption, peer identities,
 `AllowedIPs`, rekeying, and administration model you already know while carrying
 encrypted WireGuard messages over persistent TCP connections. Two years of
 performance tuning and reliability engineering have shaped the transport from
 its framing and connection lifecycle through NAT roaming and failure recovery.
+
+WGTCP has been shaped by two years of reliability engineering, performance
+tuning, and extensive automated and end-to-end testing. It has not been approved,
+endorsed, or adopted by the WireGuard project. WireGuard is a registered trademark
+of Jason A. Donenfeld.
 
 - **[Install and configure your first tunnel](QUICKSTART.md)**
 - [Download Ubuntu 24.04 binaries](#ubuntu-2404-binaries)
@@ -31,7 +36,7 @@ its framing and connection lifecycle through NAT roaming and failure recovery.
 
 ## Two years of tuning and validation
 
-WireguardTCP has been developed as a complete kernel transport rather than a
+WGTCP has been developed as a complete kernel transport rather than a
 thin TCP wrapper. Iterative profiling and fault testing improved writer
 wakeups, short-write continuation, bounded queues, parser recovery, connection
 replacement, authenticated promotion, roaming, and exact terminal-I/O cleanup.
@@ -99,7 +104,7 @@ conditions used to explore the transport's operating envelope.
 See [PERFORMANCE.md](PERFORMANCE.md) for the practical summary and
 [the performance report](perf-test/REPORT.md) for the complete matrices.
 
-### Great fits for WireguardTCP
+### Great fits for WGTCP
 
 | Situation | Recommended starting point |
 |---|---|
